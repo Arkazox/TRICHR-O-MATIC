@@ -1,0 +1,213 @@
+# Trichr-o-matic — Journal des modifications (Français)
+
+Ce fichier retrace ce qui a changé pour les utilisateurs entre les
+différentes versions, à partir de la v0.4.0. C'est le pendant "notes de
+version" de `CLAUDE.md` (qui couvre *comment* les choses sont
+implémentées, pour le développement) — celui-ci couvre *ce qui a changé et
+pourquoi c'est utile pour quelqu'un qui utilise l'application*.
+
+Une version anglaise se trouve dans `CHANGELOG_EN.md`. Une copie PDF de
+chacune (`CHANGELOG_EN.pdf` / `CHANGELOG_FR.pdf`) est régénérée
+automatiquement par `build_mac.sh` à chaque compilation
+(`scripts/generate_changelog_pdf.py`), pour qu'elles restent toujours
+synchronisées avec l'`.app` que vous avez entre les mains.
+
+La section **Non publié** en haut liste toujours ce qui a changé depuis la
+dernière version réellement compilée, plus une liste courante de ce qui
+est prévu ensuite — elle sert donc aussi de résumé de feuille de route,
+pas seulement d'historique.
+
+---
+
+## Non publié
+
+### Tâches restantes pour les prochaines versions
+- **v0.4.5** (prochaine version) : un **outil de courbes** - pas encore
+  spécifié.
+- **v0.5.0** : un **outil de scan de négatifs** avec un mode trichromie -
+  sa propre fenêtre outil, accessible via un bouton de la barre d'outils
+  et un raccourci clavier. Prévu pour être développé d'abord comme un
+  module autonome, testé séparément, puis intégré à l'application
+  principale.
+- **v0.6.0** : un **panneau de métadonnées** - pas encore spécifié.
+- Quelques anciennes fenêtres d'erreur (erreur de chargement d'image,
+  échec de l'alignement automatique, erreurs de chargement de session)
+  utilisent encore l'ancien style de fenêtre système et n'ont pas encore
+  été basculées vers le style d'alerte propre à l'application.
+
+---
+
+## v0.4.4 — 2026-09-02
+
+### Ajouté
+- **Menu Fenêtre** : Fermer la fenêtre, et des interrupteurs pour le
+  panneau de gauche, le panneau de droite et le bandeau de vignettes -
+  chacun avec son propre raccourci clavier (⌘W, I, O, P).
+- **Curseur Exposition**, à la fois dans les canaux indépendants et dans
+  la Correction Globale, juste au-dessus de Luminosité. Contrairement à
+  Luminosité (une simple retouche d'éclaircissement/assombrissement),
+  Exposition est un vrai réglage photographique en diaphragmes (EV) qui se
+  comporte comme un changement d'exposition réel - le pousser fort brûle
+  les hautes lumières, comme le ferait une vraie surexposition à la prise
+  de vue.
+- **Pipette de lecture sur l'histogramme** : un nouveau bouton pipette à
+  côté du bouton de réinitialisation de l'histogramme. Une fois activé,
+  survoler l'aperçu trace un repère en direct montrant exactement où ce
+  pixel se situe sur les courbes Y/R/V/B.
+
+### Modifié
+- Redesign de l'histogramme : de fines lignes de repère ombres/tons
+  moyens/hautes lumières en arrière-plan, et un rendu plus doux façon
+  Lightroom pour les courbes de canaux superposées (un remplissage
+  translucide avec un contour net par-dessus).
+- Les indicateurs d'écrêtage de l'histogramme sont plus précis : une
+  fine bordure noire ou blanche, souvent invisible, introduite par un
+  léger désalignement entre canaux (ou par l'outil Redresser), n'est plus
+  confondue avec une vraie sur- ou sous-exposition, et l'indicateur
+  s'ajuste désormais à la quantité réellement écrêtée au lieu de toujours
+  sauter à la même taille.
+- Activer le mode Solo (aperçu N&B) d'un canal met désormais
+  automatiquement en évidence le scope correspondant dans l'histogramme
+  (le bouton de réinitialisation de l'histogramme désactive le mode Solo
+  en retour), et reflète maintenant aussi les réglages « Lumière » de la
+  Correction Globale (Exposition, Luminosité, Contraste, Hautes lumières,
+  Ombres, Blancs, Noirs, Gamma) - le mode Solo ignorait auparavant
+  totalement la Correction Globale pendant qu'un canal était en solo. Les
+  réglages propres à la couleur (Température, Teinte, Saturation) restent
+  ignorés, puisqu'ils n'ont aucun sens sur un aperçu noir et blanc.
+
+### Corrigé
+- **L'effet Harris Shutter** se souvient désormais correctement du
+  réglage propre à chaque photo - auparavant, passer d'une photo à
+  l'autre pouvait laisser la case à cocher afficher le mauvais état, et
+  dans de rares cas un export par lot pouvait réinterpréter les canaux
+  d'une photo sous le mauvais mode. L'effet Harris Shutter et le mode
+  Négatif peuvent désormais aussi s'appliquer à plusieurs photos
+  sélectionnées en une fois - activer l'un ou l'autre règle toujours
+  toutes les photos sélectionnées sur le même nouvel état, au lieu
+  d'inverser le réglage propre à chaque photo individuellement.
+- Le bouton « Relier… » de la fenêtre de reliaison des fichiers manquants
+  ne reste plus bloqué désactivé après avoir résolu une photo alors que
+  d'autres lignes du tableau restent à corriger.
+
+---
+
+## v0.4.3 — 2026-09-02
+
+### Ajouté
+- **Pipette de balance des blancs.** Un outil « Balance des blancs à la
+  pipette » dans la section Couleur : cliquez dessus, puis cliquez sur un
+  point de l'aperçu qui devrait être gris neutre - la Température et la
+  Teinte sont alors réglées automatiquement pour neutraliser ce point. Un
+  bouton « Réinitialiser » juste à côté remet Température, Teinte *et*
+  Saturation à zéro.
+- **Bouton de réinitialisation de la Lumière.** Réinitialise les 7
+  curseurs de la section « Lumière » (Luminosité, Contraste, Hautes
+  lumières, Ombres, Blancs, Noirs, Gamma) en une fois, à côté du titre de
+  la section.
+- **Récupération des photos source manquantes ou déplacées.** Si une
+  session est rouverte et que certains fichiers R/G/B d'origine ont été
+  déplacés ou supprimés, la ou les photos concernées ne disparaissent plus
+  silencieusement du bandeau de photos. L'aperçu affiche désormais
+  précisément quel(s) fichier(s) manque(nt) et son/leur dernier emplacement
+  connu, avec un bouton **Localiser** qui les relie à nouveau (pour toutes
+  les photos sélectionnées en une seule fois) en recherchant dans un
+  dossier de votre choix.
+  - Si certains fichiers restent introuvables (par exemple parce qu'ils ont
+    été renommés plutôt que déplacés), une fenêtre les liste dans un
+    tableau - survolez une ligne pour voir le chemin d'origine du fichier,
+    ou sélectionnez une ligne et cliquez sur **Relier…** pour choisir
+    directement le fichier de remplacement exact, sans avoir besoin
+    d'aller le rechercher via le panneau de gauche.
+- **Les boutons de réinitialisation grisent désormais** dès qu'il n'y a
+  rien à réinitialiser - partout dans l'application : Correction Globale,
+  Lumière, Couleur, la réinitialisation propre à chaque canal
+  (alignement/couleur), et le panneau de recadrage.
+- **Ce journal des modifications**, en anglais et en français, avec une
+  copie PDF de chacun générée automatiquement et tenue à jour à chaque
+  compilation.
+
+### Modifié
+- L'option Négatif/inversion a été déplacée dans l'en-tête du panneau
+  Correction Globale, à côté de Réinitialiser, sous forme d'icône (grisée
+  quand désactivée, allumée quand activée) au lieu d'une case à cocher
+  textuelle plus bas dans le panneau - c'est une option assez importante
+  en trichromie (une mauvaise polarité gâche toute l'image) pour figurer
+  en haut.
+- La petite icône d'avertissement/info qui se trouvait à côté de
+  Réinitialiser (indiquant que les corrections propres à chaque canal
+  n'étaient pas concernées) a été supprimée de l'en-tête de Correction
+  Globale ; le bouton d'info « ? » qui explique la portée du panneau reste
+  en place.
+- Les fenêtres d'alerte/avertissement ont désormais le même style que le
+  reste de l'application, au lieu des fenêtres système génériques de macOS.
+
+---
+
+## v0.4.2 — 2026-09-01
+
+### Ajouté
+- **Effet Harris Shutter.** Un mode optionnel (case à cocher sous les
+  panneaux de canaux) pour celles et ceux qui importent 3 photos *en
+  couleur* plutôt qu'en noir et blanc - il extrait le vrai canal R/V/B de
+  chaque source au lieu de convertir en niveaux de gris, pour un véritable
+  effet Harris Shutter. Désactivé par défaut ; la trichromie noir et blanc
+  classique n'est pas affectée.
+- **Curseurs redessinés** dans toute l'application : chaque curseur se
+  centre désormais visuellement sur sa propre valeur par défaut, se
+  remplissant vers la gauche ou la droite depuis ce point, pour voir d'un
+  coup d'œil si une valeur est au-dessus ou en dessous de la normale. Les
+  nombres sont désormais une valeur propre, cliquable pour être tapée, au
+  lieu d'un compteur ; les curseurs de correction couleur s'affichent en
+  -100…+100 (à la manière de Lightroom), tandis que les curseurs ayant une
+  vraie unité physique (pixels, degrés, zoom) gardent leur propre unité.
+- Fenêtre d'export : option « Afficher dans le Finder après l'export ».
+- **⌘W** ferme désormais la fenêtre secondaire active (Export, Import,
+  Aide) sans quitter l'application.
+- Nouveau préréglage de ratio de recadrage : 7:5.
+- Grille de recadrage : 4 styles au choix (3×3, 2×2, Nombre d'or, carrés de
+  taille fixe), remplaçant l'ancien choix à 2 options.
+
+### Modifié
+- « Étalonnage global » renommé en **Correction Globale**, et divisé en
+  deux sections clairement identifiées : **Lumière** et **Couleur**
+  (Température, Teinte, Saturation, dans cet ordre).
+- Les préréglages de ratio de recadrage ont été réordonnés (du plus carré
+  au plus large) et l'icône d'orientation tourne désormais visuellement
+  pour correspondre à votre sélection.
+- Les panneaux Recadrage et Correction Globale correspondent désormais
+  exactement en termes de mise en page, si bien que passer de l'un à
+  l'autre ne déplace plus rien à l'écran.
+
+### Corrigé
+- Recadrer avec un ratio d'aspect verrouillé près du bord d'une photo ne
+  déforme plus le ratio.
+
+---
+
+## v0.4.0 / v0.4.1 — 2026-08-31
+
+*(La v0.4.1 était une passe de correction/polissage le jour même après la
+v0.4.0 ; les changements ci-dessous couvrent les deux.)*
+
+### Ajouté
+- **Nouvelle Session**, un vrai système de session multi-photos, et le
+  menu contextuel (clic droit) du bandeau de photos (Tout réinitialiser,
+  Dupliquer).
+- Contenu du menu Aide réécrit pour correspondre à tout ce qui précède.
+
+### Modifié
+- La fenêtre des raccourcis a été réorganisée en sections Général /
+  Navigation / Aperçu / Curseurs ; l'explication du « canal actif » a été
+  déplacée dans un bouton d'info « ? » directement à côté de la case
+  Actif de chaque canal.
+- Polissage de la mise en page de la barre latérale : titres de section
+  plus clairs, histogramme séparé dans son propre bloc, boutons de
+  réinitialisation agrandis/repositionnés.
+- Le sélecteur d'outil (Correction Globale ⇄ Recadrage) a été déplacé dans
+  la barre d'outils du haut sous forme de deux boutons, avec les raccourcis
+  **E** / **C**.
+
+### Supprimé
+- Plusieurs chaînes de traduction inutilisées, nettoyées lors d'un audit
+  des textes anglais/français.

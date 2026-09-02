@@ -1,0 +1,406 @@
+"""Filmstrip of imported batch photos, at the bottom of the preview.
+
+Plain click / arrow-key navigation picks the "current" photo (the one shown
+and edited in the main window) and, by default, makes it the sole selection.
+Cmd+click toggles a photo in/out of the selection without changing which one
+is current; Cmd+A selects all (or deselects all, if everything is already
+selected) - that selection is what "export selected" uses.
+
+Cards can also be dragged to reorder the strip; a drop anywhere (including
+past the last card) is resolved to an insertion point and reported upward
+via ``reordered`` as a permutation of the old indices.
+"""
+from __future__ import annotations
+
+from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtGui import QDrag, QPixmap
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
+
+from .. import i18n
+from .controls import ArrowKeyScrollArea
+
+THUMB_W, THUMB_H = 96, 64
+CURRENT_COLOR = "#f2c40c"
+SELECTED_COLOR = "#8a7a3a"
+DEFAULT_COLOR = "#444"
+
+_REORDER_MIME = "application/x-trichrome-carousel-index"
+
+
+class _CarouselCard(QFrame):
+    clicked = Signal(int)
+    ctrl_clicked = Signal(int)
+    context_menu_requested = Signal(int, object, bool)  # index, global pos, cmd held
+
+    def __init__(self, index: int, base: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.index = index
+        self._is_current = False
+        self._is_selected = False
+        self._drag_start_pos = None
+        self.setFixedSize(THUMB_W + 14, THUMB_H + 30)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 2)
+        layout.setSpacing(2)
+
+        self.thumb_label = QLabel()
+        self.thumb_label.setFixedSize(THUMB_W, THUMB_H)
+        self.thumb_label.setStyleSheet("background:#222; border:1px solid #444;")
+        self.thumb_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.thumb_label)
+
+        self.name_label = QLabel()
+        self.name_label.setStyleSheet("color:#aaa; font-size:10px;")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self._base = base
+        layout.addWidget(self.name_label)
+        self._update_name_label()
+        self._update_style()
+
+    def _update_name_label(self) -> None:
+        fm = self.name_label.fontMetrics()
+        self.name_label.setText(fm.elidedText(self._base, Qt.ElideMiddle, THUMB_W + 6))
+
+    def _update_style(self) -> None:
+        if self._is_current:
+            color, width = CURRENT_COLOR, 3
+        elif self._is_selected:
+            color, width = SELECTED_COLOR, 2
+        else:
+            color, width = DEFAULT_COLOR, 1
+        self.setStyleSheet(f"_CarouselCard {{ border: {width}px solid {color}; border-radius: 6px; }}")
+
+    def set_current(self, current: bool) -> None:
+        self._is_current = current
+        self._update_style()
+
+    def set_selected(self, selected: bool) -> None:
+        self._is_selected = selected
+        self._update_style()
+
+    def set_thumbnail(self, pixmap: QPixmap) -> None:
+        scaled = pixmap.scaled(THUMB_W, THUMB_H, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.thumb_label.setPixmap(scaled)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+            if event.modifiers() & Qt.ControlModifier:
+                self.ctrl_clicked.emit(self.index)
+            else:
+                self.clicked.emit(self.index)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if (event.buttons() & Qt.LeftButton) and self._drag_start_pos is not None:
+            moved = event.pos() - self._drag_start_pos
+            if moved.manhattanLength() >= QApplication.startDragDistance():
+                self._start_drag()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
+
+    def _start_drag(self) -> None:
+        self._drag_start_pos = None
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(_REORDER_MIME, str(self.index).encode())
+        drag.setMimeData(mime)
+        drag.setPixmap(self.grab())
+        drag.setHotSpot(self.rect().center())
+        drag.exec(Qt.MoveAction)
+
+    def contextMenuEvent(self, event) -> None:
+        cmd_held = bool(event.modifiers() & Qt.ControlModifier)
+        self.context_menu_requested.emit(self.index, event.globalPos(), cmd_held)
+
+
+class _CarouselStrip(QWidget):
+    """The row of cards; also the drop target for reordering, spanning the
+    trailing empty space too so dropping past the last card appends it."""
+    card_dropped = Signal(int, float)  # from_index, drop x (local coords)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasFormat(_REORDER_MIME):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasFormat(_REORDER_MIME):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        if not event.mimeData().hasFormat(_REORDER_MIME):
+            return
+        from_index = int(bytes(event.mimeData().data(_REORDER_MIME)).decode())
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        self.card_dropped.emit(from_index, float(pos.x()))
+        event.acceptProposedAction()
+
+
+class CarouselWidget(QWidget):
+    current_changed = Signal(int)
+    selection_changed = Signal()
+    copy_requested = Signal(int)
+    paste_requested = Signal(list)
+    paste_crop_requested = Signal(list)
+    delete_requested = Signal(list)
+    reset_requested = Signal(list)
+    duplicate_requested = Signal(int)
+    reordered = Signal(list)  # order[new_position] = old_index
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._cards: list[_CarouselCard] = []
+        self._current_index = -1
+        self._selected: set[int] = set()
+        self._selection_anchor = -1
+        # Only true once something's been copied that carries crop settings -
+        # gates whether "Paste Crop" shows in the context menu at all.
+        self._paste_crop_available = False
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self.empty_label = QLabel()
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setStyleSheet("color:#777; font-style: italic;")
+        outer.addWidget(self.empty_label)
+
+        self.scroll = ArrowKeyScrollArea()
+        self.scroll.setFixedHeight(THUMB_H + 50)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.strip = _CarouselStrip()
+        self.strip.card_dropped.connect(self._on_card_dropped)
+        self.strip_layout = QHBoxLayout(self.strip)
+        self.strip_layout.setContentsMargins(6, 4, 6, 4)
+        self.strip_layout.setSpacing(6)
+        self.strip_layout.addStretch(1)
+        self.scroll.setWidget(self.strip)
+        outer.addWidget(self.scroll)
+
+        self.retranslate_ui()
+        self._update_empty_state()
+
+    def retranslate_ui(self) -> None:
+        self.empty_label.setText(i18n.tr("carousel_empty_hint"))
+
+    def _update_empty_state(self) -> None:
+        has_items = bool(self._cards)
+        self.empty_label.setVisible(not has_items)
+        self.scroll.setVisible(has_items)
+
+    def set_items(self, bases: list[str]) -> None:
+        for card in self._cards:
+            card.setParent(None)
+            card.deleteLater()
+        self._cards = []
+        self._selected = set()
+
+        for i, base in enumerate(bases):
+            card = _CarouselCard(i, base)
+            card.clicked.connect(self._on_card_clicked)
+            card.ctrl_clicked.connect(self._on_card_ctrl_clicked)
+            card.context_menu_requested.connect(self._on_card_context_menu)
+            self.strip_layout.insertWidget(self.strip_layout.count() - 1, card)
+            self._cards.append(card)
+
+        self._current_index = -1
+        self._selection_anchor = -1
+        self._update_empty_state()
+
+    def _on_card_clicked(self, index: int) -> None:
+        self.set_current(index)
+        self.select_only(index)
+        self._selection_anchor = index
+        self.current_changed.emit(index)
+
+    def _on_card_ctrl_clicked(self, index: int) -> None:
+        if index in self._selected:
+            self._selected.discard(index)
+        else:
+            self._selected.add(index)
+        self._cards[index].set_selected(index in self._selected)
+        self.selection_changed.emit()
+
+    def _on_card_context_menu(self, index: int, global_pos, cmd_held: bool) -> None:
+        # Right-clicking moves the "current" (yellow) highlight to the
+        # clicked card first, same as a left click - so the menu always
+        # opens on what's now visibly current.
+        if self._current_index != index:
+            self.set_current(index)
+            self.current_changed.emit(index)
+        # Right-clicking a lone selected (or unselected) photo replaces the
+        # selection, same as a plain click would, so the menu acts on only
+        # this card. But right-clicking *into* an existing multi-selection
+        # (2+ photos) keeps it intact - that's what lets "Reset All" etc.
+        # act on a whole group - the same as holding Cmd would.
+        keep_selection = cmd_held or (len(self._selected) > 1 and index in self._selected)
+        if not keep_selection:
+            self.select_only(index)
+        targets = sorted(self._selected) if index in self._selected else [index]
+        menu = QMenu(self)
+        copy_action = menu.addAction(i18n.tr("menu_edit_copy"))
+        paste_action = menu.addAction(i18n.tr("menu_edit_paste"))
+        # Only appears once something carrying crop settings has been
+        # copied - the regular Paste above never restores crop.
+        paste_crop_action = menu.addAction(i18n.tr("menu_paste_crop")) if self._paste_crop_available else None
+        menu.addSeparator()
+        reset_action = menu.addAction(i18n.tr("menu_reset_all"))
+        duplicate_action = menu.addAction(i18n.tr("menu_duplicate"))
+        menu.addSeparator()
+        delete_action = menu.addAction(i18n.tr("menu_edit_delete"))
+        chosen = menu.exec(global_pos)
+        if chosen is copy_action:
+            self.copy_requested.emit(index)
+        elif chosen is paste_action:
+            self.paste_requested.emit(targets)
+        elif paste_crop_action is not None and chosen is paste_crop_action:
+            self.paste_crop_requested.emit(targets)
+        elif chosen is reset_action:
+            self.reset_requested.emit(targets)
+        elif chosen is duplicate_action:
+            # Duplicate always acts on the single active photo, never the
+            # whole multi-selection - unlike Copy/Paste/Reset/Delete above.
+            self.duplicate_requested.emit(index)
+        elif chosen is delete_action:
+            self.delete_requested.emit(targets)
+
+    def _insert_index_for_x(self, x: float) -> int:
+        for i, card in enumerate(self._cards):
+            if x < card.x() + card.width() / 2.0:
+                return i
+        return len(self._cards)
+
+    def _on_card_dropped(self, from_index: int, drop_x: float) -> None:
+        if not (0 <= from_index < len(self._cards)):
+            return
+        insert_before = self._insert_index_for_x(drop_x)
+        target = insert_before - 1 if insert_before > from_index else insert_before
+        target = max(0, min(target, len(self._cards) - 1))
+        if target == from_index:
+            return
+        self._reorder(from_index, target)
+
+    def _reorder(self, from_index: int, target: int) -> None:
+        order = list(range(len(self._cards)))
+        order.insert(target, order.pop(from_index))
+
+        current_card = self._cards[self._current_index] if 0 <= self._current_index < len(self._cards) else None
+        selected_cards = {self._cards[i] for i in self._selected}
+
+        card = self._cards.pop(from_index)
+        self._cards.insert(target, card)
+        self.strip_layout.removeWidget(card)
+        self.strip_layout.insertWidget(target, card)
+        for i, c in enumerate(self._cards):
+            c.index = i
+
+        self._current_index = self._cards.index(current_card) if current_card is not None else -1
+        self._selected = {i for i, c in enumerate(self._cards) if c in selected_cards}
+
+        self.reordered.emit(order)
+
+    def set_current(self, index: int) -> None:
+        if self._current_index == index:
+            return
+        if 0 <= self._current_index < len(self._cards):
+            self._cards[self._current_index].set_current(False)
+        self._current_index = index
+        if 0 <= index < len(self._cards):
+            self._cards[index].set_current(True)
+            self.scroll.ensureWidgetVisible(self._cards[index])
+
+    def set_selected(self, index: int, selected: bool) -> None:
+        """Directly set one card's selection state without emitting
+        selection_changed - for syncing the carousel from already-known data
+        (e.g. after rebuilding cards from a fresh item list)."""
+        if not (0 <= index < len(self._cards)):
+            return
+        if selected:
+            self._selected.add(index)
+        else:
+            self._selected.discard(index)
+        self._cards[index].set_selected(selected)
+
+    def select_only(self, index: int) -> None:
+        self._selected = {index} if 0 <= index < len(self._cards) else set()
+        for i, card in enumerate(self._cards):
+            card.set_selected(i in self._selected)
+        self.selection_changed.emit()
+
+    def toggle_select_all(self) -> None:
+        if not self._cards:
+            return
+        if len(self._selected) == len(self._cards):
+            self._selected = set()
+        else:
+            self._selected = set(range(len(self._cards)))
+        for i, card in enumerate(self._cards):
+            card.set_selected(i in self._selected)
+        self.selection_changed.emit()
+
+    def set_thumbnail(self, index: int, pixmap: QPixmap) -> None:
+        if 0 <= index < len(self._cards):
+            self._cards[index].set_thumbnail(pixmap)
+
+    def set_paste_crop_available(self, available: bool) -> None:
+        self._paste_crop_available = available
+
+    def selected_indices(self) -> list[int]:
+        return sorted(self._selected)
+
+    def count(self) -> int:
+        return len(self._cards)
+
+    def current_index(self) -> int:
+        return self._current_index
+
+    def go_next(self, extend_selection: bool = False) -> None:
+        if not self._cards:
+            return
+        nxt = min(self._current_index + 1, len(self._cards) - 1) if self._current_index >= 0 else 0
+        if extend_selection:
+            self._extend_selection_to(nxt)
+        else:
+            self._on_card_clicked(nxt)
+
+    def go_prev(self, extend_selection: bool = False) -> None:
+        if not self._cards:
+            return
+        prv = max(self._current_index - 1, 0) if self._current_index >= 0 else 0
+        if extend_selection:
+            self._extend_selection_to(prv)
+        else:
+            self._on_card_clicked(prv)
+
+    def _extend_selection_to(self, index: int) -> None:
+        """Finder-style Shift+arrow range selection: grows/shrinks the
+        selection between the anchor (set by the last plain click/move) and
+        ``index``, and moves "current" along with it."""
+        if not (0 <= index < len(self._cards)):
+            return
+        if self._selection_anchor < 0:
+            self._selection_anchor = self._current_index if self._current_index >= 0 else index
+        lo, hi = sorted((self._selection_anchor, index))
+        new_selected = set(range(lo, hi + 1))
+        for i, card in enumerate(self._cards):
+            sel = i in new_selected
+            if sel != (i in self._selected):
+                card.set_selected(sel)
+        self._selected = new_selected
+        self.set_current(index)
+        self.selection_changed.emit()
+        self.current_changed.emit(index)

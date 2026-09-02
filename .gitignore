@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+venv/
+
+# Build artifacts (PyInstaller)
+build/
+dist/
+
+# macOS
+.DS_Store
