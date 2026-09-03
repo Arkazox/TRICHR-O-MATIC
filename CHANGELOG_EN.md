@@ -19,15 +19,54 @@ next — so it doubles as a short roadmap snapshot, not just a history.
 ## Unreleased
 
 ### Remaining tasks for future versions
-- **v0.4.5** (next): a **Curves tool** - not yet specified.
-- **v0.5.0**: a **Negative Scan tool** with a trichromy mode - its own
-  tool window, reachable via a toolbar button and a keyboard shortcut.
-  Planned to be developed as a standalone module first, tested on its own,
-  then integrated into the main app.
+- **v0.5.0** (next): a **Curves tool**, plus integrating the standalone
+  **Negative Scan tool** (tethered capture, already tested against a real
+  camera) into the main app's toolbar.
 - **v0.6.0**: a **metadata panel** - not yet specified.
 - A handful of older error dialogs (image load errors, auto-align
   failure, session-load errors) still use the old system-dialog look and
   haven't been switched over to the app's own alert style yet.
+
+---
+
+## v0.4.5 — 2026-09-04
+
+### Added
+- **Fully customizable layout**: every panel - Files, RGB Channels,
+  Histogram, Light, Color, Crop, and Scan - is now its own independent
+  block. Drag a block by its grip to reorder it, move it to the other
+  side panel, collapse it down to just its header, or close it entirely;
+  a new **Tools** menu lists every block with a checkbox to bring closed
+  ones back.
+- **Layout Presets** (Window ▸ Layout Preset): save your own named panel
+  arrangements, then load, update, or delete them anytime.
+- **Quick layout switches**: the top toolbar's Trichrome / Color
+  Correction / Crop / Scan buttons (and their T/E/C/S shortcuts) now jump
+  straight to your own saved layout for that task - only one is active at
+  a time. The same 4 shortcuts are also listed directly in the Window
+  menu, with Update available right there too.
+- **Reset Layout** (Window menu) restores the default panel arrangement
+  in one click.
+- Global Correction is now two separate panels, **Light** (exposure,
+  brightness, contrast, highlights/shadows, black/white points, gamma,
+  and Negative) and **Color** (temperature, tint, saturation, white
+  balance eyedropper) - place each independently on either side of the
+  screen.
+
+### Changed
+- The Crop tool's active drag mode is now a dedicated button in its own
+  panel, separate from whether the panel is simply visible - it no longer
+  turns on or off unexpectedly as you rearrange your layout. Escape now
+  only exits crop mode without changing your layout; switching to a
+  different saved layout automatically turns crop mode off, and switching
+  to the Crop layout turns it back on.
+- "Independent Channels" renamed to **RGB Channels**.
+- Smaller, more consistent block headers throughout, with matching icon
+  sizes.
+
+### Removed
+- The Crop panel's own Copy button (redundant with ⌘C / the filmstrip's
+  Copy and Paste Crop).
 
 ---
 

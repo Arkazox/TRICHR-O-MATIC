@@ -13,7 +13,7 @@ from PySide6.QtCore import QEvent, QSettings, Qt, QThread, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPalette, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QApplication, QButtonGroup, QCheckBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit,
+    QInputDialog, QLabel, QLineEdit,
     QMainWindow, QMenu, QMessageBox, QPushButton, QSizePolicy, QSplitter, QStatusBar,
     QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
@@ -25,6 +25,9 @@ from .model import (
     CHANNEL_NAMES, BatchItem, ChannelLayer, CropSettings, GlobalCorrection, ensure_batch_item_uid_above,
     new_project_layers,
 )
+from .widgets.block_header_bar import (
+    BlockReorderZone, finish_block_chrome, set_block_collapsed, start_block_chrome,
+)
 from .widgets.canvas_widget import CanvasWidget
 from .widgets.carousel_widget import CarouselWidget
 from .widgets.channel_panel import ChannelPanel
@@ -34,7 +37,7 @@ from .widgets.controls import ArrowKeyScrollArea
 from .widgets.export_dialog import ExportDialog
 from .widgets.filmstrip_toggle_button import FilmstripToggleButton
 from .widgets.fullscreen_toggle_button import FullscreenToggleButton
-from .widgets.global_panel import GlobalPanel
+from .widgets.global_panel import ColorPanel, LightPanel
 from .widgets.histogram_widget import HistogramPanel
 from .widgets.alert_dialog import show_alert
 from .widgets.import_panel import ImportPanel
@@ -42,7 +45,10 @@ from .widgets.info_bubble import show_info_bubble
 from .widgets.missing_files_banner import MissingFilesBanner
 from .widgets.rotate_toggle_button import RotateLeftButton, RotateRightButton
 from .widgets.sort_button import SortButton
-from .widgets.svg_icons import SvgCheckableToolButton, SvgToolButton, SvgTwoStateToggleButton
+from .widgets.svg_icons import (
+    HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE,
+    SvgCheckableToolButton, SvgToolButton, SvgTwoStateToggleButton,
+)
 from .widgets.unsaved_changes_dialog import UnsavedChangesDialog
 
 # Neutral tone/global-correction values used by "Compare" mode to preview
@@ -58,16 +64,72 @@ _NEUTRAL_GLOBAL = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 # another suffix (e.g. "IMG_1234 (2)" -> "IMG_1234 (3)", not "... (2) (2)").
 _DUPLICATE_SUFFIX_RE = re.compile(r"^(.*) \((\d+)\)$")
 
-# Which side panel each of the 4 tools starts in, and which one is active
-# per side, when the app first launches or after Window > Layout >
-# Reset Layout. User-reassignable at runtime (see _move_tool_to_side) and
-# persisted (both the QSettings autosave and .trirgb paths), these are only
-# the *defaults* to fall back to.
-_DEFAULT_TOOL_SIDES = {
-    "trichrome": "left", "scan": "left",
-    "global_correction": "right", "crop": "right",
+# The block system (2026-09-04): every side-panel block (Files/Channels on
+# the left; Histogram/Light/Color/Crop on the right; Scan can live on
+# either) has its own side, position, visibility and collapsed state -
+# freely reassignable at runtime by dragging a block's grip handle (within
+# or across panels), collapsing it, or closing it (restorable from the
+# Tools menu). These are the defaults the app starts with and that
+# Window > Reset Layout restores - matches what the old exclusive
+# tool-switcher used to show by default (Files+Channels left;
+# Histogram+Light+Color right; Crop/Scan hidden until enabled).
+_ALL_BLOCK_KEYS = ("files", "channels", "histogram", "light", "color", "crop", "scan")
+_DEFAULT_BLOCK_SIDE = {
+    "files": "left", "channels": "left", "scan": "left",
+    "histogram": "right", "light": "right", "color": "right", "crop": "right",
 }
-_DEFAULT_ACTIVE_TOOL = {"left": "trichrome", "right": "global_correction"}
+_DEFAULT_BLOCK_VISIBLE = {
+    "files": True, "channels": True, "scan": False,
+    "histogram": True, "light": True, "color": True, "crop": False,
+}
+_DEFAULT_LEFT_BLOCK_ORDER = ["files", "channels", "scan"]
+_DEFAULT_RIGHT_BLOCK_ORDER = ["histogram", "light", "color", "crop"]
+
+# Both side panels share one width range (2026-09-04 fix) - they used to
+# differ (left 360-420, right 300-360), which is exactly backwards now
+# that any block can be dragged to either side: a block sized to fit the
+# left panel could overflow the right one. Reusing the wider of the two
+# previous ranges for both, since every block already fits it with margin
+# (verified headlessly) and it's the one already used by whichever side a
+# given block happens to be visiting.
+_SIDE_PANEL_MIN_WIDTH = 360
+_SIDE_PANEL_MAX_WIDTH = 420
+# i18n key for each block's Tools-menu label - also used by retranslate_ui.
+_BLOCK_MENU_LABEL_KEYS = {
+    "files": "import_panel_title",
+    "channels": "independent_channels_group_title",
+    "histogram": "menu_tools_histogram",
+    "light": "global_light_subheader",
+    "color": "global_color_subheader",
+    "crop": "menu_tools_crop",
+    "scan": "menu_tools_scan",
+}
+
+# The 4 built-in default-layout menu entries (2026-09-04), each backing one
+# of the top toolbar's Trichrome/Color Correction/Crop/Scan buttons -
+# ordered (display name - the fixed identifier used throughout the code,
+# its Window-menu i18n label key, bare-letter shortcut hint, source preset
+# name) matching the toolbar's own left-to-right order. The display name
+# itself is a reserved slot, not a real saved preset - on_save_layout_preset
+# refuses to save a custom preset under one of these 4 names, and
+# _rebuild_layout_preset_menu skips them so they never show a stray
+# Load/Update/Delete submenu of their own. What each one actually loads is
+# its `source` preset - an ordinary, fully editable/updatable/deletable
+# custom preset the user manages like any other through the Layout Preset
+# submenu (2026-09-04: user recreated these as "NewTrichrome"/
+# "NewColorCorrection"/"NewCrop"/"NewScan" after finding the layouts saved
+# under the display names themselves didn't match what they'd set up -
+# decoupling display name from source preset name is what lets the menu
+# item keep a fixed, translated label while the underlying layout it
+# applies stays a normal, user-editable preset).
+_BUILT_IN_LAYOUT_PRESETS = (
+    ("Trichrome", "menu_window_layout_trichrome", "T", "NewTrichrome"),
+    ("Color Correction", "menu_window_layout_color_correction", "E", "NewColorCorrection"),
+    ("Crop", "menu_window_layout_crop", "C", "NewCrop"),
+    ("Scan", "menu_window_layout_scan", "S", "NewScan"),
+)
+_BUILT_IN_LAYOUT_PRESET_NAMES = tuple(name for name, _key, _shortcut, _source in _BUILT_IN_LAYOUT_PRESETS)
+_BUILT_IN_LAYOUT_SOURCE = {name: source for name, _key, _shortcut, source in _BUILT_IN_LAYOUT_PRESETS}
 
 # Session files: a portable project file (every imported photo's path,
 # alignment, tone, and global correction) - distinct from the QSettings-based
@@ -94,6 +156,12 @@ class MainWindow(QMainWindow):
         self.active_index: int | None = None
         self._is_focus_mode = False
         self._compare_active = False
+        # Whether the interactive Crop overlay (draggable rect on the
+        # canvas, Enter-to-apply, full-vs-cropped preview) is armed -
+        # decoupled from the Crop block's own visibility (2026-09-04),
+        # since the block can now be shown in any custom layout. See
+        # _set_crop_active().
+        self._crop_active = False
         # The exact array last handed to canvas.set_image_rgb/set_image_gray
         # and histogram.set_image - the histogram pixel-pick tool samples
         # from this on hover instead of recomposing anything itself.
@@ -122,9 +190,22 @@ class MainWindow(QMainWindow):
         self._import_pending: list = []
         self._import_replace: bool = True
 
-        # Which side panel each of the 4 tools currently lives in - see
-        # _move_tool_to_side/reset_layout and the Window > Layout menu.
-        self.tool_side: dict[str, str] = dict(_DEFAULT_TOOL_SIDES)
+        # Block system state (2026-09-04) - see _ALL_BLOCK_KEYS above and
+        # _apply_block_layout(). block_side says which panel a block is
+        # in; left_block_order/right_block_order is that panel's own full
+        # order (hidden blocks keep their slot so re-showing one restores
+        # its old position, per the user's explicit request); block_visible/
+        # block_collapsed are independent per-block toggles.
+        self.block_side: dict[str, str] = dict(_DEFAULT_BLOCK_SIDE)
+        self.block_visible: dict[str, bool] = dict(_DEFAULT_BLOCK_VISIBLE)
+        self.block_collapsed: dict[str, bool] = {k: False for k in _ALL_BLOCK_KEYS}
+        self.left_block_order: list[str] = list(_DEFAULT_LEFT_BLOCK_ORDER)
+        self.right_block_order: list[str] = list(_DEFAULT_RIGHT_BLOCK_ORDER)
+
+        # Named layout snapshots (Window > Layout Preset) - loaded eagerly
+        # here since _build_ui() needs the list to populate the menu.
+        self._layout_preset_names: list[str] = list(
+            QSettings(ORG_NAME, APP_NAME).value("layout_preset_names", [], type=list))
 
         self._clipboard_settings: dict | None = None
         self._undo_stack: list = []
@@ -188,18 +269,21 @@ class MainWindow(QMainWindow):
         self.delete_selection_action.setText(i18n.tr("menu_edit_delete") + "\t⌘⌫")
         self.language_menu.setTitle(i18n.tr("menu_language"))
         self.tools_menu.setTitle(i18n.tr("menu_tools"))
-        self.tools_trichrome_action.setText(i18n.tr("menu_tools_trichrome") + "\tT")
-        self.tools_global_correction_action.setText(i18n.tr("menu_tools_global_correction") + "\tE")
-        self.tools_crop_action.setText(i18n.tr("menu_tools_crop") + "\tC")
-        self.tools_scan_action.setText(i18n.tr("menu_tools_scan") + "\tS")
+        for key, action in self.block_menu_actions.items():
+            action.setText(i18n.tr(_BLOCK_MENU_LABEL_KEYS[key]))
         self.window_menu.setTitle(i18n.tr("menu_window"))
         self.window_close_action.setText(i18n.tr("menu_window_close") + "\t⌘W")
         self.window_left_panel_action.setText(i18n.tr("menu_window_left_panel") + "\tI")
         self.window_right_panel_action.setText(i18n.tr("menu_window_right_panel") + "\tO")
         self.window_thumbnails_action.setText(i18n.tr("menu_window_thumbnails") + "\tP")
-        self.window_layout_menu.setTitle(i18n.tr("menu_window_layout"))
+        for name, label_key, shortcut, _source in _BUILT_IN_LAYOUT_PRESETS:
+            self.builtin_layout_menus[name].setTitle(i18n.tr("menu_window_layout_prefix") + i18n.tr(label_key))
+            self.builtin_layout_load_actions[name].setText(i18n.tr("layout_preset_load") + f"\t{shortcut}")
+            self.builtin_layout_update_actions[name].setText(i18n.tr("layout_preset_update"))
+        self.layout_preset_menu.setTitle(i18n.tr("menu_window_layout_preset"))
+        self.save_layout_preset_action.setText(i18n.tr("menu_window_save_layout_preset"))
+        self._rebuild_layout_preset_menu()
         self.reset_layout_action.setText(i18n.tr("menu_window_reset_layout"))
-        self._update_layout_menu_labels()
         self.help_menu.setTitle(i18n.tr("menu_help"))
         self.quickstart_action.setText(i18n.tr("menu_quickstart_action"))
         self.shortcuts_action.setText(i18n.tr("menu_shortcuts_action"))
@@ -212,9 +296,15 @@ class MainWindow(QMainWindow):
         self.harris_shutter_checkbox.setToolTip(i18n.tr("harris_shutter_info"))
         for panel in self.channel_panels:
             panel.retranslate_ui()
-        self.global_panel.retranslate_ui()
+        self.light_panel.retranslate_ui()
+        self.color_panel.retranslate_ui()
         self.crop_panel.retranslate_ui()
+        self.histogram_title_label.setText(i18n.tr("menu_tools_histogram"))
         self.histogram.retranslate_ui()
+        # scan_title_label.setText() was missing entirely (2026-09-04 bug -
+        # the label existed in the header row but was never given text,
+        # so "Scan" never actually appeared).
+        self.scan_title_label.setText(i18n.tr("menu_tools_scan"))
         self.canvas.retranslate_ui()
         self.carousel.retranslate_ui()
         self.missing_files_banner.retranslate_ui()
@@ -240,7 +330,6 @@ class MainWindow(QMainWindow):
 
         self.new_session_toolbar_btn.setToolTip(i18n.tr("menu_new_session"))
         self.open_session_toolbar_btn.setToolTip(i18n.tr("menu_open_session"))
-        self.session_options_toolbar_btn.setToolTip(i18n.tr("session_options_toolbar_tooltip"))
         self.import_toolbar_btn.setToolTip(i18n.tr("import_toolbar_tooltip"))
         self.left_panel_toggle_btn.setToolTip(i18n.tr("left_panel_toggle_tooltip"))
         self.save_session_toolbar_btn.setToolTip(i18n.tr("save_session_toolbar_tooltip"))
@@ -371,24 +460,20 @@ class MainWindow(QMainWindow):
             self.language_menu.addAction(act)
 
         self.tools_menu = self.menuBar().addMenu(i18n.tr("menu_tools"))
-        # Mirrors the top toolbar's 4 tool-switcher buttons exactly (see
-        # _build_top_toolbar) - Trichrome/Scan and Global Correction/Crop
-        # are 2 independent exclusive pairs (left panel vs. right panel),
-        # not one 4-way exclusive choice, so these are plain checkable
-        # QActions individually synced to their own toolbar button rather
-        # than grouped in a single QActionGroup (which would incorrectly
-        # force all 4 mutually exclusive). trichrome_toolbar_btn etc. don't
-        # exist yet at this point in _build_ui - initial checked state +
-        # bidirectional sync happens in _connect_signals() instead, same
-        # reason the Window menu's panel-toggle actions defer theirs.
-        self.tools_trichrome_action = QAction(self, checkable=True)
-        self.tools_menu.addAction(self.tools_trichrome_action)
-        self.tools_global_correction_action = QAction(self, checkable=True)
-        self.tools_menu.addAction(self.tools_global_correction_action)
-        self.tools_crop_action = QAction(self, checkable=True)
-        self.tools_menu.addAction(self.tools_crop_action)
-        self.tools_scan_action = QAction(self, checkable=True)
-        self.tools_menu.addAction(self.tools_scan_action)
+        # 2026-09-04: lists every block individually (Files/Channels/
+        # Histogram/Light/Color/Crop/Scan), not the old 4 tool-switcher
+        # pairs - each a plain independent checkable toggle controlling
+        # that one block's visibility (self.block_visible), synced with
+        # its own header's close button via set_block_visible(). No
+        # QActionGroup: unlike the old exclusive-pair tools, any number of
+        # blocks can be shown at once now. Actual checked-state + the
+        # toggled connection are wired in _connect_signals(), once
+        # self.block_menu_actions exists (built at the end of _build_ui).
+        self.block_menu_actions: dict[str, QAction] = {}
+        for key in _ALL_BLOCK_KEYS:
+            action = QAction(self, checkable=True)
+            self.tools_menu.addAction(action)
+            self.block_menu_actions[key] = action
 
         self.window_menu = self.menuBar().addMenu(i18n.tr("menu_window"))
         self.window_close_action = QAction(self)
@@ -418,34 +503,65 @@ class MainWindow(QMainWindow):
         self.window_menu.addAction(self.window_thumbnails_action)
         self.window_menu.addSeparator()
 
-        # Layout: lets the user reassign each of the 4 tool panels
-        # (Trichrome/Scan/Global Correction/Crop) between the left and
-        # right sidebar - see _move_tool_to_side/reset_layout. Each move
-        # action is a single click that flips that tool to whichever side
-        # it's NOT currently on (its label updates to reflect the new
-        # state) - simpler than a 2-item left/right radio choice per tool
-        # for a binary either/or. trichrome_toolbar_btn etc. don't exist
-        # yet at this point in _build_ui, so the labels are only set for
-        # real in retranslate_ui()/_update_layout_menu_labels(), same
-        # deferred-wiring reason as the rest of this menu.
-        self.window_layout_menu = self.window_menu.addMenu(i18n.tr("menu_window_layout"))
-        self.move_trichrome_action = QAction(self)
-        self.move_trichrome_action.triggered.connect(lambda: self._toggle_tool_side("trichrome"))
-        self.window_layout_menu.addAction(self.move_trichrome_action)
-        self.move_scan_action = QAction(self)
-        self.move_scan_action.triggered.connect(lambda: self._toggle_tool_side("scan"))
-        self.window_layout_menu.addAction(self.move_scan_action)
-        self.move_global_correction_action = QAction(self)
-        self.move_global_correction_action.triggered.connect(
-            lambda: self._toggle_tool_side("global_correction"))
-        self.window_layout_menu.addAction(self.move_global_correction_action)
-        self.move_crop_action = QAction(self)
-        self.move_crop_action.triggered.connect(lambda: self._toggle_tool_side("crop"))
-        self.window_layout_menu.addAction(self.move_crop_action)
-        self.window_layout_menu.addSeparator()
+        # The 4 built-in default-layout presets, listed directly in the
+        # Window menu (not nested in the Layout Preset submenu below) -
+        # each one is its own small submenu (Load + Update, no Delete -
+        # 2026-09-04, the user asked for Update to be added here too,
+        # matching a custom preset's own submenu shape minus the ability
+        # to remove a reserved slot entirely). Load mirrors one of the top
+        # toolbar's Trichrome/Color Correction/Crop/Scan buttons -
+        # triggering either goes through the same _activate_default_layout(),
+        # so the toolbar's exclusive checked state stays in sync regardless
+        # of which one was used. Update re-saves the *current* layout into
+        # that slot's underlying source preset (_BUILT_IN_LAYOUT_SOURCE,
+        # e.g. "Trichrome" -> "NewTrichrome") - the same effect as finding
+        # that preset under Layout Preset and clicking its own Update, just
+        # reachable directly from the slot the user actually thinks of it
+        # by ("update the Trichrome layout").
+        self.builtin_layout_menus: dict[str, QMenu] = {}
+        self.builtin_layout_load_actions: dict[str, QAction] = {}
+        self.builtin_layout_update_actions: dict[str, QAction] = {}
+        for name, _label_key, _shortcut, source in _BUILT_IN_LAYOUT_PRESETS:
+            submenu = QMenu(self.window_menu)
+            load_action = QAction(submenu)
+            load_action.triggered.connect(lambda _checked=False, n=name: self._activate_default_layout(n))
+            submenu.addAction(load_action)
+            update_action = QAction(submenu)
+            update_action.triggered.connect(lambda _checked=False, src=source: self._save_layout_preset(src))
+            submenu.addAction(update_action)
+            self.window_menu.addMenu(submenu)
+            self.builtin_layout_menus[name] = submenu
+            self.builtin_layout_load_actions[name] = load_action
+            self.builtin_layout_update_actions[name] = update_action
+        self.window_menu.addSeparator()
+
+        # Layout Preset: save/restore a full named layout snapshot (panel
+        # visibility, which side each tool lives on, which tool is active
+        # per side, and the left/right block order) - see
+        # _capture_layout_state/_apply_layout_state and
+        # _save_layout_preset/_load_layout_preset/_delete_layout_preset.
+        # Persisted via QSettings only (not part of .trirgb) since presets
+        # are a personal, cross-session arrangement library, not project
+        # file content. self._layout_preset_names is loaded in __init__.
+        self.layout_preset_menu = self.window_menu.addMenu(i18n.tr("menu_window_layout_preset"))
+        self.save_layout_preset_action = QAction(self)
+        self.save_layout_preset_action.triggered.connect(self.on_save_layout_preset)
+        self.layout_preset_menu.addAction(self.save_layout_preset_action)
+        self._layout_preset_separator = self.layout_preset_menu.addSeparator()
+        self._rebuild_layout_preset_menu()
+
+        # Reset Layout sits directly below Layout Preset, no separator
+        # between them (2026-09-04, per the user's explicit request) - the
+        # separator above (before the 4 built-in layout submenus) still
+        # marks the start of the whole "layout" section of the menu; tool
+        # panels can now be reordered directly by dragging a block's
+        # header (BlockHeaderBar/BlockReorderZone) instead of via a menu
+        # action, so the old per-tool "move to left/right panel" actions
+        # were removed (2026-09-03) and Reset Layout is the one remaining
+        # fixed-arrangement action left in this section.
         self.reset_layout_action = QAction(self)
         self.reset_layout_action.triggered.connect(self.reset_layout)
-        self.window_layout_menu.addAction(self.reset_layout_action)
+        self.window_menu.addAction(self.reset_layout_action)
 
         self.help_menu = self.menuBar().addMenu(i18n.tr("menu_help"))
         self.quickstart_action = QAction(i18n.tr("menu_quickstart_action"), self)
@@ -469,21 +585,35 @@ class MainWindow(QMainWindow):
 
         self.channel_panels = [ChannelPanel(layer.label) for layer in self.layers]
         self.independent_channels_group = QGroupBox()
-        independent_channels_layout = QVBoxLayout(self.independent_channels_group)
-        independent_channels_header = QHBoxLayout()
-        self.independent_channels_title_label = QLabel()
-        self.independent_channels_title_label.setStyleSheet("font-weight: bold;")
-        independent_channels_header.addWidget(self.independent_channels_title_label)
+        independent_channels_outer, independent_channels_header, self.independent_channels_title_label = (
+            start_block_chrome(self.independent_channels_group, "channels", "independent_channels_group_title"))
+        # Same "?" scope-info convention as Light/Color's own
+        # scope_info_button (2026-09-04, added here per the user's
+        # explicit request - "ajoute le même bouton pour l'outil RGB
+        # Channels").
+        self.channels_scope_info_button = QToolButton()
+        self.channels_scope_info_button.setText("?")
+        self.channels_scope_info_button.setFixedSize(18, 18)
+        self.channels_scope_info_button.setStyleSheet("QToolButton { border-radius: 9px; }")
+        self.channels_scope_info_button.clicked.connect(
+            lambda: show_info_bubble(i18n.tr("channels_scope_info"), self.channels_scope_info_button))
+        independent_channels_header.addWidget(self.channels_scope_info_button)
         independent_channels_header.addStretch(1)
         self.reset_all_alignment_button = SvgToolButton(
-            "Color Correction/reset_alignment.svg", size=(41, 36), icon_size=24)
+            "Color Correction/reset_alignment.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.reset_all_alignment_button.clicked.connect(self.on_reset_all_alignment)
         independent_channels_header.addWidget(self.reset_all_alignment_button)
         self.reset_all_color_button = SvgToolButton(
-            "Color Correction/reset_settings.svg", size=(41, 36), icon_size=24)
+            "Color Correction/reset_settings.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.reset_all_color_button.clicked.connect(self.on_reset_all_color)
         independent_channels_header.addWidget(self.reset_all_color_button)
-        independent_channels_layout.addLayout(independent_channels_header)
+        (self.independent_channels_body, independent_channels_layout,
+         self.channels_collapse_button, self.channels_close_button) = finish_block_chrome(
+            independent_channels_outer, independent_channels_header)
+        # Every block widget exposes .body (set_block_collapsed's contract)
+        # - the class-based panels (ImportPanel/LightPanel/etc.) set this on
+        # themselves; these 3 inline-built blocks need it set explicitly.
+        self.independent_channels_group.body = self.independent_channels_body
 
         for panel in self.channel_panels:
             independent_channels_layout.addWidget(panel)
@@ -502,36 +632,39 @@ class MainWindow(QMainWindow):
         harris_shutter_row.addWidget(self.harris_shutter_info_button)
         independent_channels_layout.addLayout(harris_shutter_row)
 
-        # The left panel now switches between two tools, the same way the
-        # right panel already switches between Global Correction and Crop -
-        # "Trichrome" is everything the left panel always showed (Import +
-        # Independent Channels), "Scan" is an empty placeholder for the
-        # scan tool's future integration (see trichrome/scan_tool/).
-        self.trichrome_panel = QWidget()
-        trichrome_panel_layout = QVBoxLayout(self.trichrome_panel)
-        trichrome_panel_layout.setContentsMargins(0, 0, 0, 0)
-        trichrome_panel_layout.addWidget(self.import_panel)
-        trichrome_panel_layout.addWidget(self.independent_channels_group)
-
-        self.scan_panel = QWidget()
-        scan_panel_layout = QVBoxLayout(self.scan_panel)
+        # Scan is a first-class block like every other one now (grip/
+        # collapse/close/title), even though its body is still just a
+        # placeholder ahead of the real scan tool integration.
+        self.scan_panel = QGroupBox()
+        scan_outer, scan_header, self.scan_title_label = start_block_chrome(self.scan_panel, "scan", "menu_tools_scan")
+        scan_header.addStretch(1)
+        (self.scan_body, scan_layout, self.scan_collapse_button, self.scan_close_button) = finish_block_chrome(
+            scan_outer, scan_header)
+        self.scan_panel.body = self.scan_body
         scan_placeholder_label = QLabel(i18n.tr("scan_panel_placeholder"))
         scan_placeholder_label.setWordWrap(True)
         scan_placeholder_label.setAlignment(Qt.AlignCenter)
         scan_placeholder_label.setStyleSheet("color: #888;")
-        scan_panel_layout.addWidget(scan_placeholder_label)
-        self.scan_panel.setVisible(False)
+        scan_layout.addWidget(scan_placeholder_label)
 
-        left_container = QWidget()
-        self.left_layout = QVBoxLayout(left_container)
-        self.left_layout.addWidget(self.trichrome_panel)
-        self.left_layout.addWidget(self.scan_panel)
+        # left_container/right_container (below) are BlockReorderZone
+        # instances holding every block assigned to that side directly -
+        # see the block-system state (self.block_side/_visible/_collapsed,
+        # self.left_block_order/right_block_order) and _apply_block_layout.
+        self.left_container = BlockReorderZone()
+        self.left_layout = QVBoxLayout(self.left_container)
         self.left_layout.addStretch(1)
+        self.left_container.block_dropped.connect(lambda key, idx: self._on_block_dropped("left", key, idx))
         self.left_scroll = ArrowKeyScrollArea()
         self.left_scroll.setWidgetResizable(True)
-        self.left_scroll.setWidget(left_container)
-        self.left_scroll.setMinimumWidth(360)
-        self.left_scroll.setMaximumWidth(420)
+        self.left_scroll.setWidget(self.left_container)
+        self.left_scroll.setMinimumWidth(_SIDE_PANEL_MIN_WIDTH)
+        self.left_scroll.setMaximumWidth(_SIDE_PANEL_MAX_WIDTH)
+        # Only ever scrolls vertically - block content must fit the
+        # column's width, not spill sideways (2026-09-04 fix - this one
+        # was missed when right_scroll got the same policy earlier; blocks
+        # must adapt to the panel's width, never the other way around).
+        self.left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.canvas = CanvasWidget()
 
@@ -635,30 +768,32 @@ class MainWindow(QMainWindow):
         canvas_layout.addWidget(self.carousel)
         self.canvas_container = canvas_container
 
-        # Histogram and Global Color Correction are two visually distinct
-        # blocks (no title on the histogram one), stacked in the same order
-        # they used to appear as a single block.
+        # Title added 2026-09-04 (had been left off on purpose in earlier
+        # passes - the user changed their mind and asked for it back).
         self.histogram = HistogramPanel()
         self.histogram_box = QGroupBox()
-        histogram_box_layout = QVBoxLayout(self.histogram_box)
-        histogram_box_layout.addWidget(self.histogram)
+        histogram_outer, histogram_header, self.histogram_title_label = start_block_chrome(
+            self.histogram_box, "histogram", "menu_tools_histogram")
+        (self.histogram_body, histogram_body_layout,
+         self.histogram_collapse_button, self.histogram_close_button) = finish_block_chrome(
+            histogram_outer, histogram_header)
+        self.histogram_box.body = self.histogram_body
+        histogram_body_layout.addWidget(self.histogram)
 
-        self.global_panel = GlobalPanel()
+        self.light_panel = LightPanel()
+        self.color_panel = ColorPanel()
         self.crop_panel = CropPanel()
-        self.crop_panel.setVisible(False)
 
-        right_container = QWidget()
-        self.right_layout = QVBoxLayout(right_container)
-        self.right_layout.addWidget(self.histogram_box)
-        self.right_layout.addWidget(self.global_panel)
-        self.right_layout.addWidget(self.crop_panel)
+        self.right_container = BlockReorderZone()
+        self.right_layout = QVBoxLayout(self.right_container)
         self.right_layout.addStretch(1)
+        self.right_container.block_dropped.connect(lambda key, idx: self._on_block_dropped("right", key, idx))
 
         self.right_scroll = ArrowKeyScrollArea()
         self.right_scroll.setWidgetResizable(True)
-        self.right_scroll.setWidget(right_container)
-        self.right_scroll.setMinimumWidth(300)
-        self.right_scroll.setMaximumWidth(360)
+        self.right_scroll.setWidget(self.right_container)
+        self.right_scroll.setMinimumWidth(_SIDE_PANEL_MIN_WIDTH)
+        self.right_scroll.setMaximumWidth(_SIDE_PANEL_MAX_WIDTH)
         # Only ever scrolls vertically - content must fit the column's width,
         # not spill sideways into a horizontal scrollbar.
         self.right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -683,17 +818,42 @@ class MainWindow(QMainWindow):
         self.session_name_label.setStyleSheet("color: #888; padding-right: 10px;")
         self.statusBar().addPermanentWidget(self.session_name_label)
 
-        # Registry for the Window > Layout menu / _move_tool_to_side - built
-        # here (end of _build_ui, right before the first retranslate_ui()
-        # call, which needs it for _update_layout_menu_labels()) since every
-        # tool's button+panel now exists.
-        self._tool_registry = {
-            "trichrome": (self.trichrome_toolbar_btn, self.trichrome_panel),
-            "scan": (self.scan_toolbar_btn, self.scan_panel),
-            "global_correction": (self.settings_toolbar_btn, self.global_panel),
-            "crop": (self.crop_toolbar_btn, self.crop_panel),
+        # Registry mapping every block key to its widget/collapse-button/
+        # close-button, built here (end of _build_ui) since every block now
+        # exists - the one lookup table the whole block system is built on.
+        self.block_widgets: dict[str, QWidget] = {
+            "files": self.import_panel,
+            "channels": self.independent_channels_group,
+            "histogram": self.histogram_box,
+            "light": self.light_panel,
+            "color": self.color_panel,
+            "crop": self.crop_panel,
+            "scan": self.scan_panel,
         }
+        self.block_collapse_buttons: dict[str, SvgToolButton] = {
+            "files": self.import_panel.collapse_button,
+            "channels": self.channels_collapse_button,
+            "histogram": self.histogram_collapse_button,
+            "light": self.light_panel.collapse_button,
+            "color": self.color_panel.collapse_button,
+            "crop": self.crop_panel.collapse_button,
+            "scan": self.scan_collapse_button,
+        }
+        self.block_close_buttons: dict[str, SvgToolButton] = {
+            "files": self.import_panel.close_button,
+            "channels": self.channels_close_button,
+            "histogram": self.histogram_close_button,
+            "light": self.light_panel.close_button,
+            "color": self.color_panel.close_button,
+            "crop": self.crop_panel.close_button,
+            "scan": self.scan_close_button,
+        }
+        for key, btn in self.block_collapse_buttons.items():
+            btn.clicked.connect(lambda _checked=False, k=key: self._toggle_block_collapsed(k))
+        for key, btn in self.block_close_buttons.items():
+            btn.clicked.connect(lambda _checked=False, k=key: self.set_block_visible(k, False))
 
+        self._apply_block_layout()
         self.retranslate_ui()
         self._update_carousel_visibility()
 
@@ -749,9 +909,6 @@ class MainWindow(QMainWindow):
         self.open_session_toolbar_btn = SvgToolButton("Toolbar/file-open.svg", **btn_kwargs)
         self.open_session_toolbar_btn.clicked.connect(self.action_open_session)
 
-        self.session_options_toolbar_btn = SvgToolButton("Toolbar/file-settings.svg", **btn_kwargs)
-        self.session_options_toolbar_btn.clicked.connect(self.show_session_options_dialog)
-
         self.save_session_toolbar_btn = SvgToolButton("Toolbar/save.svg", **btn_kwargs)
         self.save_session_toolbar_btn.clicked.connect(self.action_save_session)
 
@@ -782,34 +939,39 @@ class MainWindow(QMainWindow):
         self.help_menu.addAction(self.shortcuts_toolbar_action)
         self.help_toolbar_btn.setMenu(self.help_menu)
 
-        # Left-panel tool switch (Trichrome/Scan) and right-panel tool
-        # switch (Global Correction/Crop): two independent QButtonGroups,
-        # each mutually exclusive within itself but not with each other -
-        # e.g. Trichrome+Crop can both be checked at once. Same dimming
-        # convention as the right-panel pair: SvgCheckableToolButton's own
-        # unchecked-state tint rather than setEnabled(False), so the
-        # inactive button in each pair stays clickable to switch back to.
+        # Default-layout quick-switch buttons (Trichrome/Color Correction/
+        # Crop/Scan), re-purposed 2026-09-04 - now that layout is fully
+        # customizable (the block system above), these 4 no longer toggle
+        # a fixed tool panel's visibility; each instead loads whichever
+        # custom preset _BUILT_IN_LAYOUT_SOURCE maps its display name to
+        # (see _BUILT_IN_LAYOUT_PRESETS) via _activate_default_layout(). A
+        # single exclusive QButtonGroup across all 4 (not two independent
+        # pairs like the old tool-switcher) - only one default layout
+        # reads as "active" (full color) at a time, the rest dimmed, per
+        # the user's explicit ask.
         self.trichrome_toolbar_btn = SvgCheckableToolButton("Toolbar/trichrome.svg", **btn_kwargs)
         self.trichrome_toolbar_btn.setChecked(True)
-        self.scan_toolbar_btn = SvgCheckableToolButton("Scan/camera-plus.svg", **btn_kwargs)
-        self.left_tool_group = QButtonGroup(self)
-        self.left_tool_group.setExclusive(True)
-        self.left_tool_group.addButton(self.trichrome_toolbar_btn)
-        self.left_tool_group.addButton(self.scan_toolbar_btn)
-        # trichrome_panel/scan_panel don't exist yet at this point in
-        # _build_ui - the toggled connections that show/hide them are wired
-        # in _connect_signals() instead, once both panels are built.
-
         self.settings_toolbar_btn = SvgCheckableToolButton("Toolbar/horizontal_sliders.svg", **btn_kwargs)
-        self.settings_toolbar_btn.setChecked(True)
         self.crop_toolbar_btn = SvgCheckableToolButton("Crop/crop.svg", **btn_kwargs)
-        self.right_tool_group = QButtonGroup(self)
-        self.right_tool_group.setExclusive(True)
-        self.right_tool_group.addButton(self.settings_toolbar_btn)
-        self.right_tool_group.addButton(self.crop_toolbar_btn)
-        # global_panel/crop_panel don't exist yet at this point in _build_ui -
-        # the toggled connections that show/hide them are wired in
-        # _connect_signals() instead, once both panels are built.
+        self.scan_toolbar_btn = SvgCheckableToolButton("Scan/camera-plus.svg", **btn_kwargs)
+        self.default_layout_group = QButtonGroup(self)
+        self.default_layout_group.setExclusive(True)
+        for btn in (
+            self.trichrome_toolbar_btn, self.settings_toolbar_btn, self.crop_toolbar_btn, self.scan_toolbar_btn,
+        ):
+            self.default_layout_group.addButton(btn)
+        # Maps each built-in preset name to its toolbar button, so
+        # _activate_default_layout() can sync the exclusive checked state
+        # regardless of which of the 3 entry points (toolbar click, bare
+        # keyboard shortcut, Window menu item) triggered it.
+        self._default_layout_buttons = {
+            "Trichrome": self.trichrome_toolbar_btn,
+            "Color Correction": self.settings_toolbar_btn,
+            "Crop": self.crop_toolbar_btn,
+            "Scan": self.scan_toolbar_btn,
+        }
+        for name, btn in self._default_layout_buttons.items():
+            btn.clicked.connect(lambda _checked=False, n=name: self._activate_default_layout(n))
 
         # Split into two expanding halves with the status label between them,
         # so the label sits centered regardless of window width.
@@ -832,7 +994,6 @@ class MainWindow(QMainWindow):
         self.top_toolbar.addWidget(left_edge_spacer)
         self.top_toolbar.addWidget(self.new_session_toolbar_btn)
         self.top_toolbar.addWidget(self.open_session_toolbar_btn)
-        self.top_toolbar.addWidget(self.session_options_toolbar_btn)
         self.top_toolbar.addWidget(self.save_session_toolbar_btn)
         self.top_toolbar.addWidget(self.import_toolbar_btn)
         self.top_toolbar.addWidget(toolbar_spacer_left)
@@ -863,113 +1024,277 @@ class MainWindow(QMainWindow):
         if active is not None and active is not self:
             active.close()
 
-    def _select_tool_action(self, action: QAction, button) -> None:
-        """Forces both the Tools-menu action and its paired toolbar button
-        to checked - see the comment above where this is wired in
-        _connect_signals for why the action itself needs the explicit
-        correction, not just the button."""
-        action.setChecked(True)
-        button.setChecked(True)
+    # ------------------------------------------------------------------
+    # Block system (2026-09-04) - which side panel each block lives in,
+    # its position there, and its visible/collapsed state. Freely
+    # reassignable at runtime via drag (BlockReorderZone/_on_block_dropped),
+    # the collapse/close buttons on each block's own header, and the Tools
+    # menu; see _DEFAULT_BLOCK_SIDE/_DEFAULT_BLOCK_VISIBLE/
+    # _DEFAULT_LEFT_BLOCK_ORDER/_DEFAULT_RIGHT_BLOCK_ORDER for the fallback
+    # shape restored by Window > Reset Layout.
+    # ------------------------------------------------------------------
+    def _apply_block_layout(self) -> None:
+        """Rebuilds left_layout/right_layout from block_side/block_visible/
+        left_block_order/right_block_order - the single place block-system
+        state turns into actual on-screen layout. Called after every
+        drag-drop, visibility toggle, reset, and layout restore."""
+        for side, layout, order in (
+            ("left", self.left_layout, self.left_block_order),
+            ("right", self.right_layout, self.right_block_order),
+        ):
+            for key in order:
+                widget = self.block_widgets.get(key)
+                if widget is not None:
+                    layout.removeWidget(widget)
+            for i, key in enumerate(order):
+                widget = self.block_widgets.get(key)
+                if widget is None:
+                    continue
+                layout.insertWidget(i, widget)
+                widget.setVisible(self.block_visible.get(key, True) and self.block_side.get(key) == side)
 
-    # ------------------------------------------------------------------
-    # Tool layout (Window > Layout) - which side panel each of the 4
-    # tools (Trichrome/Scan/Global Correction/Crop) lives in, and which
-    # one is active per side. User-reassignable at runtime; see
-    # _DEFAULT_TOOL_SIDES/_DEFAULT_ACTIVE_TOOL for the fallback shape.
-    # ------------------------------------------------------------------
-    def _move_tool_to_side(self, tool_key: str, new_side: str) -> None:
-        old_side = self.tool_side[tool_key]
-        if new_side == old_side:
+        self.left_container.set_block_widgets(
+            {k: w for k, w in self.block_widgets.items() if self.block_side.get(k) == "left"})
+        self.right_container.set_block_widgets(
+            {k: w for k, w in self.block_widgets.items() if self.block_side.get(k) == "right"})
+
+        for key, action in self.block_menu_actions.items():
+            action.blockSignals(True)
+            action.setChecked(self.block_visible.get(key, True))
+            action.blockSignals(False)
+
+        # Force both scroll areas to re-evaluate their contained widget's
+        # width against the viewport - without this, a block moved by
+        # drag (removeWidget/insertWidget, not a real user resize) could
+        # leave a stale cached size behind, and the "no horizontal
+        # scrollbar" fix would silently stop applying after a drag
+        # (2026-09-04 feedback: "lorsque l'on déplace les blocs, cette
+        # adaptation n'est plus prise en compte").
+        for layout in (self.left_layout, self.right_layout):
+            layout.invalidate()
+            layout.activate()
+        for container in (self.left_container, self.right_container):
+            container.updateGeometry()
+
+    def _on_block_dropped(self, target_side: str, dragged_key: str, insert_index: int) -> None:
+        """A block was dropped in the target_side zone (left_container or
+        right_container) at insert_index among that zone's own currently-
+        visible blocks (excluding the dragged one). Works uniformly for a
+        same-panel reorder and a cross-panel move - target_side may or may
+        not be the block's current side."""
+        if dragged_key not in self.block_widgets:
             return
-        button, panel = self._tool_registry[tool_key]
-        was_active = button.isChecked()
+        old_side = self.block_side.get(dragged_key)
+        if old_side is None:
+            return
+        old_order = self.left_block_order if old_side == "left" else self.right_block_order
+        if dragged_key in old_order:
+            old_order.remove(dragged_key)
 
-        old_group = self.left_tool_group if old_side == "left" else self.right_tool_group
-        new_group = self.left_tool_group if new_side == "left" else self.right_tool_group
-        old_layout = self.left_layout if old_side == "left" else self.right_layout
-        new_layout = self.left_layout if new_side == "left" else self.right_layout
-
-        old_group.removeButton(button)
-        new_group.addButton(button)
-        old_layout.removeWidget(panel)
-        # Insert right before the trailing stretch, which addStretch(1)
-        # always leaves as the layout's last item.
-        new_layout.insertWidget(new_layout.count() - 1, panel)
-        self.tool_side[tool_key] = new_side
-
-        if was_active:
-            # The side this tool just left would otherwise show nothing -
-            # activate whichever tool remains there, if any.
-            remaining = [k for k, s in self.tool_side.items() if s == old_side and k != tool_key]
-            if remaining:
-                self._tool_registry[remaining[0]][0].setChecked(True)
-            # This tool was the reason its old side had something showing;
-            # carry that over so its new side isn't left blank either,
-            # regardless of whatever else might already be active there.
-            button.setChecked(True)
+        target_order = self.left_block_order if target_side == "left" else self.right_block_order
+        self.block_side[dragged_key] = target_side
+        visible_in_target = [
+            k for k in target_order
+            if k != dragged_key and self.block_visible.get(k, True) and self.block_side.get(k) == target_side
+        ]
+        if 0 <= insert_index < len(visible_in_target):
+            pos = target_order.index(visible_in_target[insert_index])
         else:
-            # Wasn't active - only force it active if its new side would
-            # otherwise be completely empty (nothing checked there yet).
-            new_side_has_active = any(
-                self._tool_registry[k][0].isChecked()
-                for k, s in self.tool_side.items() if s == new_side and k != tool_key
-            )
-            if not new_side_has_active:
-                button.setChecked(True)
+            pos = len(target_order)
+        target_order.insert(pos, dragged_key)
+        self._apply_block_layout()
 
-    def _toggle_tool_side(self, tool_key: str) -> None:
-        current = self.tool_side[tool_key]
-        self._move_tool_to_side(tool_key, "right" if current == "left" else "left")
-        self._update_layout_menu_labels()
+    def _toggle_block_collapsed(self, key: str) -> None:
+        self.block_collapsed[key] = not self.block_collapsed.get(key, False)
+        widget = self.block_widgets.get(key)
+        if widget is not None:
+            set_block_collapsed(widget.body, self.block_collapse_buttons[key], self.block_collapsed[key])
 
-    _LAYOUT_TOOL_LABEL_KEYS = {
-        "trichrome": "menu_tools_trichrome", "scan": "menu_tools_scan",
-        "global_correction": "menu_tools_global_correction", "crop": "menu_tools_crop",
-    }
-    _LAYOUT_MOVE_ACTIONS = (
-        "move_trichrome_action", "move_scan_action",
-        "move_global_correction_action", "move_crop_action",
-    )
-
-    def _update_layout_menu_labels(self) -> None:
-        """Each move action's own label reflects the tool's *current* side
-        ("Move X to Right Panel" while on the left, flips to "...to Left
-        Panel" once moved) - called after every move, and from
-        retranslate_ui() so a language switch keeps them correct too."""
-        for tool_key, attr_name in zip(self._LAYOUT_TOOL_LABEL_KEYS, self._LAYOUT_MOVE_ACTIONS):
-            action = getattr(self, attr_name)
-            tool_name = i18n.tr(self._LAYOUT_TOOL_LABEL_KEYS[tool_key])
-            target_key = (
-                "menu_window_move_tool_to_right" if self.tool_side[tool_key] == "left"
-                else "menu_window_move_tool_to_left"
-            )
-            action.setText(i18n.tr(target_key, tool=tool_name))
+    def set_block_visible(self, key: str, visible: bool) -> None:
+        """Shows/hides one block - its own header's close button and the
+        Tools menu's checkable action for it both funnel through here, so
+        the two stay in sync regardless of which one the user used.
+        Re-showing a block restores it at wherever it already sits in its
+        side's order list (hidden blocks keep their slot, never removed
+        from the order - only _on_block_dropped changes position)."""
+        self.block_visible[key] = visible
+        widget = self.block_widgets.get(key)
+        if widget is not None:
+            widget.setVisible(visible)
+        if key == "crop" and not visible and self._crop_active:
+            # Hiding the Crop block while active crop mode is armed would
+            # leave a live canvas overlay with no panel to interact with -
+            # fold active mode off too (same as Escape), just reached via
+            # the close button/Tools menu instead of the keyboard. This
+            # does NOT run the other way: showing the block never arms
+            # active mode on its own (2026-09-04) - see _set_crop_active.
+            self._set_crop_active(False)
+        action = self.block_menu_actions.get(key)
+        if action is not None:
+            action.blockSignals(True)
+            action.setChecked(visible)
+            action.blockSignals(False)
 
     def reset_layout(self) -> None:
-        """Window > Layout > Reset Layout - the one default configuration
-        stated explicitly by the user when this feature was built
-        (2026-09-03): Trichrome+Scan on the left, Global Correction+Crop on
-        the right, Trichrome and Global Correction active, thumbnail strip
-        visible, zoomed to fit."""
-        for tool_key, side in _DEFAULT_TOOL_SIDES.items():
-            self._move_tool_to_side(tool_key, side)
-        for side, tool_key in _DEFAULT_ACTIVE_TOOL.items():
-            self._tool_registry[tool_key][0].setChecked(True)
+        """Window > Reset Layout - the one default configuration: Files +
+        Independent Channels visible on the left, Histogram + Light + Color
+        visible on the right, Crop and Scan hidden, nothing collapsed,
+        thumbnail strip visible, zoomed to fit."""
+        self.block_side = dict(_DEFAULT_BLOCK_SIDE)
+        self.block_visible = dict(_DEFAULT_BLOCK_VISIBLE)
+        self.block_collapsed = {k: False for k in _ALL_BLOCK_KEYS}
+        self.left_block_order = list(_DEFAULT_LEFT_BLOCK_ORDER)
+        self.right_block_order = list(_DEFAULT_RIGHT_BLOCK_ORDER)
+        for key, widget in self.block_widgets.items():
+            set_block_collapsed(widget.body, self.block_collapse_buttons[key], False)
         self.left_panel_toggle_btn.setChecked(True)
         self.right_panel_toggle_btn.setChecked(True)
         self.carousel_toggle_btn.setChecked(True)
         self.canvas.zoom_fit()
-        self._update_layout_menu_labels()
+        self._apply_block_layout()
+        # Reset Layout counts as "changing layout" - always deactivates
+        # active crop mode, same as loading any other layout (see
+        # _apply_restored_layout/_activate_default_layout).
+        self._set_crop_active(False)
 
-    def _active_tool_for_side(self, side: str) -> str | None:
-        """Which tool key is currently checked on the given side, for
-        persistence (_collect_session_data/_save_session_state) - None if
-        that side happens to have nothing active (e.g. every tool was
-        moved off it)."""
-        return next(
-            (k for k, s in self.tool_side.items() if s == side and self._tool_registry[k][0].isChecked()),
-            None,
+    def _capture_layout_state(self) -> dict:
+        """Every field _apply_layout_state/_apply_restored_layout can
+        restore, as a plain dict - used both by Layout Presets and (via
+        _apply_layout_state) by the two session-persistence mechanisms'
+        own layout fields, so there's one place this list is kept in
+        sync."""
+        return {
+            "left_panel_visible": self.left_panel_toggle_btn.isChecked(),
+            "right_panel_visible": self.right_panel_toggle_btn.isChecked(),
+            "carousel_visible": self.carousel_toggle_btn.isChecked(),
+            "block_side": dict(self.block_side),
+            "block_visible": dict(self.block_visible),
+            "block_collapsed": dict(self.block_collapsed),
+            "left_block_order": list(self.left_block_order),
+            "right_block_order": list(self.right_block_order),
+        }
+
+    def _apply_layout_state(self, data: dict) -> None:
+        self._apply_restored_layout(
+            data.get("left_panel_visible", True),
+            data.get("right_panel_visible", True),
+            data.get("carousel_visible", True),
+            data.get("block_side"),
+            data.get("block_visible"),
+            data.get("block_collapsed"),
+            data.get("left_block_order"),
+            data.get("right_block_order"),
         )
+
+    def on_save_layout_preset(self) -> None:
+        name, ok = QInputDialog.getText(
+            self, i18n.tr("layout_preset_save_dialog_title"), i18n.tr("layout_preset_name_prompt"))
+        name = name.strip()
+        if not ok or not name:
+            return
+        if name in _BUILT_IN_LAYOUT_PRESET_NAMES:
+            show_alert(
+                self, i18n.tr("layout_preset_builtin_name_title"),
+                i18n.tr("layout_preset_builtin_name_text", name=name))
+            return
+        self._save_layout_preset(name)
+
+    def _activate_default_layout(self, name: str) -> None:
+        """Loads one of the 4 built-in default-layout menu entries (name is
+        the fixed display identifier - "Trichrome"/"Color Correction"/
+        "Crop"/"Scan", never the underlying preset name) and syncs the
+        matching toolbar button's exclusive checked state - the single
+        entry point for all 3 ways to trigger this (toolbar click, bare
+        keyboard shortcut, Window menu item), so whichever was used, the
+        toolbar always ends up showing the right one active. Always
+        reloads the preset even if that button was already checked (e.g.
+        re-pressing T after dragging blocks around resets back to the
+        Trichrome layout), unlike a plain radio-button click which would
+        be a no-op in that case. Resolves through _BUILT_IN_LAYOUT_SOURCE
+        to the actual custom preset name it loads (e.g. "NewTrichrome") -
+        the display name itself isn't a real saved preset. Activating the
+        "Crop" slot specifically also arms active crop mode - every other
+        slot (and the preset load itself, via _apply_restored_layout)
+        deactivates it, since loading a layout otherwise always turns
+        active crop mode off (2026-09-04)."""
+        button = self._default_layout_buttons.get(name)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)
+        source = _BUILT_IN_LAYOUT_SOURCE.get(name, name)
+        self._load_layout_preset(source)
+        self._set_crop_active(name == "Crop")
+
+    def _save_layout_preset(self, name: str) -> None:
+        """Also used as the "Update" action for an existing preset - saving
+        under a name that already exists just overwrites its data, no
+        separate update code path needed."""
+        settings = QSettings(ORG_NAME, APP_NAME)
+        settings.setValue(f"layout_preset_data_{name}", json.dumps(self._capture_layout_state()))
+        if name not in self._layout_preset_names:
+            self._layout_preset_names.append(name)
+            settings.setValue("layout_preset_names", self._layout_preset_names)
+        self._rebuild_layout_preset_menu()
+
+    def _load_layout_preset(self, name: str) -> None:
+        settings = QSettings(ORG_NAME, APP_NAME)
+        raw = settings.value(f"layout_preset_data_{name}", "", type=str)
+        if not raw:
+            return
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+        self._apply_layout_state(data)
+
+    def _delete_layout_preset(self, name: str) -> None:
+        # Defense in depth - the Layout Preset submenu no longer offers a
+        # Delete action for a built-in name (see _rebuild_layout_preset_menu),
+        # so this shouldn't be reachable for one, but guard here too.
+        if name in _BUILT_IN_LAYOUT_PRESET_NAMES:
+            return
+        settings = QSettings(ORG_NAME, APP_NAME)
+        settings.remove(f"layout_preset_data_{name}")
+        if name in self._layout_preset_names:
+            self._layout_preset_names.remove(name)
+            settings.setValue("layout_preset_names", self._layout_preset_names)
+        self._rebuild_layout_preset_menu()
+
+    def _rebuild_layout_preset_menu(self) -> None:
+        """Rebuilds every per-preset submenu below the Save action/
+        separator - called after any preset is saved/updated/deleted, and
+        from retranslate_ui() so a language switch also re-translates the
+        per-preset Load/Update/Delete Preset labels (they're plain QActions
+        built with i18n.tr() at construction time, not synced elsewhere).
+        Skips any of the 4 reserved display names entirely (e.g. saving a
+        custom preset literally called "Trichrome" is already refused by
+        on_save_layout_preset, but this is a second guard) - they must
+        never be Delete-able. Their *source* presets (e.g. "NewTrichrome")
+        aren't reserved names, so they still appear here normally with
+        their own full Load/Update/Delete, alongside the same slot's
+        Load/Update submenu in the Window menu directly
+        (builtin_layout_menus) - two convenient paths to the same preset,
+        not a conflict."""
+        for action in list(self.layout_preset_menu.actions()):
+            if action in (self.save_layout_preset_action, self._layout_preset_separator):
+                continue
+            submenu = action.menu()
+            self.layout_preset_menu.removeAction(action)
+            if submenu is not None:
+                submenu.deleteLater()
+        for name in self._layout_preset_names:
+            if name in _BUILT_IN_LAYOUT_PRESET_NAMES:
+                continue
+            submenu = QMenu(name, self.layout_preset_menu)
+            load_action = QAction(i18n.tr("layout_preset_load"), submenu)
+            load_action.triggered.connect(lambda _checked=False, n=name: self._load_layout_preset(n))
+            submenu.addAction(load_action)
+            update_action = QAction(i18n.tr("layout_preset_update"), submenu)
+            update_action.triggered.connect(lambda _checked=False, n=name: self._save_layout_preset(n))
+            submenu.addAction(update_action)
+            delete_action = QAction(i18n.tr("layout_preset_delete"), submenu)
+            delete_action.triggered.connect(lambda _checked=False, n=name: self._delete_layout_preset(n))
+            submenu.addAction(delete_action)
+            self.layout_preset_menu.addMenu(submenu)
 
     def _connect_signals(self) -> None:
         for i, panel in enumerate(self.channel_panels):
@@ -1003,62 +1328,31 @@ class MainWindow(QMainWindow):
             lambda checked: self.carousel_toggle_btn.setChecked(checked))
         self.carousel_toggle_btn.toggled.connect(self.window_thumbnails_action.setChecked)
 
-        # Tools menu <-> the 4 toolbar tool-switcher buttons. Unlike the
-        # Window menu panel toggles above, these are exclusive-choice
-        # ("radio") buttons - clicking the menu item should always *select*
-        # that tool, never un-select it. QButtonGroup's own real
-        # exclusivity on the toolbar side (see left_tool_group/
-        # right_tool_group in _build_top_toolbar) is what correctly
-        # unchecks the *other* menu item via its own toggled signal - no
-        # QActionGroup needed among the menu actions themselves.
-        #
-        # _select_tool_action forces the action itself back to checked,
-        # not just the button - a checkable QAction not in a QActionGroup
-        # flips its own checked state as part of trigger() *before*
-        # emitting triggered(), so re-clicking an already-selected tool
-        # would otherwise flip the action to unchecked and then silently
-        # stay that way: the follow-up button.setChecked(True) below is a
-        # no-op when the button was already checked (no state change, so
-        # toggled doesn't fire), so nothing re-syncs the menu checkmark
-        # without this explicit correction.
-        self.tools_trichrome_action.setChecked(self.trichrome_toolbar_btn.isChecked())
-        self.tools_trichrome_action.triggered.connect(
-            lambda _checked: self._select_tool_action(
-                self.tools_trichrome_action, self.trichrome_toolbar_btn))
-        self.trichrome_toolbar_btn.toggled.connect(self.tools_trichrome_action.setChecked)
-        self.tools_global_correction_action.setChecked(self.settings_toolbar_btn.isChecked())
-        self.tools_global_correction_action.triggered.connect(
-            lambda _checked: self._select_tool_action(
-                self.tools_global_correction_action, self.settings_toolbar_btn))
-        self.settings_toolbar_btn.toggled.connect(self.tools_global_correction_action.setChecked)
-        self.tools_crop_action.setChecked(self.crop_toolbar_btn.isChecked())
-        self.tools_crop_action.triggered.connect(
-            lambda _checked: self._select_tool_action(self.tools_crop_action, self.crop_toolbar_btn))
-        self.crop_toolbar_btn.toggled.connect(self.tools_crop_action.setChecked)
-        self.tools_scan_action.setChecked(self.scan_toolbar_btn.isChecked())
-        self.tools_scan_action.triggered.connect(
-            lambda _checked: self._select_tool_action(self.tools_scan_action, self.scan_toolbar_btn))
-        self.scan_toolbar_btn.toggled.connect(self.tools_scan_action.setChecked)
+        # Tools menu now lists every block individually (2026-09-04,
+        # replacing the old 4 tool-switcher-mirroring actions) - each a
+        # plain independent checkable toggle wired straight to
+        # set_block_visible, which is also what each block's own close
+        # button calls, so both stay in sync regardless of which one the
+        # user used.
+        for key, action in self.block_menu_actions.items():
+            action.setChecked(self.block_visible.get(key, True))
+            action.toggled.connect(lambda checked, k=key: self.set_block_visible(k, checked))
 
-        self.global_panel.changed.connect(self.on_global_changed)
-        self.global_panel.reset_requested.connect(self.on_global_reset)
-        self.global_panel.invert_toggled.connect(self.on_invert_toggled)
-        self.global_panel.pick_white_balance_toggled.connect(self.on_pick_white_balance_toggled)
-        self.global_panel.reset_white_balance_requested.connect(self.on_reset_white_balance)
-        self.global_panel.reset_light_requested.connect(self.on_reset_light)
+        self.light_panel.changed.connect(self.on_global_changed)
+        self.light_panel.reset_requested.connect(self.on_reset_light)
+        self.light_panel.invert_toggled.connect(self.on_invert_toggled)
+        self.color_panel.changed.connect(self.on_global_changed)
+        self.color_panel.reset_requested.connect(self.on_reset_white_balance)
+        self.color_panel.pick_white_balance_toggled.connect(self.on_pick_white_balance_toggled)
         self.canvas.white_balance_pick_requested.connect(self.on_white_balance_picked)
         self.histogram.pick_toggled.connect(self.canvas.set_histogram_pick_enabled)
         self.canvas.histogram_pixel_hovered.connect(self.on_histogram_pixel_hovered)
         self.canvas.histogram_pixel_left.connect(self.on_histogram_pixel_left)
 
-        self.trichrome_toolbar_btn.toggled.connect(self.trichrome_panel.setVisible)
-        self.scan_toolbar_btn.toggled.connect(self.scan_panel.setVisible)
-        self.settings_toolbar_btn.toggled.connect(self.global_panel.setVisible)
-        self.crop_toolbar_btn.toggled.connect(self._on_crop_tool_toggled)
         self.crop_panel.settings_changed.connect(self.on_crop_settings_changed)
         self.crop_panel.orientation_invert_requested.connect(self.on_crop_orientation_invert)
         self.crop_panel.reset_requested.connect(self.on_crop_reset)
-        self.crop_panel.copy_requested.connect(lambda: self.copy_settings_from(self.batch_current_index))
+        self.crop_panel.activate_toggled.connect(self._set_crop_active)
 
         self.canvas.drag_delta.connect(self.on_canvas_drag)
         self.canvas.scale_delta.connect(self.on_canvas_scale)
@@ -1093,7 +1387,8 @@ class MainWindow(QMainWindow):
         self.compare_indicator.setVisible(active)
         for panel in self.channel_panels:
             panel.set_sliders_enabled(not active)
-        self.global_panel.set_sliders_enabled(not active)
+        self.light_panel.set_sliders_enabled(not active)
+        self.color_panel.set_sliders_enabled(not active)
         self.recompute_preview()
 
     def _on_carousel_toggle_btn(self, checked: bool) -> None:
@@ -1116,10 +1411,11 @@ class MainWindow(QMainWindow):
             event.accept()
             return
 
-        if event.key() == Qt.Key_Escape and self.crop_toolbar_btn.isChecked():
-            # Discards any in-progress drag, same as switching tools any
-            # other way - never applies the crop.
-            self.settings_toolbar_btn.setChecked(True)
+        if event.key() == Qt.Key_Escape and self._crop_active:
+            # Discards any in-progress drag and exits active crop mode -
+            # deliberately does NOT hide the Crop block/change layout
+            # (2026-09-04), unlike a plain set_block_visible("crop", False).
+            self._set_crop_active(False)
             event.accept()
             return
 
@@ -1163,30 +1459,30 @@ class MainWindow(QMainWindow):
 
         if (not text_editing and event.key() == Qt.Key_T
                 and event.modifiers() == Qt.NoModifier):
-            self.trichrome_toolbar_btn.setChecked(True)
+            self._activate_default_layout("Trichrome")
             event.accept()
             return
 
         if (not text_editing and event.key() == Qt.Key_S
                 and event.modifiers() == Qt.NoModifier):
-            self.scan_toolbar_btn.setChecked(True)
+            self._activate_default_layout("Scan")
             event.accept()
             return
 
         if (not text_editing and event.key() == Qt.Key_E
                 and event.modifiers() == Qt.NoModifier):
-            self.settings_toolbar_btn.setChecked(True)
+            self._activate_default_layout("Color Correction")
             event.accept()
             return
 
         if (not text_editing and event.key() == Qt.Key_C
                 and event.modifiers() == Qt.NoModifier):
-            self.crop_toolbar_btn.setChecked(True)
+            self._activate_default_layout("Crop")
             event.accept()
             return
 
         if (not text_editing and event.key() in (Qt.Key_Return, Qt.Key_Enter)
-                and self.crop_toolbar_btn.isChecked()):
+                and self._crop_active):
             self.on_crop_apply()
             event.accept()
             return
@@ -1252,31 +1548,6 @@ class MainWindow(QMainWindow):
         browser.setHtml(html)
         layout.addWidget(browser)
         close_btn = QPushButton("OK")
-        close_btn.clicked.connect(dialog.accept)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch(1)
-        btn_row.addWidget(close_btn)
-        layout.addLayout(btn_row)
-        dialog.exec()
-
-    def show_session_options_dialog(self) -> None:
-        """Placeholder for now - "option à venir" per the user's own
-        framing when this was added (2026-09-02). Same small-window
-        convention as _show_help_dialog above (plain QDialog, Cmd+W/Esc via
-        QKeySequence.Close, a single Close button) rather than a bespoke
-        layout, so it already matches the rest of the app's secondary
-        windows without needing its own styling pass."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle(i18n.tr("session_options_dialog_title"))
-        dialog.resize(360, 200)
-        QShortcut(QKeySequence.Close, dialog, activated=dialog.close)
-        layout = QVBoxLayout(dialog)
-        placeholder_label = QLabel(i18n.tr("session_options_placeholder"))
-        placeholder_label.setWordWrap(True)
-        placeholder_label.setAlignment(Qt.AlignCenter)
-        placeholder_label.setStyleSheet("color: #888;")
-        layout.addWidget(placeholder_label, 1)
-        close_btn = QPushButton(i18n.tr("close_button"))
         close_btn.clicked.connect(dialog.accept)
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
@@ -1473,7 +1744,7 @@ class MainWindow(QMainWindow):
         self.crop = item.crop
         self.active_index = None
         self.carousel.set_current(index)
-        self.global_panel.set_pick_white_balance_active(False)
+        self.color_panel.set_pick_white_balance_active(False)
         self.canvas.set_wb_pick_enabled(False)
 
         for i, panel in enumerate(self.channel_panels):
@@ -1489,11 +1760,11 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.global_panel.set_invert(self.layers[0].invert)
+        self.light_panel.set_invert(self.layers[0].invert)
         self._sync_harris_shutter_checkbox()
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
-        if self.crop_toolbar_btn.isChecked():
+        if self.block_visible.get("crop", False):
             self._sync_crop_panel_from_item()
 
         self.recompute_preview()
@@ -1573,7 +1844,7 @@ class MainWindow(QMainWindow):
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.global_panel.set_invert(self.layers[0].invert)
+            self.light_panel.set_invert(self.layers[0].invert)
             self._sync_harris_shutter_checkbox()
             self._sync_global_panel_from_model()
             self.recompute_preview()
@@ -1605,7 +1876,7 @@ class MainWindow(QMainWindow):
             cr.custom_ratio_w, cr.custom_ratio_h = cd["custom_ratio_w"], cd["custom_ratio_h"]
 
         if self.batch_current_index in indices:
-            if self.crop_toolbar_btn.isChecked():
+            if self.block_visible.get("crop", False):
                 self._sync_crop_panel_from_item()
             self.recompute_preview()
         for idx in indices:
@@ -1662,10 +1933,10 @@ class MainWindow(QMainWindow):
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.global_panel.set_invert(self.layers[0].invert)
+            self.light_panel.set_invert(self.layers[0].invert)
             self._sync_harris_shutter_checkbox()
             self._sync_global_panel_from_model()
-            if self.crop_toolbar_btn.isChecked():
+            if self.block_visible.get("crop", False):
                 self._sync_crop_panel_from_item()
             self.recompute_preview()
         for idx in indices:
@@ -1762,11 +2033,11 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.global_panel.set_invert(self.layers[0].invert)
+        self.light_panel.set_invert(self.layers[0].invert)
         self._sync_harris_shutter_checkbox()
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
-        if self.crop_toolbar_btn.isChecked():
+        if self.block_visible.get("crop", False):
             self._sync_crop_panel_from_item()
 
         self.recompute_preview()
@@ -2240,22 +2511,31 @@ class MainWindow(QMainWindow):
             settings.value("sort_reversed", False, type=bool),
             saved_index,
         )
+        def _load_json(qkey: str):
+            raw = settings.value(qkey, "", type=str)
+            if not raw:
+                return None
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return None
+
         self._apply_restored_layout(
             settings.value("left_panel_visible", True, type=bool),
             settings.value("right_panel_visible", True, type=bool),
             settings.value("carousel_visible", True, type=bool),
-            {
-                key: settings.value(f"tool_side_{key}", default, type=str)
-                for key, default in _DEFAULT_TOOL_SIDES.items()
-            },
-            settings.value("active_left_tool", _DEFAULT_ACTIVE_TOOL["left"], type=str),
-            settings.value("active_right_tool", _DEFAULT_ACTIVE_TOOL["right"], type=str),
+            _load_json("block_side"),
+            _load_json("block_visible"),
+            _load_json("block_collapsed"),
+            _load_json("left_block_order"),
+            _load_json("right_block_order"),
         )
 
     def _apply_restored_layout(
         self, left_visible: bool, right_visible: bool, carousel_visible: bool,
-        tool_side: dict | None = None,
-        active_left_tool: str | None = None, active_right_tool: str | None = None,
+        block_side: dict | None = None, block_visible: dict | None = None,
+        block_collapsed: dict | None = None,
+        left_block_order: list | None = None, right_block_order: list | None = None,
     ) -> None:
         """Restores which panels were shown/hidden - shared by both the
         QSettings autosave and .trirgb restore paths. Separate from
@@ -2266,26 +2546,43 @@ class MainWindow(QMainWindow):
         _sync_harris_shutter_checkbox() alongside set_invert(), the same
         place/timing as every other per-photo widget.)
 
-        tool_side/active_left_tool/active_right_tool (added for the
-        Window > Layout feature, 2026-09-03) restore which side each tool
-        panel lives on and which one is active per side - all optional/
+        block_side/block_visible/block_collapsed/left_block_order/
+        right_block_order (the block system, 2026-09-04) are all optional/
         None-safe so an old saved session or .trirgb from before this
-        feature existed just keeps whatever _move_tool_to_side's own
-        __init__ default (_DEFAULT_TOOL_SIDES) already set up, rather than
-        needing every caller to know that default itself."""
+        feature existed just keeps whatever __init__'s own defaults
+        (_DEFAULT_BLOCK_SIDE etc.) already set up, rather than needing
+        every caller to know that default itself. Only known block keys
+        are accepted, so a future block key removed from a newer version
+        can't leave a stale/unreachable entry around."""
         self.left_panel_toggle_btn.setChecked(left_visible)
         self.right_panel_toggle_btn.setChecked(right_visible)
         self.carousel_toggle_btn.setChecked(carousel_visible)
 
-        if tool_side:
-            for tool_key, side in tool_side.items():
-                if tool_key in self._tool_registry and side in ("left", "right"):
-                    self._move_tool_to_side(tool_key, side)
-        if active_left_tool in self._tool_registry and self.tool_side.get(active_left_tool) == "left":
-            self._tool_registry[active_left_tool][0].setChecked(True)
-        if active_right_tool in self._tool_registry and self.tool_side.get(active_right_tool) == "right":
-            self._tool_registry[active_right_tool][0].setChecked(True)
-        self._update_layout_menu_labels()
+        if block_side:
+            self.block_side.update({k: v for k, v in block_side.items() if k in _ALL_BLOCK_KEYS})
+        if block_visible:
+            self.block_visible.update({k: bool(v) for k, v in block_visible.items() if k in _ALL_BLOCK_KEYS})
+        if block_collapsed:
+            self.block_collapsed.update({k: bool(v) for k, v in block_collapsed.items() if k in _ALL_BLOCK_KEYS})
+        if left_block_order:
+            self.left_block_order = [k for k in left_block_order if k in _ALL_BLOCK_KEYS]
+            for k in _ALL_BLOCK_KEYS:
+                if self.block_side.get(k) == "left" and k not in self.left_block_order:
+                    self.left_block_order.append(k)
+        if right_block_order:
+            self.right_block_order = [k for k in right_block_order if k in _ALL_BLOCK_KEYS]
+            for k in _ALL_BLOCK_KEYS:
+                if self.block_side.get(k) == "right" and k not in self.right_block_order:
+                    self.right_block_order.append(k)
+        for key, widget in self.block_widgets.items():
+            set_block_collapsed(widget.body, self.block_collapse_buttons[key], self.block_collapsed.get(key, False))
+        self._apply_block_layout()
+        # Loading any layout (a session restore, or a Layout Preset - built-
+        # in or custom) always deactivates active crop mode, whether or not
+        # the Crop block ends up visible - "changing layout" turns it off
+        # unconditionally (2026-09-04). _activate_default_layout re-arms it
+        # afterward specifically for the "Crop" slot; nothing else should.
+        self._set_crop_active(False)
 
     def _apply_restored_items(
         self, restored_items: list, sort_mode: str, sort_reversed: bool, current_index: int,
@@ -2323,11 +2620,11 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.global_panel.set_invert(self.layers[0].invert)
+        self.light_panel.set_invert(self.layers[0].invert)
         self._sync_harris_shutter_checkbox()
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
-        if self.crop_toolbar_btn.isChecked():
+        if self.block_visible.get("crop", False):
             self._sync_crop_panel_from_item()
         self._refresh_all_carousel_thumbnails()
 
@@ -2382,12 +2679,7 @@ class MainWindow(QMainWindow):
             "sort_mode": self.sort_mode,
             "sort_reversed": self.sort_reversed,
             "current_index": self.batch_current_index,
-            "left_panel_visible": self.left_panel_toggle_btn.isChecked(),
-            "right_panel_visible": self.right_panel_toggle_btn.isChecked(),
-            "carousel_visible": self.carousel_toggle_btn.isChecked(),
-            "tool_side": dict(self.tool_side),
-            "active_left_tool": self._active_tool_for_side("left"),
-            "active_right_tool": self._active_tool_for_side("right"),
+            **self._capture_layout_state(),
             "items": items_data,
             "preferences": {
                 "last_import_dir": settings.value("last_import_dir", "", type=str),
@@ -2570,14 +2862,7 @@ class MainWindow(QMainWindow):
             settings.setValue("export_same_as_source", prefs["export_same_as_source"])
 
         self._apply_restored_items(restored_items, sort_mode, sort_reversed, current_index)
-        self._apply_restored_layout(
-            data.get("left_panel_visible", True),
-            data.get("right_panel_visible", True),
-            data.get("carousel_visible", True),
-            data.get("tool_side"),
-            data.get("active_left_tool", _DEFAULT_ACTIVE_TOOL["left"]),
-            data.get("active_right_tool", _DEFAULT_ACTIVE_TOOL["right"]),
-        )
+        self._apply_layout_state(data)
         self._sync_sort_menu_state()
         self.recompute_preview()
         self.canvas.zoom_fit()
@@ -2621,21 +2906,23 @@ class MainWindow(QMainWindow):
                                   i18n.tr("dialog_session_load_error_text", error=exc))
 
     def _sync_global_panel_from_model(self) -> None:
-        gp = self.global_panel
+        lp, cp = self.light_panel, self.color_panel
         gc = self.global_corr
-        gp.block_signals_all(True)
-        gp.black_point.set_value(gc.black_point)
-        gp.white_point.set_value(gc.white_point)
-        gp.gamma.set_value(gc.gamma)
-        gp.exposure.set_value(gc.exposure)
-        gp.brightness.set_value(gc.brightness)
-        gp.contrast.set_value(gc.contrast)
-        gp.highlights.set_value(gc.highlights)
-        gp.shadows.set_value(gc.shadows)
-        gp.saturation.set_value(gc.saturation)
-        gp.temperature.set_value(gc.temperature)
-        gp.tint.set_value(gc.tint)
-        gp.block_signals_all(False)
+        lp.block_signals_all(True)
+        lp.black_point.set_value(gc.black_point)
+        lp.white_point.set_value(gc.white_point)
+        lp.gamma.set_value(gc.gamma)
+        lp.exposure.set_value(gc.exposure)
+        lp.brightness.set_value(gc.brightness)
+        lp.contrast.set_value(gc.contrast)
+        lp.highlights.set_value(gc.highlights)
+        lp.shadows.set_value(gc.shadows)
+        lp.block_signals_all(False)
+        cp.block_signals_all(True)
+        cp.saturation.set_value(gc.saturation)
+        cp.temperature.set_value(gc.temperature)
+        cp.tint.set_value(gc.tint)
+        cp.block_signals_all(False)
 
     def _save_session_state(self) -> None:
         """Persist every batch item (photos + their alignment/color settings)
@@ -2711,10 +2998,11 @@ class MainWindow(QMainWindow):
         settings.setValue("left_panel_visible", self.left_panel_toggle_btn.isChecked())
         settings.setValue("right_panel_visible", self.right_panel_toggle_btn.isChecked())
         settings.setValue("carousel_visible", self.carousel_toggle_btn.isChecked())
-        for tool_key, side in self.tool_side.items():
-            settings.setValue(f"tool_side_{tool_key}", side)
-        settings.setValue("active_left_tool", self._active_tool_for_side("left"))
-        settings.setValue("active_right_tool", self._active_tool_for_side("right"))
+        settings.setValue("block_side", json.dumps(self.block_side))
+        settings.setValue("block_visible", json.dumps(self.block_visible))
+        settings.setValue("block_collapsed", json.dumps(self.block_collapsed))
+        settings.setValue("left_block_order", json.dumps(self.left_block_order))
+        settings.setValue("right_block_order", json.dumps(self.right_block_order))
 
     def _confirm_discard_unsaved_changes(self) -> bool:
         """Ask to save before an action that would discard the current
@@ -2863,7 +3151,7 @@ class MainWindow(QMainWindow):
         # Re-derive from the active photo's actual (possibly unchanged, if
         # it wasn't among targets) state, rather than trusting `checked`
         # blindly - keeps the button honest in that edge case.
-        self.global_panel.set_invert(self.layers[0].invert)
+        self.light_panel.set_invert(self.layers[0].invert)
 
     def on_active_toggled(self, index: int, checked: bool) -> None:
         if checked:
@@ -3033,25 +3321,19 @@ class MainWindow(QMainWindow):
 
     def on_global_changed(self) -> None:
         self._push_undo_coalesced(f"global_{self.batch_current_index}")
-        gp = self.global_panel
+        lp, cp = self.light_panel, self.color_panel
         gc = self.global_corr
-        gc.black_point = gp.black_point.value()
-        gc.white_point = gp.white_point.value()
-        gc.gamma = gp.gamma.value()
-        gc.exposure = gp.exposure.value()
-        gc.brightness = gp.brightness.value()
-        gc.contrast = gp.contrast.value()
-        gc.highlights = gp.highlights.value()
-        gc.shadows = gp.shadows.value()
-        gc.saturation = gp.saturation.value()
-        gc.temperature = gp.temperature.value()
-        gc.tint = gp.tint.value()
-        self.recompute_preview()
-
-    def on_global_reset(self) -> None:
-        self.push_undo()
-        self.global_corr.reset()
-        self._sync_global_panel_from_model()
+        gc.black_point = lp.black_point.value()
+        gc.white_point = lp.white_point.value()
+        gc.gamma = lp.gamma.value()
+        gc.exposure = lp.exposure.value()
+        gc.brightness = lp.brightness.value()
+        gc.contrast = lp.contrast.value()
+        gc.highlights = lp.highlights.value()
+        gc.shadows = lp.shadows.value()
+        gc.saturation = cp.saturation.value()
+        gc.temperature = cp.temperature.value()
+        gc.tint = cp.tint.value()
         self.recompute_preview()
 
     def on_reset_white_balance(self) -> None:
@@ -3093,7 +3375,7 @@ class MainWindow(QMainWindow):
         pixel clicked at normalized canvas position (u, v) - see
         imaging.solve_white_balance. Single-shot: the picker tool disarms
         itself after one click, Lightroom-style."""
-        self.global_panel.set_pick_white_balance_active(False)
+        self.color_panel.set_pick_white_balance_active(False)
         self.canvas.set_wb_pick_enabled(False)
 
         ref = self._reference_layer()
@@ -3110,7 +3392,7 @@ class MainWindow(QMainWindow):
         # (u, v) are normalized against what's actually on screen - the
         # straightened/mirrored/cropped frame, same as recompute_preview.
         pre_wb = imaging.apply_straighten_mirror(pre_wb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
-        if not self.crop_toolbar_btn.isChecked():
+        if not self._crop_active:
             pre_wb = imaging.apply_crop_rect(pre_wb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
 
         h, w = pre_wb.shape[:2]
@@ -3153,17 +3435,40 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Crop tool
     # ------------------------------------------------------------------
-    def _on_crop_tool_toggled(self, checked: bool) -> None:
-        self.crop_panel.setVisible(checked)
-        self.canvas.set_crop_enabled(checked)
-        if checked:
+    def _set_crop_active(self, active: bool) -> None:
+        """The single place "active crop mode" (the interactive draggable
+        overlay on the canvas, Enter-to-apply, and the full-vs-cropped
+        preview frame) is armed or disarmed - self._crop_active is the one
+        source of truth. Decoupled from the Crop block's own visibility
+        (2026-09-04): the block can now be shown in any custom layout
+        alongside anything else, so tying active mode to block-visible
+        alone made the crop overlay pop on/off unexpectedly as blocks were
+        dragged around or layouts switched. Reachable from: the Crop
+        block's own activate button (crop_panel.activate_toggled), Escape
+        (off only - never touches layout/visibility), on_crop_apply (off,
+        after committing), _activate_default_layout (on only when loading
+        the "Crop" slot, off for every other layout), reset_layout, and
+        _apply_restored_layout (both always turn it off - loading any
+        layout counts as "changing layout"), and set_block_visible (off,
+        if the Crop block itself gets hidden while active).
+
+        Activating also force-shows the Crop block via set_block_visible
+        (there's no point arming an invisible tool) - but deactivating
+        never touches visibility, since that would be a layout change,
+        which Escape/apply deliberately are not."""
+        if active:
+            self.set_block_visible("crop", True)
+        self._crop_active = active
+        self.crop_panel.set_active(active)
+        self.canvas.set_crop_enabled(active)
+        if active:
             # Crop dragging and the white balance eyedropper are mutually
             # exclusive canvas click modes - disarm the latter if it was left armed.
-            self.global_panel.set_pick_white_balance_active(False)
+            self.color_panel.set_pick_white_balance_active(False)
             self.canvas.set_wb_pick_enabled(False)
             self._sync_crop_panel_from_item()
         # The full-vs-cropped frame shown in the preview depends on whether
-        # the Crop tool is active (see recompute_preview) - refresh either way.
+        # crop mode is active (see recompute_preview) - refresh either way.
         self.recompute_preview()
 
     def _current_crop_ratio_value(self) -> float | None:
@@ -3238,12 +3543,16 @@ class MainWindow(QMainWindow):
 
     def on_crop_apply(self) -> None:
         """Commits the interactively-dragged overlay rect as this photo's
-        actual crop - bound to Enter while the Crop tool is active - then
-        switches back to Global Color Correction to see the result."""
+        actual crop - bound to Enter while active crop mode is on - then
+        turns active crop mode off, same as Escape, so the composited
+        result isn't obscured by the drag overlay. Deliberately does NOT
+        hide the Crop block/change layout (2026-09-04) - only Escape and
+        Enter's shared _set_crop_active(False) call, never
+        set_block_visible directly."""
         self.push_undo()
         self.crop.x, self.crop.y, self.crop.width, self.crop.height = self.canvas.crop_rect()
         self.statusBar().showMessage(i18n.tr("status_crop_applied"), 4000)
-        self.settings_toolbar_btn.setChecked(True)
+        self._set_crop_active(False)
 
     def on_crop_reset(self) -> None:
         self.push_undo()
@@ -3344,9 +3653,8 @@ class MainWindow(QMainWindow):
             any(l.has_alignment_correction() for l in self.layers))
         self.reset_all_color_button.setEnabled(
             any(l.has_tone_correction() for l in self.layers))
-        self.global_panel.reset_button.setEnabled(self.global_corr.has_correction())
-        self.global_panel.reset_light_btn.setEnabled(self.global_corr.has_light_correction())
-        self.global_panel.reset_white_balance_btn.setEnabled(self.global_corr.has_color_correction())
+        self.light_panel.reset_button.setEnabled(self.global_corr.has_light_correction())
+        self.color_panel.reset_button.setEnabled(self.global_corr.has_color_correction())
         self.crop_panel.reset_button.setEnabled(self.crop.has_crop())
         for i, layer in enumerate(self.layers):
             panel = self.channel_panels[i]
@@ -3379,9 +3687,9 @@ class MainWindow(QMainWindow):
                 (solo_layer.dx, solo_layer.dy, solo_layer.scale, solo_layer.rotation), canvas_size)
             toned = imaging.apply_straighten_mirror(toned, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
             mask = imaging.apply_straighten_mirror(mask, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
-            if not self.crop_toolbar_btn.isChecked():
-                # Only crop to the final rect outside the Crop tool itself -
-                # while it's open the full (straightened/mirrored) frame
+            if not self._crop_active:
+                # Only crop to the final rect outside active crop mode -
+                # while it's active the full (straightened/mirrored) frame
                 # must stay visible to crop against, not a shrinking
                 # crop-of-a-crop of whatever was last applied.
                 toned = imaging.apply_crop_rect(
@@ -3410,9 +3718,9 @@ class MainWindow(QMainWindow):
         mask = imaging.compose_coverage_mask(images, geo_params, ref.color_index)
         rgb = imaging.apply_straighten_mirror(rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
         mask = imaging.apply_straighten_mirror(mask, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
-        if not self.crop_toolbar_btn.isChecked():
-            # See the matching comment in the Solo-mode branch above: the
-            # Crop tool itself always shows the full frame to crop against.
+        if not self._crop_active:
+            # See the matching comment in the Solo-mode branch above:
+            # active crop mode always shows the full frame to crop against.
             rgb = imaging.apply_crop_rect(rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
             mask = imaging.apply_crop_rect(mask, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
         rgb_u8 = imaging.to_uint8(rgb)

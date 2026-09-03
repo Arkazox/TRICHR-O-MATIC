@@ -1,14 +1,15 @@
 """Reusable slider + spinbox combo control."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPalette, QPen
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QScrollArea, QSizePolicy, QSlider,
     QToolButton, QVBoxLayout, QWidget,
 )
 
 from .. import i18n
+from .svg_icons import rotated_tinted_svg_pixmap
 
 STEPS = 1000
 
@@ -443,6 +444,13 @@ class CollapsibleSection(QFrame):
 
     toggled = Signal(bool)
 
+    # Same disclosure-chevron convention as the side-panel block system's
+    # own collapse buttons (block_header_bar.py) - down when expanded,
+    # rotated to point right when collapsed - replacing the native
+    # QToolButton arrow this used to draw (2026-09-04, for visual
+    # consistency now that a custom chevron icon exists).
+    _CHEVRON_ICON_SIZE = 12
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         outer = QVBoxLayout(self)
@@ -452,7 +460,8 @@ class CollapsibleSection(QFrame):
         self.toggle_button = QToolButton()
         self.toggle_button.setCheckable(True)
         self.toggle_button.setChecked(False)
-        self.toggle_button.setArrowType(Qt.RightArrow)
+        self.toggle_button.setIconSize(QSize(self._CHEVRON_ICON_SIZE, self._CHEVRON_ICON_SIZE))
+        self._update_chevron_icon(False)
         self.toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.toggle_button.setStyleSheet(
             "QToolButton { border: none; font-weight: bold; text-align: left; }"
@@ -467,8 +476,18 @@ class CollapsibleSection(QFrame):
         outer.addWidget(self.content)
         self.content.setVisible(False)
 
+    def _update_chevron_icon(self, checked: bool) -> None:
+        color = QColor(self.palette().buttonText().color())
+        dpr = self.devicePixelRatioF() or 1.0
+        # -90 (not +90) points right - see block_header_bar.py's
+        # set_block_collapsed() docstring for why the sign matters here.
+        rotation = 0.0 if checked else -90.0
+        pixmap = rotated_tinted_svg_pixmap(
+            "General/chevron-down.svg", self._CHEVRON_ICON_SIZE, color, dpr, rotation)
+        self.toggle_button.setIcon(QIcon(pixmap))
+
     def _on_clicked(self, checked: bool) -> None:
-        self.toggle_button.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        self._update_chevron_icon(checked)
         self.content.setVisible(checked)
         self.toggled.emit(checked)
 

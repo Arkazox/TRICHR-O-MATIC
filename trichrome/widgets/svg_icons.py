@@ -14,14 +14,12 @@ from PySide6.QtWidgets import QLabel, QToolButton
 
 from ..paths import icon_path
 
-# Shared sizes for a panel's header row (title + action icon buttons) - the
-# Crop and Global Color Correction panels both use these so their Reset
-# buttons (and the smaller trailing companion icon next to it - a warning
-# glyph on one, Copy/Invert Orientation on the other) render pixel-identical
-# between panels, keeping the header row's layout from visibly shifting when
-# switching tools.
-HEADER_RESET_BTN_SIZE = (41, 36)
-HEADER_RESET_ICON_SIZE = 24
+# Shared size for every block header's action buttons (Reset, Copy, Invert/
+# Negative, eyedropper, the two "reset all" buttons, etc.) - every block
+# uses this one size now (2026-09-04: unified onto what the histogram
+# block's own pick/reset buttons already used, per the user's explicit
+# request), so header rows render pixel-identical across blocks and stay
+# as narrow as possible.
 HEADER_COMPANION_BTN_SIZE = (34, 30)
 HEADER_COMPANION_ICON_SIZE = 20
 
@@ -40,6 +38,17 @@ def tinted_svg_pixmap(svg_name: str, size: int, color: QColor, dpr: float) -> QP
     return pixmap
 
 
+def rotated_tinted_svg_pixmap(svg_name: str, size: int, color: QColor, dpr: float, rotation: float = 0.0) -> QPixmap:
+    """Same as tinted_svg_pixmap, optionally rotated in place around its own
+    center - shared by SvgIconLabel and CollapsibleSection's disclosure
+    chevron (controls.py), so both use the same rotation math."""
+    pixmap = tinted_svg_pixmap(svg_name, size, color, dpr)
+    if rotation:
+        pixmap = pixmap.transformed(QTransform().rotate(rotation), Qt.SmoothTransformation)
+        pixmap.setDevicePixelRatio(dpr)
+    return pixmap
+
+
 class SvgToolButton(QToolButton):
     """A borderless icon button drawing one SVG glyph, tinted per state to
     match the app's existing icon-button look: palette text color normally,
@@ -50,6 +59,7 @@ class SvgToolButton(QToolButton):
         super().__init__(parent)
         self._svg_name = svg_name
         self._icon_size = icon_size
+        self._rotation = 0.0
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(*size)
         self.setStyleSheet("QToolButton { border: none; background: transparent; }")
@@ -59,6 +69,13 @@ class SvgToolButton(QToolButton):
 
     def _current_svg_name(self) -> str:
         return self._svg_name
+
+    def set_rotation(self, degrees: float) -> None:
+        """Rotates the drawn icon in place around its own center - e.g. a
+        disclosure chevron flipping 90° between expanded/collapsed."""
+        if self._rotation != degrees:
+            self._rotation = degrees
+            self.update()
 
     def _glyph_color(self) -> QColor:
         if not self.isEnabled():
@@ -74,6 +91,10 @@ class SvgToolButton(QToolButton):
         painter.setRenderHint(QPainter.Antialiasing, True)
         dpr = self.devicePixelRatioF() or 1.0
         pixmap = tinted_svg_pixmap(self._current_svg_name(), self._icon_size, self._glyph_color(), dpr)
+        if self._rotation:
+            painter.translate(self.width() / 2.0, self.height() / 2.0)
+            painter.rotate(self._rotation)
+            painter.translate(-self.width() / 2.0, -self.height() / 2.0)
         x = (self.width() - self._icon_size) / 2.0
         y = (self.height() - self._icon_size) / 2.0
         painter.drawPixmap(QPointF(x, y), pixmap)
@@ -183,8 +204,4 @@ class SvgIconLabel(QLabel):
         if color is None:
             color = QColor(self.palette().buttonText().color())
         dpr = self.devicePixelRatioF() or 1.0
-        pixmap = tinted_svg_pixmap(svg_name, self._icon_size, color, dpr)
-        if rotation:
-            pixmap = pixmap.transformed(QTransform().rotate(rotation), Qt.SmoothTransformation)
-            pixmap.setDevicePixelRatio(dpr)
-        self.setPixmap(pixmap)
+        self.setPixmap(rotated_tinted_svg_pixmap(svg_name, self._icon_size, color, dpr, rotation))

@@ -20,6 +20,36 @@ Version string and icon live in `trichrome.spec` (`CFBundleShortVersionString`,
 `icon="resources/icon.icns"`). Bump the version there before a release build;
 don't touch the icon path unless the user explicitly asks for a new icon.
 
+## Terminology (user's vocabulary, agreed 2026-09-03)
+
+The user refers to UI regions with specific French terms - use this mapping
+when parsing their requests, since it doesn't always line up 1:1 with code
+identifiers:
+
+- **Barre d'outil** = the top toolbar (`self.top_toolbar`), conceptually
+  split into left/middle/right zones by `toolbar_spacer_left`/
+  `toolbar_spacer_right`.
+- **Panneau outil de gauche** / **panneau outil de droite** = `left_container`/
+  `right_container` (both `BlockReorderZone` instances - see the block
+  system in the Key Patterns section below). **Fenêtre Preview** (center) =
+  `canvas_container`.
+- Inside a tool panel, each **"bloc"** is one independently movable/
+  hideable/collapsible block (`_ALL_BLOCK_KEYS` in `main_window.py`) -
+  since 2026-09-04 there's no longer a shared wrapper container per pair,
+  each of the 7 is its own top-level widget in `left_layout`/`right_layout`:
+  - **Fichiers** = `import_panel` (key `"files"`)
+  - **Trichromie** = `independent_channels_group` (key `"channels"` - the
+    3 `ChannelPanel` R/G/B blocks)
+  - **Histogramme** = `histogram_box` (key `"histogram"`)
+  - **Light** (part of what used to be "Global Color Correction") =
+    `light_panel` (key `"light"`)
+  - **Color** (the other half) = `color_panel` (key `"color"`)
+  - **Recadrage** = `crop_panel` (key `"crop"`)
+  - **Scan** = `scan_panel` (key `"scan"`)
+- **Barre des vignettes** (below the preview) = the carousel/filmstrip.
+- **Barre de preview** (above the preview, display + sort controls) = the
+  zoom/fit/fullscreen/sort row above the canvas.
+
 ## Code map
 
 - `main.py` — entry point.
@@ -99,9 +129,30 @@ don't touch the icon path unless the user explicitly asks for a new icon.
   shared tail, `_apply_restored_layout()`, called right after
   `_apply_restored_items()` in both mechanisms - add future window-level
   fields there rather than growing `_apply_restored_items`'s signature.
-  When testing, monkeypatch `mw.ORG_NAME`/`mw.APP_NAME` to an isolated string
-  first — never run tests against the real `"TrichromeMaker"` domain, that's
-  the user's actual saved session.
+  When testing, monkeypatch the **module-level** `trichrome.main_window.ORG_NAME`/
+  `.APP_NAME` to an isolated string first — never run tests against the real
+  `"TrichromeMaker"` domain, that's the user's actual saved session.
+  **`mw.ORG_NAME`/`mw.APP_NAME` do NOT work for this** - `ORG_NAME`/`APP_NAME`
+  are plain module globals (`main_window.py` line ~141), and every method
+  that builds a `QSettings(ORG_NAME, APP_NAME)` reads the bare name via
+  normal Python scoping (module globals), never `self.ORG_NAME` - so
+  setting a class or instance attribute of the same name is silently a
+  no-op that leaves every `QSettings` call still pointed at the real
+  domain. **This bug actually happened** (2026-09-04): a test script
+  patched `MainWindow.ORG_NAME` (a class attribute) instead of the module
+  global, and every `_save_layout_preset`/`_delete_layout_preset` call in
+  that "isolated" test session silently wrote to the user's real
+  `com.trichromemaker.TrichromeMaker` plist instead - overwriting their
+  real `"Trichrome"`/`"Color Correction"` Layout Presets with synthetic
+  test data in one pass, then their real `"NewTrichrome"`/
+  `"NewColorCorrection"`/`"NewCrop"`/`"NewScan"` presets (recreated after
+  the first corruption) in the very next pass, before the root cause was
+  found. Correct pattern:
+  `import trichrome.main_window as mwmod; mwmod.ORG_NAME = mwmod.APP_NAME
+  = "SomeIsolatedName"` **before** constructing `MainWindow()` - confirm
+  isolation actually held by reading back
+  `QSettings(mwmod.ORG_NAME, mwmod.APP_NAME)` after the test, not by
+  trusting the patch was applied to the right target.
   `.trirgb` files are registered as a document type in `trichrome.spec`'s
   `CFBundleDocumentTypes`; `main.py`'s `TrichromaticApp` catches the macOS
   `QEvent.FileOpen` this generates (double-click in Finder, or an app
@@ -394,17 +445,23 @@ don't touch the icon path unless the user explicitly asks for a new icon.
     `histogram_box` is not part of any of this - it stays a fixed sibling
     at the top of `right_container` regardless of which tools move through
     it, exactly as before (per the Crop-tool section above).
-  - **Window ▸ Layout submenu**: 4 actions, one per tool
-    (`move_trichrome_action` etc.), each a single click that flips that
-    tool to whichever side it's *not* currently on - not a 2-item Left/
-    Right radio choice per tool, since a flat "Move X to Right Panel"/
-    "...to Left Panel" (label updates live via `_update_layout_menu_labels()`,
-    called after every move and from `retranslate_ui()`) is simpler for a
-    binary either/or. Then a separator and **Reset Layout**
-    (`reset_layout()`), which restores the one default configuration the
-    user stated explicitly when asking for this: Trichrome+Scan left,
-    Global Correction+Crop right, Trichrome and Global Correction active,
-    both side panels visible, thumbnail strip visible, zoomed to fit.
+  - **Window menu originally had a "Layout" submenu with 4 per-tool "Move
+    X to Left/Right Panel" actions** (`move_trichrome_action` etc.,
+    `_toggle_tool_side()`, `_update_layout_menu_labels()`) - **removed
+    2026-09-03** once drag-and-drop block reordering (below) and Layout
+    Presets made them redundant; the user's own framing was "maintenant
+    qu'on peut tout réorganiser à la main, plus besoin de ces options."
+    `_move_tool_to_side`/`self.tool_side`/`self._tool_registry` themselves
+    are unchanged and still very much used (by `reset_layout()` and by
+    Layout Preset load) - only the direct interactive menu triggers for
+    moving one tool at a time were deleted. **Reset Layout**
+    (`reset_layout()`) is now a direct `Window` menu action (no longer
+    nested in a submenu), restoring the one default configuration stated
+    when this feature was first built: Trichrome+Scan left, Global
+    Correction+Crop right, Trichrome and Global Correction active, both
+    side panels visible, thumbnail strip visible, zoomed to fit, plus (as
+    of the drag-reorder feature below) both panels' block order reset to
+    default too.
   - **Persisted through both session mechanisms**, following the existing
     `_apply_restored_layout()` shared-tail convention exactly (see the
     session-persistence architecture note up top) - it gained 3 new
@@ -435,6 +492,967 @@ don't touch the icon path unless the user explicitly asks for a new icon.
     was set so the item would survive that filter; this isn't a bug in the
     layout feature, just a precondition for testing session persistence at
     all that's easy to trip over.
+- **Drag-and-drop block reordering within a side panel, added 2026-09-03.**
+  The user's own vocabulary (see Terminology above) treats each side panel
+  as a stack of "blocs" - Fichiers/Trichromie on the left,
+  Histogramme/Global Correction/Recadrage on the right. Because the tool
+  switcher only ever shows one of Trichrome/Scan on the left and one of
+  Global Correction/Crop on the right, at most **2 blocks are ever visible
+  in a panel at once** (Fichiers+Trichromie on the left; Histogramme plus
+  whichever of Global Correction/Recadrage is active on the right) - so
+  the whole feature reduces to "swap the order of these 2 blocks," not a
+  general N-item reorder like the carousel's.
+  - **`trichrome/widgets/block_header_bar.py`** - **revised same day** after
+    the user tried the first version and gave 3 pieces of feedback: use a
+    small dedicated drag handle instead of the whole title bar being
+    draggable (the two options were both offered up front, the user picked
+    the other one once they saw it in practice); `import_panel`/
+    `histogram_box` shouldn't have gained title text at all ("ces fenêtres
+    sont claires sans le texte") - reverted, no `import_panel_title`/
+    `histogram_panel_title` i18n keys anymore, `import_panel`/`histogram_box`
+    no longer have a `title_label` attribute; and the block headers overall
+    "prennent beaucoup de place" - every panel with a header row
+    (`independent_channels_group`, `GlobalPanel`, `CropPanel`) had its outer
+    `QVBoxLayout`'s top content margin halved (`max(2, top // 2)`, reading
+    the existing margin via `getContentsMargins()` rather than guessing a
+    fixed value, so it stays proportional to whatever the style's default
+    actually is).
+    - **`BlockDragHandle(SvgToolButton)`**: a small grip icon
+      (`General/grip-vertical.svg` - no matching icon existed in
+      `resources/icons/`, sourced from the real Lucide `grip-vertical` via
+      `raw.githubusercontent.com` and re-wrapped in this project's own SVG
+      convention, same precedent as `file-new.svg`/`image-plus.svg`), the
+      **only** part of a header row that starts a drag -
+      `mousePressEvent`/`mouseMoveEvent` past
+      `QApplication.startDragDistance()`, same threshold-based gesture
+      detection as the carousel's own drag. Takes `drag_source` (the whole
+      block widget, e.g. `self` for `GlobalPanel`/`CropPanel`/`ImportPanel`,
+      or `self.histogram_box`/`self.independent_channels_group` from
+      `main_window.py`) - `_ghost_pixmap()` grabs and paints that whole
+      widget at 0.85 opacity as the `QDrag`'s pixmap, and the hotspot is
+      computed via `self.mapTo(drag_source, event.pos())` so the ghost
+      tracks the cursor at the same relative position the grip was grabbed
+      from - **this is what makes the block visibly "move" under the
+      cursor while dragging**, not just show a generic drag icon. Since
+      only the grip widget itself handles mouse events now, no
+      `WA_TransparentForMouseEvents` trick is needed on title labels or
+      buttons anymore - they're untouched, ordinary interactive children
+      again, `header_row` went back to a plain `QHBoxLayout` added via
+      `layout.addLayout(header_row)` (the `BlockHeaderBar` QWidget wrapper
+      from the first version is gone entirely). `import_panel`/
+      `histogram_box`'s header rows are now just the grip + a trailing
+      stretch, no label at all.
+    - **`BlockReorderZone(QWidget)`** is still the drop target
+      (`self.trichrome_panel` on the left, `self.right_container` on the
+      right) - `setAcceptDrops(True)` + `dragEnterEvent`/`dragMoveEvent`/
+      `dropEvent`, emitting `block_dropped(dragged_key)` on any valid drop,
+      same as before. No drop-position math (unlike the carousel's
+      `_insert_index_for_x`) since with only 2 blocks "the other one" is
+      unambiguous - **any** valid drop just toggles which block is first,
+      regardless of which one was actually dragged.
+    - **New: live drop-target highlight**, addressing "j'aimerais que le
+      déplacement soit plus visuel... une zone indique les emplacements
+      possibles." `set_block_widgets({key: widget})` (called once per zone
+      right after construction in `main_window.py`) is what lets the zone
+      resolve "the other visible block" itself instead of needing
+      `main_window.py` to tell it. `dragEnterEvent` decodes the dragged
+      block's key from the mime data, finds its sibling via
+      `_target_widget()` (the other mapped widget that `isVisible()` -
+      real interactive-drag-only code path, so unlike
+      `_apply_right_block_order()` above, `isVisible()` is fine here; there
+      is no pre-`show()` call site for an actual mouse drag), and calls
+      `_set_highlight(widget)`, which toggles a `dragReorderTarget`
+      dynamic property (`setProperty` + `style().unpolish()`/`.polish()`
+      to force Qt to re-evaluate the stylesheet) - cleared again on
+      `dragLeaveEvent`/`dropEvent`. `DRAG_TARGET_QSS` (a
+      `QGroupBox[dragReorderTarget="true"] { border: 2px solid #5b9bd5;
+      border-radius: 6px; }` rule) is applied once via `self.setStyleSheet(...)`
+      on `MainWindow` itself near the end of `_build_ui` - QSS cascades to
+      every descendant regardless of nesting, and every draggable block is
+      a `QGroupBox`, so one rule covers all 5.
+  - **State: `self.left_files_block_first`/`self.right_histogram_first`**
+    (bools, default `True` - today's default order). `_apply_left_block_order()`/
+    `_apply_right_block_order()` reposition the blocks in
+    `self.trichrome_panel_layout`/`self.right_layout` from scratch each
+    time (remove all, reinsert in the right order) rather than doing an
+    incremental swap - simpler and idempotent, safe to call after every
+    tool switch, restore, or preset load without tracking prior state.
+    `_apply_right_block_order()` determines the active right tool via
+    `self.crop_toolbar_btn.isChecked()`, **not** `self.crop_panel.isVisible()`
+    - a real bug hit while testing headlessly: `isVisible()` depends on the
+    whole ancestor chain including the top-level window actually being
+    shown (`.show()`), which isn't true at every call site (session
+    restore happens before `main()` calls `show()`) - `isChecked()` reflects
+    logical state regardless, the same reason `_apply_restored_items`
+    already checks `crop_toolbar_btn.isChecked()` rather than the panel's
+    own visibility elsewhere in this file. `_apply_right_block_order()`
+    also no-ops if either `global_correction`/`crop` isn't currently on the
+    right side (`self.tool_side`), since a loaded layout preset or a stale
+    `.trirgb` could in principle put them elsewhere.
+    `settings_toolbar_btn.toggled`/`crop_toolbar_btn.toggled` both also
+    call `_apply_right_block_order()` (in addition to their existing
+    `global_panel.setVisible`/`_on_crop_tool_toggled` connections) so
+    switching tools preserves whichever histogram-vs-tool order was set.
+  - **Persisted through both session mechanisms**, same
+    `_apply_restored_layout()` shared tail as `tool_side` above - 2 more
+    optional, None-safe parameters (`left_files_block_first`,
+    `right_histogram_first`). QSettings keys of the same name; `.trirgb`
+    JSON keys of the same name. `reset_layout()` also resets both to
+    `True` and reapplies.
+  - Verified headlessly (both the original pass and again after the
+    grip-handle revision): swapping on the left and right, that a tool
+    switch (Global Correction ↔ Crop) preserves the histogram-relative
+    order instead of resetting it, `reset_layout()` restoring default
+    order, `_target_widget()` correctly resolving the sibling block both
+    before and after a tool switch, the `dragReorderTarget` property
+    correctly toggling on/off via `_set_highlight()`, `import_panel` no
+    longer having a `title_label` attribute at all post-revert, and full
+    round-trips through both QSettings autosave and `.trirgb` save/open.
+    **Not, and can't be, verified here**: the actual drag gesture's feel -
+    the ghost pixmap's opacity/positioning, whether the highlight border
+    reads clearly at real size, general "does this feel good" - all need
+    the user's own manual pass, same as any other visual/interactive
+    change per the Testing section below.
+  - **Third pass, 2026-09-04, after the user tried it for real**: two
+    things fixed. (1) "Le drag visuel fonctionne mais la prévisualisation
+    n'est pas très intuitive" - the ghost pixmap at full block size
+    visually blanketed the highlighted drop target while hovering over it,
+    defeating the point of the highlight. `_GHOST_SCALE = 0.42` now scales
+    the ghost down (keeping aspect ratio) and draws a 1.5px white outline
+    around it so it reads as a distinct floating preview rather than a raw
+    screenshot fragment; the hotspot is scaled by the same factor so it
+    still tracks the cursor at the same relative grabbed point instead of
+    jumping. `DRAG_TARGET_QSS` also got stronger - a dashed border (was
+    solid) plus a light `rgba(91, 155, 213, 40)` fill, a more standard
+    "active drop zone" look than a thin selection-style outline; QSS on a
+    native `QGroupBox` was already confirmed to render reliably in this
+    app (`ChannelPanel`'s per-channel `QGroupBox::title` color rules
+    predate this and work fine), so the fill wasn't a risk. (2) "pareil
+    pour le glissé qui ne fonctionne pas parfaitement" - a real Qt
+    gotcha: `QDrag.exec()`'s own internal event loop consumes the mouse
+    release that ends the drag, so `BlockDragHandle` (a `QToolButton`
+    subclass) never gets a normal `mouseReleaseEvent` for that press -
+    `QAbstractButton`'s internal "down" state could stay stuck `true`
+    afterward. Fixed with an explicit `self.setDown(False)` right after
+    `drag.exec(...)` returns.
+  - **Also 2026-09-04, separately: "tu peux encore réduire le header des
+    blocs."** Two real gaps from the first margin-reduction pass: `import_panel`
+    and `histogram_box` had **no** top-margin reduction applied at all (their
+    own `QVBoxLayout`s were missed since they didn't have a header row yet
+    when that pass was written) - both now get the same treatment as the
+    other 3. All 5 blocks' top margin is now a flat `4` (was `max(2, top //
+    2)`, i.e. ~5 from an 11px default - not enough per the user's follow-up)
+    - a fixed value now instead of proportional, and `BlockDragHandle`'s own
+    size shrank again, `(18, 22)`/`14` → `(16, 16)`/`12`, so the grip itself
+    contributes less to the header row's height too.
+- **Full block system overhaul, 2026-09-04 - superseded the exclusive
+  tool-switcher entirely.** Requested in one pass: split "Global
+  Correction" into two peer blocks (Light, keeping Negative; Color);
+  restore Files' title (only `histogram_box` stays title-less); per-block
+  collapse (header-only) and close (fully hidden, restorable); the Tools
+  menu repurposed to list every block with independent show/hide
+  checkboxes; and - raised right as this was being built - **cross-panel
+  drag**, not just reordering within one side. That last point is what
+  forced the real architectural question: the old exclusive pairs
+  (`left_tool_group`: Trichrome vs Scan; `right_tool_group`: Global
+  Correction vs Crop) can't coexist with blocks freely moving between
+  panels and being hidden independently - two mechanisms fighting over the
+  same widgets. Asked the user directly; their answer: **keep the 4
+  toolbar buttons in their toolbar position but disable them
+  (`setEnabled(False)`) - what becomes of them is a follow-up
+  conversation, not decided here.** Every block is now independently
+  positioned/visible/collapsed; nothing about `trichrome_toolbar_btn`/
+  `scan_toolbar_btn`/`settings_toolbar_btn`/`crop_toolbar_btn` is wired to
+  anything anymore beyond the two `QButtonGroup`s they still nominally sit
+  in (harmless, since disabled). **Superseded 2026-09-04** - that "follow-up
+  conversation" happened: the 4 buttons are re-enabled and repurposed into
+  built-in default-layout quick-switches, see the "4 old tool-switcher
+  toolbar buttons repurposed" entry under Layout Presets below (this
+  paragraph is kept as history of why they went inert in the first place).
+  - **State (all in `main_window.py`)**: `_ALL_BLOCK_KEYS = ("files",
+    "channels", "histogram", "light", "color", "crop", "scan")`.
+    `self.block_side: dict[str, str]` ("left"/"right"),
+    `self.block_visible: dict[str, bool]`, `self.block_collapsed: dict[str, bool]`,
+    `self.left_block_order`/`self.right_block_order: list[str]` (every
+    block assigned to that side, in order - **hidden blocks keep their
+    slot**, never removed from the list, so re-showing one via the Tools
+    menu restores it at the same position, per the user's explicit "le
+    réactiver... le fait réapparaître... à sa dernière position").
+    `_DEFAULT_BLOCK_SIDE`/`_DEFAULT_BLOCK_VISIBLE`/`_DEFAULT_LEFT_BLOCK_ORDER`/
+    `_DEFAULT_RIGHT_BLOCK_ORDER` reproduce exactly what the old exclusive
+    switcher showed by default (Files+Channels left; Histogram+Light+Color
+    right; Crop and Scan hidden) - `reset_layout()`'s new job.
+  - **`_apply_block_layout()`** is the single place block-system state
+    becomes actual on-screen layout: for each side, clears
+    `left_layout`/`right_layout` and reinserts every block in that side's
+    order list, `setVisible()` per `block_visible AND block_side == side`.
+    Also refreshes both `BlockReorderZone`'s `set_block_widgets()` mapping
+    (since a block's side can change) and re-syncs every Tools-menu
+    action's checked state. Called after every drag-drop, visibility
+    toggle, `reset_layout()`, and layout restore - deliberately a full
+    rebuild each time rather than an incremental patch, so it's trivially
+    correct regardless of how many things changed at once.
+  - **`trichrome/widgets/block_header_bar.py` gained `start_block_chrome()`/
+    `finish_block_chrome()`** - the shared construction helper every block
+    now goes through (`ImportPanel`, `LightPanel`, `ColorPanel`,
+    `CropPanel`, and the 3 still built inline in `main_window.py`:
+    `independent_channels_group`, `histogram_box`, `scan_panel`).
+    `start_block_chrome(block, key, title_i18n_key_or_None)` sets the tight
+    top margin, starts `header_row` with the drag handle + optional title;
+    the caller adds its own buttons (Reset, Copy, Invert, etc.) to
+    `header_row` next; `finish_block_chrome(outer, header_row)` appends the
+    collapse toggle (`General/chevron-down.svg`) and close button
+    (`General/close.svg` - both real Lucide icons, same
+    fetch-and-rewrap precedent as the grip icon) at the end, adds
+    `header_row` to `outer`, and builds a `body` `QWidget`/`QVBoxLayout` for
+    the real content - returns `(body, body_layout, collapse_button,
+    close_button)`. **Every block widget exposes `.body`** (the contract
+    `set_block_collapsed()`/`reset_layout()`/`_apply_restored_layout()` all
+    rely on) - the class-based panels set `self.body = body` themselves;
+    the 3 inline-built ones needed it set explicitly right after
+    construction (`self.histogram_box.body = self.histogram_body`, etc.) -
+    a real bug caught by testing: `reset_layout()` crashed with
+    `AttributeError: 'QGroupBox' object has no attribute 'body'` on
+    exactly those 3 before this was added.
+  - **`BlockReorderZone` generalized from a 2-block swap to real N-item,
+    cross-panel reordering.** `set_block_widgets({key: widget})` still
+    seeds which blocks *can* live in a zone; `_visible_widgets(exclude_key)`
+    walks the zone's own layout and returns currently-visible children
+    (skipping the dragged block, which stays in place/visible during its
+    own drag - only a ghost pixmap follows the cursor). `dragEnterEvent`/
+    `dragMoveEvent` now accept a drag **regardless of whether the dragged
+    key belongs to this zone** - that's what makes cross-panel drops work,
+    both zones just accept any valid `BLOCK_REORDER_MIME`. On hover,
+    `_nearest_widget()` (closest visible block to the cursor's Y, by
+    vertical-center distance) drives the highlight - simpler than a full
+    insertion-line indicator, and still clearly reads as "drop near here."
+    On drop, `_insert_index_for_y()` computes a real insertion index (first
+    visible widget whose midpoint is below the drop Y) and emits
+    `block_dropped(dragged_key, insert_index)`.
+  - **`MainWindow._on_block_dropped(target_side, dragged_key, insert_index)`**
+    is the one handler for both same-panel reorder and cross-panel move
+    (they're the same operation once you don't special-case "same side"):
+    removes `dragged_key` from wherever it currently sits (its old side's
+    order list), sets `block_side[dragged_key] = target_side`, then
+    translates `insert_index` (a position among the target zone's visible
+    blocks, excluding the dragged one) into a real position in the target's
+    *full* order list by finding which visible key currently sits there
+    and inserting right before it (or appending, past the last visible
+    one) - this is what lets hidden blocks keep sane relative positions
+    even as visible ones get reordered around them.
+  - **Light/Color split (`trichrome/widgets/global_panel.py`, rewritten)**:
+    `GlobalPanel` (one `QGroupBox`, two subheaders) became `LightPanel`/
+    `ColorPanel` (two peer `QGroupBox`es, each going through
+    `start_block_chrome`/`finish_block_chrome` like every other block).
+    `LightPanel` keeps `invert_button` (Negative) in its header, per the
+    user's explicit "garde le bouton Négatif dans le bloc light", plus its
+    own full-size header `reset_button` (`HEADER_RESET_BTN_SIZE`, matching
+    every other block - not the old smaller companion-sized
+    `reset_light_btn`). `ColorPanel` keeps `pick_white_balance_btn` (the
+    eyedropper) plus its own full-size `reset_button` - the old separate
+    companion-sized `reset_white_balance_btn` next to the eyedropper was
+    dropped as redundant once Color got its own proper header Reset
+    covering the exact same fields (`on_reset_white_balance` already
+    reset temperature/tint/saturation together). `main_window.py`'s
+    `on_global_changed`/`_sync_global_panel_from_model` now read/write
+    both panels instead of one; `on_global_reset` (the old "reset
+    everything" handler, tied to a button that no longer exists once
+    Light/Color are separate peer blocks) was removed outright - dead code,
+    confirmed via grep before deleting.
+  - **A real functional gap caught by testing, not just a naming one**:
+    `crop_toolbar_btn.isChecked()` was used in ~10 places across
+    `main_window.py` as "is the Crop tool currently active" (gating the
+    Crop-tool-only full-vs-cropped preview frame, Enter-to-apply, Escape-
+    to-cancel, etc.) - with the button now permanently disabled/inert, all
+    10 were mechanically replaced with `self.block_visible.get("crop",
+    False)`, the new equivalent. Two of those call sites needed more than
+    a mechanical swap: the Escape handler used to call
+    `self.settings_toolbar_btn.setChecked(True)` to "switch back" -
+    replaced with `self.set_block_visible("crop", False)` (hide the block
+    outright, since there's no longer a single other tool to switch back
+    *to* - Light/Color are usually already visible alongside Crop, not
+    exclusive with it). `on_crop_apply()` similarly now hides the Crop
+    block after committing, instead of checking a dead button.
+    `_on_crop_tool_toggled` (the old handler wired to
+    `crop_toolbar_btn.toggled`, which armed/disarmed the canvas crop
+    overlay and disarmed the white-balance eyedropper) was renamed
+    `_on_crop_block_visibility_changed` and is now called explicitly from
+    `set_block_visible()` whenever `key == "crop"` - **and also explicitly
+    from `reset_layout()` and `_apply_restored_layout()`**, since those two
+    set `block_visible` directly through `_apply_block_layout()` rather
+    than through `set_block_visible()` (which handles every block
+    uniformly and can't special-case one key's side effects) - without
+    this, a restored session with Crop visible would show the panel but
+    leave the canvas crop-drag overlay disarmed, a real gap caught by
+    testing the restore path specifically, not just construction.
+  - **Verified headlessly**: default block layout matches the old
+    switcher's default appearance exactly; all 4 toolbar buttons disabled;
+    Negative lives on `LightPanel` only; Tools-menu checkbox toggling a
+    block's visibility and vice versa (close button → menu unchecks);
+    collapse hides/shows just a block's `body`; a full cross-panel drag
+    (`_on_block_dropped("left", "light", 0)`) actually moves the widget
+    between `left_layout`/`right_layout`; `reset_layout()` restores
+    everything including re-arming/disarming the crop canvas overlay;
+    slider → model (`on_global_changed`) and reset (`on_reset_light`/
+    `on_reset_white_balance`) scoping stays correct now that they read
+    from two separate panel objects; undo/redo unaffected (block-system
+    state was already outside the undo stack, same as panel visibility
+    always was); full round-trips through QSettings autosave, `.trirgb`,
+    and Layout Presets. **A real test-harness trap hit while verifying
+    this, not a code bug**: calling `mw.close()` after making genuine
+    edits in a test script hangs forever under
+    `QT_QPA_PLATFORM=offscreen`, because `closeEvent` correctly shows the
+    app's real "unsaved changes" confirmation dialog (modal, waiting for
+    input that never comes headlessly) - any future headless test that
+    calls `.close()` needs either no real edits beforehand, or to not call
+    `.close()` at all.
+  - **Fourth pass, 2026-09-04, 3 more pieces of feedback after trying the
+    block system for real:**
+    1. **"Je veux éviter d'avoir de barre de scroll latérale... il faut
+       adapter la largeur des blocs outils au side panels et non
+       l'inverse."** Root cause, found by measuring `minimumSizeHint()`
+       headlessly rather than guessing: `left_scroll` never got
+       `setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)` -
+       `right_scroll` already had it (see the 2026-09-02 note on the
+       right sidebar), the left one was simply missed when
+       `left_container` became a `BlockReorderZone` holding blocks
+       directly. Added. But the real fix per the user's own framing
+       ("adapt block width to the panel, not the other way around") is
+       that `independent_channels_group` ("Trichromie") measured **364px**
+       against `left_scroll`'s 360px minimum - shrinking the collapse/
+       close buttons (next point) brought every block back under its
+       panel's own minimum width with margin (verified by measuring all 7
+       against both panels' minimums headlessly).
+    2. **"Les bouton hide et close peuvent être plus petits et plus
+       discrets... la croix doit visuellement être de la même hauteur que
+       le bouton collapse."** `finish_block_chrome()`'s collapse/close
+       buttons moved off the shared `HEADER_COMPANION_BTN_SIZE`/
+       `HEADER_COMPANION_ICON_SIZE` (34×30/20, meant for a panel's own
+       primary actions like Reset/Copy) onto new dedicated, smaller
+       constants: `_UTILITY_BTN_SIZE = (22, 22)` for both boxes (same
+       size for both, so click targets stay identical), but **different
+       icon sizes** - `_COLLAPSE_ICON_SIZE = 13` vs `_CLOSE_ICON_SIZE = 9`.
+       The asymmetry is deliberate: Lucide's `x` glyph spans corner-to-
+       corner (~50% of its 24-unit viewBox height) while `chevron-down` is
+       a shallow centered dip (~25%) - at equal `icon_size` the X reads as
+       visibly taller/heavier than the chevron even though the button
+       boxes are pixel-identical, which is what the user was flagging.
+       Sizing the X's `icon_size` down (roughly proportional to the ratio
+       of those two path-height fractions) is what makes the two read as
+       a matched pair.
+    3. **"J'aime la couleur bleu et les pointillés... mais dans l'état on
+       a l'impression que le déplacement d'outil vient remplacer les
+       autres blocs et non s'intégrer au dessus / en dessous."** The
+       `dragReorderTarget` dynamic-property + QSS whole-widget highlight
+       (border+fill over one entire target block) is gone - replaced with
+       a **thin dashed insertion line** drawn between blocks, at the exact
+       gap the drop would land in. `BlockReorderZone._insert_position(y,
+       exclude_key)` now returns `(insert_index, indicator_y)` together
+       (previously two separate methods, `_insert_index_for_y`/
+       `_nearest_widget`, computed similar-but-not-identical things) so
+       the drawn indicator and the actual drop logic can never disagree.
+       `paintEvent` draws it directly on the zone widget itself (a plain
+       dashed `QPen(QColor("#5b9bd5"), 2.5, Qt.DashLine)` line with small
+       filled end-caps) - same blue the user said they liked, kept
+       unchanged; `DRAG_TARGET_QSS` and the old `_set_highlight()`
+       mechanism were removed outright (dead code once nothing sets the
+       property anymore).
+    - **Verified headlessly**: `left_scroll`'s scrollbar policy; every
+      block's `minimumSizeHint()` against its own panel's minimum width;
+      collapse/close button box sizes match while icon sizes differ;
+      `_insert_position()` returns index 0 near the top, the correct
+      mid-gap index between two visible blocks, and `len(visible)` past
+      the last one, with a real end-to-end drop still landing at the
+      expected order position. **Not verified here** (needs the running
+      app): whether the insertion line actually reads clearly at real
+      screen size/DPI, and whether the resized collapse/close buttons are
+      still comfortably clickable at 22×22.
+    - **One known residual edge case, not chased further**: block minimum
+      widths were only checked against each block's *own current* side.
+      Since blocks can now be dragged to the *other* panel too, dragging
+      "Trichromie" (340px) to the right column, while that column is
+      squeezed all the way down to its own 300px minimum, would still
+      overflow - only reachable by combining a cross-panel drag with the
+      splitter pulled to its tightest width, not the default/common case
+      this pass fixed. Worth another pass if the user hits it in practice.
+  - **Fifth pass, 2026-09-04, after trying it again:** the width fix above
+    "seemed to work on the left panel but not the right," plus two more
+    asks - tighter collapsed-block spacing, and matching every block's
+    Reset/eyedropper/Negative icon size to the histogram block's (which
+    the user liked).
+    - **`HEADER_RESET_BTN_SIZE`/`HEADER_RESET_ICON_SIZE` (41×36/24) removed
+      from `svg_icons.py` entirely** - `LightPanel.reset_button`/
+      `invert_button`, `ColorPanel.reset_button`, `CropPanel.reset_button`,
+      and `independent_channels_group`'s `reset_all_alignment_button`/
+      `reset_all_color_button` (previously hardcoded `(41, 36)`/`24`
+      inline, not even via the constant) all moved onto
+      `HEADER_COMPANION_BTN_SIZE`/`HEADER_COMPANION_ICON_SIZE` (34×30/20) -
+      which is exactly what `HistogramPanel.pick_button`/`reset_button`
+      already used, confirmed by reading `histogram_widget.py` before
+      assuming. This is very likely what actually explains the "right
+      panel only" scrollbar report: the right panel's 3 always-crowded
+      headers (Light/Color/Crop, each with 2-3 action buttons plus the new
+      collapse/close pair) were the ones still using the larger size,
+      while the left panel's only comparably-crowded header (Trichromie)
+      got fixed by the previous pass's collapse/close shrink alone.
+    - **`start_block_chrome()`'s bottom margin is now tight (4) too, not
+      just top.** When a block is collapsed, its hidden `body` contributes
+      no height, so the *bottom* margin ends up sitting directly under the
+      header row - left at the ~11px style default (only top had been
+      reduced in the third pass), a collapsed block still looked padded
+      at the bottom while looking tight at the top. Both margins now match.
+    - **Real bug, not just a numbers/sizing issue: `_apply_block_layout()`
+      didn't force the scroll areas to re-evaluate their content width
+      after a drag.** `QLayout.removeWidget()`/`insertWidget()` (how a
+      drag reorders blocks) don't reliably prompt `QScrollArea`'s own
+      `widgetResizable` machinery to recompute against the *current*
+      layout state on their own - `_apply_block_layout()` now ends with
+      `layout.invalidate()`/`layout.activate()` on both
+      `left_layout`/`right_layout` plus `left_container.updateGeometry()`/
+      `right_container.updateGeometry()`, forcing both scroll areas to
+      re-check. Matches the user's own diagnosis exactly: "lorsque l'on
+      déplace les blocs, cette adaptation n'est plus prise en compte."
+    - **Verified headlessly**: both scroll areas' policy is
+      `ScrollBarAlwaysOff` and stays that way after a drag; every block's
+      `minimumSizeHint()` stays under its panel's minimum width even in a
+      deliberately worst-case state (Crop shown, every `ChannelPanel`'s
+      `align_box`/`tone_box` collapsible sections force-expanded via
+      `.setChecked(True)`) - `channels` (Trichromie) dropped from 364px
+      (over the 360px left-panel minimum) before this pass to 330px now,
+      comfortably under; every header-row action button now measures
+      34px wide uniformly, confirmed on one button from each of Light,
+      Color, Crop, Trichromie's "reset all", and Histogram itself; the
+      "channels" block's collapse toggle actually shrinks
+      `independent_channels_group`'s height and hides `.body` correctly
+      (it's the one block whose chrome is inline in `main_window.py`
+      rather than a class's own `__init__`, so this wasn't a given).
+      **Not verified here**: whatever specifically was meant by
+      "l'outil individual channels ne semble pas s'adapter correctement" -
+      no reproducible width/collapse defect was found for it once the
+      general fixes above were in place; if it's still off after this
+      pass, needs a more specific description (a screenshot, or exactly
+      what looks wrong and when) to chase further.
+  - **Sixth pass, 2026-09-04: the user pinpointed the actual cause of the
+    "individual channels" overflow** - the block's own title text was too
+    wide (plausible: the offscreen/headless test environment's font
+    substitution doesn't reproduce real macOS font metrics, so the
+    previous pass's width measurements weren't wrong exactly, just not
+    representative of the real rendering the user was seeing). 4 changes:
+    - **`independent_channels_group_title` renamed "Independent Channels"
+      → "RGB Channels"** ("Canaux RVB" in French) - shorter, and also
+      updated the one other place the old name was hardcoded into a help
+      string (`dialog_locate_failed_text`, "reimport them one by one...
+      using the Independent/RGB Channels panel on the left") so it stays
+      consistent with the renamed block.
+    - **Collapse button is now a real 2-state indicator, not a static
+      icon**: `SvgToolButton` gained `set_rotation(degrees)` (rotates the
+      drawn icon around its own center in `paintEvent`, generic - reusable
+      anywhere a rotating icon is needed, same idea `SvgIconLabel` already
+      had for the Crop ratio icon). `set_block_collapsed()` in
+      `block_header_bar.py` now takes the `collapse_button` too and
+      rotates it 90° when collapsed (chevron pointing right) vs. 0° when
+      expanded (pointing down) - all 3 call sites in `main_window.py`
+      (`_toggle_block_collapsed`, `reset_layout`,
+      `_apply_restored_layout`) updated to pass it.
+    - **`histogram_box` gained a title back** (`"menu_tools_histogram"`,
+      already existed with correct EN/FR text) - a direct reversal of the
+      third pass's "only histogram stays title-less" call; the user
+      changed their mind after seeing it in practice. `start_block_chrome`
+      already supported an optional title from the start, so this was a
+      one-argument change plus wiring `self.histogram_title_label` into
+      `retranslate_ui()`.
+    - Verified headlessly: both renamed strings appear correctly in EN and
+      FR; `SvgToolButton._rotation` flips 0↔90 on each collapse/expand
+      click; `histogram_title_label.text()` reads "Histogram"/"Histogramme"
+      correctly per language.
+  - **Drop-to-remove, added 2026-09-04.** Two options were proposed for
+    "remove a block by dragging it out of the panels" (a dedicated
+    drop-to-delete target vs. any drop outside both panels counting as
+    removal); the user picked the simpler one - **any drop outside both
+    `BlockReorderZone`s removes the block**, same as clicking its own
+    close button. `BlockDragHandle` gained `drag_rejected = Signal(str)`,
+    emitted from `_start_drag()` when `drag.exec(...)` returns
+    `Qt.IgnoreAction` (Qt's own signal that no drop target accepted the
+    drag). `MainWindow` connects each block's handle via
+    `widget.findChild(BlockDragHandle)` (the handle isn't in its own
+    dict, so this avoids threading a 4th return value through every
+    `start_block_chrome()` call site) to `_on_block_drag_rejected(key)`,
+    which calls `set_block_visible(key, False)` (a no-op if already
+    hidden - checked explicitly, so this can't double-fire a status
+    message) and shows a status-bar message ("'X' removed - re-enable it
+    from the Tools menu", `status_block_removed` i18n key) for 4 seconds,
+    since a block silently disappearing from a drop-outside gesture isn't
+    otherwise obvious the way clicking a dedicated × button is.
+    **Known, accepted tradeoff**: `QDrag.exec()` reports a drag cancelled
+    via Escape identically to one rejected by every drop target
+    (`Qt.IgnoreAction` either way) - Qt gives no way to tell them apart
+    from the source side. So pressing Escape mid-drag also removes the
+    block, not just a genuine drop-outside. Left as-is rather than
+    engineering a workaround, since removal is non-destructive (one Tools
+    menu click restores it) and the user chose the simpler option
+    knowing removal isn't a big/scary action here.
+    - Verified headlessly: every block's handle is discoverable via
+      `findChild` and wired; emitting `drag_rejected` end-to-end hides the
+      block, unchecks its Tools-menu action, and shows the expected status
+      message; emitting it again on an already-hidden block is a correct
+      no-op (no duplicate/spurious status message); re-showing via the
+      Tools menu afterward still works normally. **Not verified here**:
+      the real drag-and-drop gesture itself (an actual mouse-driven
+      `QDrag.exec()` call can't be driven headlessly) - only the
+      `Qt.IgnoreAction` handling logic once that returns.
+  - **Seventh pass, 2026-09-04 - the important find: a real, high-impact
+    bug in the drag system itself, plus 6 more requests.**
+    - **`import_panel.py` used block key `"import"`, but every other
+      reference in `main_window.py` (`_ALL_BLOCK_KEYS`, `block_side`,
+      `block_widgets`, etc.) uses `"files"` for this exact block.** The
+      user reported "I can't move the files block to the right panel" -
+      in fact it couldn't be moved *anywhere*, same-panel reorder
+      included: `_on_block_dropped` looks up `self.block_side.get(dragged_key)`,
+      which returned `None` for `"import"` and hit the early-return
+      guard, silently doing nothing. This had been invisible to every
+      previous round of headless testing because those tests all called
+      `_on_block_dropped("left"/"right", "files", ...)` directly with the
+      *correct* canonical key, never through the real
+      `BlockDragHandle`-emitted MIME data that only `import_panel.py` got
+      wrong. Fixed by changing the key passed to `start_block_chrome()`
+      from `"import"` to `"files"`; verified this time via
+      `import_panel.findChild(BlockDragHandle).block_key` (the actual
+      value that would flow through a real drag) rather than calling
+      `_on_block_dropped` with an assumed-correct key.
+    - **Collapse chevron rotation direction was backwards.** The sixth
+      pass's `+90°` for "collapsed" actually points the chevron *left*,
+      not right - confirmed by hand-tracing the rotated SVG path's
+      coordinates, then independently confirmed empirically (rendered
+      both rotations to a `QImage` and checked which edge the V-shape's
+      single-point vertex landed on: `+90` puts it on the left edge,
+      `-90` on the right). Fixed to `-90.0`. `rotated_tinted_svg_pixmap()`
+      is a new shared helper in `svg_icons.py` (factored out of
+      `SvgIconLabel.set_icon`'s existing rotation logic) used by both
+      that label and the new use below.
+    - **`CollapsibleSection` (`controls.py`, used by each `ChannelPanel`'s
+      Alignment/Light sub-sections) now uses the same SVG chevron instead
+      of `QToolButton.setArrowType()`'s native arrow** - visual
+      consistency with the block-level collapse buttons, per the user's
+      explicit ask. Its `toggle_button` keeps native text+icon layout
+      (`Qt.ToolButtonTextBesideIcon`); only the icon source changed, via
+      `setIcon(QIcon(rotated_tinted_svg_pixmap(...)))` swapped in
+      `_update_chevron_icon()`, called from both `__init__` and
+      `_on_clicked()`. Same `-90°`-when-collapsed convention.
+    - **`tone_group` i18n key renamed "Color correction"/"Étalonnage" →
+      "Light"/"Lumière"** (matching `global_light_subheader`'s existing
+      French wording) - this is the label on each `ChannelPanel`'s second
+      `CollapsibleSection`, not `LightPanel`'s own title; the two are
+      different i18n keys for two different (if now same-named) UI
+      elements, both changed for the same reason (the split of Global
+      Correction into Light/Color).
+    - **Both side panels now share one width range** (`_SIDE_PANEL_MIN_WIDTH`/
+      `_SIDE_PANEL_MAX_WIDTH` = 360/420, both new module constants) -
+      they used to differ (left 360-420, right 300-360), backwards now
+      that any block can be dragged to either side: a block that fit the
+      wider left panel could still overflow the narrower right one. This
+      is very likely what actually explained the right-panel scrollbar
+      persisting across two previous "fix" attempts that only ever
+      touched button/margin sizing, never the asymmetric bounds
+      themselves - and directly satisfies the user's own new requirement
+      that "les 2 panneaux latéraux doivent réagir exactement de la même
+      manière, peu importe l'organisation des outils."
+    - **Drag-delete is now visually obvious mid-drag, not just after the
+      fact.** `BlockDragHandle._start_drag()` connects `QDrag.targetChanged`
+      (Qt's own documented hook for updating a drag's visual feedback
+      based on the current potential drop target) to swap the ghost
+      pixmap's outline red the moment the cursor leaves both
+      `BlockReorderZone`s, back to the normal white/blue outline the
+      moment it re-enters one - `_is_over_reorder_zone()` walks up from
+      whatever widget `targetChanged` reports to check whether any
+      ancestor `isinstance(w, BlockReorderZone)` (handles both "target is
+      the zone itself" and "target is some non-drop-accepting child
+      widget Qt bubbled the drag event up from," which is what
+      `BlockReorderZone` already relied on for normal drops to work when
+      hovering over a child block). `_scaled_source_pixmap()`/
+      `_ghost_pixmap()` were split apart so the expensive grab-and-scale
+      only happens once per drag, not on every `targetChanged` firing -
+      only the cheap outline-color repaint happens live.
+    - **`QApplication.beep()` on drag-delete** (`_on_block_drag_rejected`)
+      - the OS's own system alert sound, not a bundled audio asset, so
+      nothing new to package or risk going missing in the frozen `.app`.
+    - **"The dragged block's preview should disappear the instant it's
+      dropped in a delete zone"** - not additional code: this is already
+      how native `QDrag` rendering works on every platform (the
+      OS-managed drag image is torn down synchronously the moment the
+      mouse button releases, regardless of whether the drop was accepted
+      or rejected) - nothing in this codebase controls that image's
+      teardown timing to begin with, so there was nothing to fix. Worth
+      confirming in the real app since it can't be verified headlessly,
+      but there's no known reason it wouldn't already hold.
+    - Verified headlessly: the fixed `"files"` key via the real handle's
+      own `.block_key`, and that a drop with that real key now actually
+      moves the block; collapse rotation is `-90` on click; each
+      `ChannelPanel`'s `align_box.toggle_button.icon()` is non-null (SVG,
+      not native arrow) and `tone_box.toggle_button.text()` reads
+      "Light"; both scroll areas report identical min/max width;
+      `_ghost_pixmap(danger=True/False)` both render without error;
+      `_is_over_reorder_zone()` returns correctly for the zone itself, a
+      child block within it, an unrelated widget (canvas), and `None`.
+      **Not verified here**: the real drag gesture's live visual feel
+      (red outline swap timing, whether it reads clearly) and the beep's
+      actual audible/appropriate character - both need the real app.
+  - **Eighth pass, 2026-09-04 - the seventh pass's red-outline drag
+    feedback didn't actually appear in the real app; a header-layout bug
+    caught along the way affected 3 more blocks.**
+    - **`QDrag.targetChanged` + live `drag.setPixmap()` (the seventh
+      pass's approach) turned out not to work** - the user reported no
+      visible change at all. This matches a known Qt/macOS limitation:
+      once a native drag session starts, the OS caches its own drag
+      image, and `QDrag.setPixmap()` calls after that point aren't
+      reliably honored on every platform - `targetChanged` firing and the
+      callback running (both already verified headlessly last pass) don't
+      guarantee the *visual* actually updates. **Replaced entirely** with
+      a fully custom `_DragPreviewOverlay` (`block_header_bar.py`) - a
+      frameless, click-through, always-on-top `QWidget` that
+      `BlockDragHandle._start_drag()` creates, positions, and repaints
+      itself via a 16ms `QTimer` (polling `QCursor.pos()` and
+      `QApplication.widgetAt(QCursor.pos())` directly, not relying on any
+      QDrag signal). `QDrag` itself now only ever carries a 1×1
+      fully-transparent placeholder pixmap - the overlay is the only
+      thing actually visible, so its red/white border swap is guaranteed
+      to render regardless of platform-specific native drag-image
+      caching. This also incidentally fixed a second complaint in the
+      same message ("cette image revient à la position initiale avec une
+      animation... est-ce possible de ne pas afficher cette animation") -
+      that "snap back to origin" animation is the OS animating the
+      *native* drag pixmap back on rejection, and since that pixmap is
+      now just a transparent 1×1 placeholder, there's nothing visible to
+      animate; the overlay itself is just `.close()`d immediately with no
+      transition.
+    - **Deletion sound now reuses `_play_delete_sound()`** (macOS's
+      `Pop.aiff` via `afplay`, already used for deleting a photo) instead
+      of `QApplication.beep()`, per "je préfère que tu utilise le même
+      son qu'à la suppression d'une photo."
+    - **Real bug: `start_block_chrome()` added `header_row.addStretch(1)`
+      internally, right after the title**, which silently pushed
+      anything a caller added afterward (a "?" scope-info button, in
+      `LightPanel`/`ColorPanel`'s case) all the way to the header's right
+      edge instead of leaving it next to the title - caught by the user
+      ("colle les indicateurs '?' à la droite des titres"). The stretch
+      is now the **caller's own responsibility** - `start_block_chrome()`
+      no longer adds one at all, so every one of its 7 call sites
+      (`ImportPanel`, `CropPanel`, `LightPanel`, `ColorPanel`,
+      `independent_channels_group`, `histogram_box`, `scan_panel`) had to
+      add their own `header_row.addStretch(1)` at the point that's
+      actually correct for that block - immediately after the "?" button
+      for Light/Color/the new RGB Channels one, immediately after the
+      title for the other 4 (which have nothing that belongs right next
+      to it). Verified headlessly by walking each header row's actual
+      layout item order and confirming grip → title → "?" (where
+      present) → stretch → trailing buttons.
+    - **`independent_channels_group` ("RGB Channels") gained the same "?"
+      scope-info button** as Light/Color, per the user's explicit ask,
+      wired the same way (`show_info_bubble`, same 18×18 rounded style).
+    - **New/changed info-bubble text, exact wording given by the user**:
+      `channels_scope_info` (new) - "Modifie séparément les images Noir
+      et Blanc des canaux RVB. Ces changements s'appliquent avant les
+      réglages de lumière et de couleur." (2 small typos in the user's
+      own draft silently corrected when writing it down: "séparement" →
+      "séparément", "changement" → "changements" for plural agreement).
+      `global_scope_info` (Light/Color's existing button) replaced with
+      "Dans le cas d'une image trichrome, ces changements s'appliquent
+      sur l'image couleur recomposée."
+    - **Real bug: the "Scan" block's title was never actually displayed.**
+      `self.scan_title_label` was created (via `start_block_chrome(...,
+      "menu_tools_scan")`) back in the sixth pass, but no
+      `retranslate_ui()` call ever set its text - unlike
+      `histogram_title_label`, which got the equivalent line at the same
+      time. The label existed in the layout the whole time, just empty.
+      One missing line, now added.
+    - Verified headlessly: `scan_title_label.text() == "Scan"`; each of
+      Light/Color/Channels' header layouts, walked item-by-item, show
+      grip → title → "?" → stretch → trailing buttons in that exact
+      order; `_DragPreviewOverlay` constructs, resizes to a given
+      pixmap, repositions via `move_for_cursor()`, swaps between the
+      normal/danger pixmap, and closes cleanly; `_on_block_drag_rejected`
+      calls the real `_play_delete_sound` (mocked and asserted called)
+      instead of `QApplication.beep()`. **Not verified here** (needs the
+      real app): whether the overlay-based drag preview actually renders
+      and follows the cursor smoothly during a genuine native drag
+      session - this is precisely the class of behavior that silently
+      failed last pass despite passing every headless check available,
+      so this result should be treated as "logic is sound," not "visual
+      confirmed."
+  - **Ninth pass, 2026-09-04 - the eighth pass's overlay broke drag-and-
+    drop entirely: every block got deleted on drop, regardless of
+    target.** Root cause: `_DragPreviewOverlay` was a real top-level
+    window (`Qt.WindowStaysOnTopHint`) kept positioned exactly under the
+    cursor for the whole drag. OS-level native drag-and-drop hit-testing
+    (which `QDrag` relies on to resolve `dragEnterEvent`/`dropEvent`
+    against the widget under the cursor) operates at the window-manager
+    level, checking which real *window* currently sits topmost at that
+    screen position - `Qt.WA_TransparentForMouseEvents` only affects
+    ordinary in-app mouse-event routing through Qt's own event system, it
+    has no bearing on that separate OS-level mechanism. So the overlay
+    itself was very likely what every drop was landing on, from the
+    native drag session's point of view - explaining "les outils sont
+    supprimés dès qu'ils sont déplacés, peu importe le panneau" exactly:
+    with the real `BlockReorderZone` widgets unreachable by native
+    hit-testing, *every* drop resolved to `Qt.IgnoreAction`, and
+    `_on_block_drag_rejected` fired for all of them, not just genuine
+    drops outside both panels.
+    - **Reverted outright** rather than attempting a third live-drag-
+      visual technique: `_DragPreviewOverlay` deleted; `_start_drag()`
+      back to a single static `QDrag.setPixmap()` call (no danger/normal
+      variants, no live updates) set once before `exec()`, matching
+      exactly the shape verified working through the sixth/seventh
+      passes. `_ghost_pixmap()` is a plain method again (no `danger`
+      param), `_is_over_reorder_zone()`/`_scaled_source_pixmap()` removed
+      (only ever used by the reverted overlay code). Drag-delete itself
+      (`drag_rejected` on `Qt.IgnoreAction`, the sound, the status
+      message, the Tools-menu sync) is untouched and still correct - only
+      the mid-drag red-border visual polish is gone.
+    - **Deliberately not re-attempted this pass.** Two different
+      techniques for one purely cosmetic detail (a live red/white border
+      swap during drag) both caused real regressions - the first was
+      silently inert, the second broke core drag-and-drop - and neither
+      could be verified without a real interactive session. Restoring
+      correct behavior took priority over the visual polish; if the red-
+      border cue is wanted again, it needs a technique that doesn't
+      involve a second real window competing for OS-level drag
+      hit-testing (e.g. `QDrag.setDragCursor(pixmap, action)`, which is
+      part of the *same* native drag session Qt already manages rather
+      than a separate window - untried here, and its exact interaction
+      with `setPixmap()` wasn't confirmed before this pass ran out of
+      appetite for another unverified live-drag experiment).
+    - Verified headlessly: `BlockDragHandle` no longer has
+      `_is_over_reorder_zone`/`_scaled_source_pixmap`; `_ghost_pixmap()`
+      takes no arguments and returns a valid pixmap; same-panel reorder
+      and cross-panel move via `_on_block_dropped` (the actual drop
+      handler, unaffected by any of this - it was always the *native
+      hit-testing reaching it* that broke, not the handler itself) still
+      work; `drag_rejected` still correctly triggers removal + sound.
+      **Not verified here** (needs the real app, and is the whole reason
+      this reverted rather than iterating further blind): that a real
+      drag now actually reaches `BlockReorderZone` again.
+  - **Tenth pass, 2026-09-04 - the user confirmed the ninth pass's revert
+    fixed dragging, then asked to drop drag-to-delete entirely**: "cette
+    option de supprimer l'outil en drag and drop n'est pas necessaire
+    (disponible avec la croix et dans le menu tools), supprime là et
+    reviens au comportement de base (changer l'ordre seulement lorsqu'on
+    le drag and drop dans une zone active indiqué par le trait bleu)".
+    The "Drop-to-remove" feature from the sixth-pass-adjacent entry above
+    (and its `drag_rejected` signal from the seventh pass) is now removed
+    outright, not just made safer - `BlockDragHandle` no longer emits
+    anything on a rejected/cancelled drag, `_on_block_drag_rejected`/
+    `status_block_removed` (i18n, both languages) are deleted, and a drop
+    outside both `BlockReorderZone`s (Escape included) is a plain no-op -
+    the block simply stays where it was, exactly like the drag never
+    happened. Removing a block is now, once again, only ever done via its
+    own close button or the Tools menu. Verified headlessly: pyflakes
+    clean on the 3 touched files; EN/FR i18n parity still holds; a real
+    app boot; `BlockDragHandle` has no `drag_rejected` attribute; a
+    same-panel reorder via `_on_block_dropped` (the same handler the blue
+    insertion-line indicator drives) still works correctly.
+- **Layout Presets (Window ▸ Layout Preset), added 2026-09-03.** Named,
+  saveable full-layout snapshots - requested by the user in the same pass
+  as the block-reorder feature above and the removal of the per-tool move
+  actions, specifically so a user could still jump between a small number
+  of deliberately different arrangements without the fine-grained
+  drag-and-drop alone being the only way to change layout.
+  - **`_capture_layout_state()`**/**`_apply_layout_state(data)`**: the one
+    place the full set of layout-only fields is listed - panel visibility
+    plus, since the 2026-09-04 block-system overhaul above, the 5 block
+    fields (`block_side`/`block_visible`/`block_collapsed`/
+    `left_block_order`/`right_block_order`). `_apply_layout_state` is just
+    a thin wrapper over `_apply_restored_layout(...)` with fields pulled
+    from a dict instead of positional args - both
+    `_build_restored_items_from_data` (the `.trirgb` path) and Layout
+    Preset load go through it now, so the field list only has to be kept
+    in sync in one place instead of two.
+  - **Storage: QSettings only, not part of `.trirgb`** - presets are a
+    personal, cross-session arrangement library (like a keyboard shortcut
+    set), not project-file content, so they deliberately don't travel with
+    a saved session/`.trirgb` the way `block_side` itself does.
+    `self._layout_preset_names: list[str]` (QSettings key
+    `layout_preset_names`) is the ordered name list, loaded eagerly in
+    `__init__` since `_build_ui()` needs it immediately to populate the
+    menu; each preset's actual data is `json.dumps(_capture_layout_state())`
+    under its own key, `layout_preset_data_{name}`.
+  - **Menu**: `Window ▸ Layout Preset` - **Save Layout as Preset…**
+    (`on_save_layout_preset`, a plain `QInputDialog.getText` asking only
+    for a name, per the user's explicit "demande juste un nom" - not a
+    custom dialog, since this is a simple one-field text prompt with no
+    existing app-specific equivalent to reuse, unlike the alert-dialog
+    policy which is specifically about warning/error dialogs), then a
+    separator, then one submenu per saved preset with 3 actions each:
+    **Load**, **Update**, **Delete Preset**. `_save_layout_preset(name)`
+    doubles as both "Save" (new name) and "Update" (existing name) - saving
+    under a name that already exists just overwrites its data, so Update's
+    handler is literally the same call with the existing name, no separate
+    code path. `_rebuild_layout_preset_menu()` tears down and rebuilds
+    every per-preset submenu (keeping only the Save action + separator) -
+    called after every save/update/delete, and from `retranslate_ui()` too
+    so a language switch also re-translates the Load/Update/Delete Preset
+    labels (they're plain `QAction`s built with `i18n.tr()` at construction
+    time, not synced any other way).
+  - Verified headlessly: save/load/update/delete all mutating
+    `self._layout_preset_names` and the menu structure correctly, a loaded
+    preset actually restoring `block_side` (moving a block back across
+    panels) and the reordered widget positions that follow from it, the
+    preset submenu surviving a simulated language switch with correctly
+    re-translated labels, and the Window menu's action list no longer
+    containing the old move-to-side actions.
+  - **The 4 old tool-switcher toolbar buttons repurposed into built-in
+    default-layout quick-switches, 2026-09-04.** Since the full block
+    system (drag/collapse/close/Tools-menu) superseded what
+    `trichrome_toolbar_btn`/`settings_toolbar_btn`/`crop_toolbar_btn`/
+    `scan_toolbar_btn` used to do, they'd been sitting disabled/greyed in
+    their toolbar slots (see the "full block system overhaul" entry
+    above) pending a follow-up decision. The user's follow-up: re-enable
+    them, but as **layout-preset shortcuts**, not tool-visibility
+    toggles - each applies one of 4 specific named Layout Presets the
+    user had already saved through the regular mechanism above
+    (`"Trichrome"`, `"Color Correction"`, `"Crop"`, `"Scan"` - confirmed
+    to exist, read-only, from the real QSettings domain
+    `com.trichromemaker.TrichromeMaker` before writing any code). The
+    bare-letter keyboard shortcuts (T/E/C/S) are unchanged in binding,
+    only in what they now do.
+    - **`_BUILT_IN_LAYOUT_PRESETS`** (module-level, `main_window.py`) is
+      the one ordered list of `(preset name, Window-menu i18n key, bare
+      shortcut letter)` tuples - `_BUILT_IN_LAYOUT_PRESET_NAMES` is the
+      derived name-only tuple used everywhere a plain membership check is
+      needed (guards below).
+    - **Single exclusive group, not two independent pairs.** The old
+      `left_tool_group`/`right_tool_group` (2 separate `QButtonGroup`s,
+      each exclusive within its own pair) are gone, replaced by one
+      `self.default_layout_group` holding all 4 buttons - per the user's
+      explicit "un seul layout peut être actif à la fois (icone en blanc
+      et les autres grisée)", only one of the 4 reads as active
+      (full-color) at any time now, not one-per-side. Buttons are
+      re-enabled (`setEnabled(False)` calls removed); only
+      `trichrome_toolbar_btn` starts checked (was previously both
+      `trichrome_toolbar_btn` *and* `settings_toolbar_btn`, back when
+      they were 2 independent exclusive pairs - keeping both `True` now
+      would conflict with a single exclusive group).
+    - **`_activate_default_layout(name)`** is the one entry point all 3
+      trigger paths (a toolbar button's `clicked`, a bare keyboard
+      shortcut, a Window-menu click) funnel through - syncs the matching
+      button's checked state via `self._default_layout_buttons[name]`
+      (built once, alongside the buttons, in `_build_ui`) and then always
+      calls `_load_layout_preset(name)` regardless of whether the checked
+      state actually changed. **Deliberately wired via each button's
+      `clicked` signal, not `toggled`** - `clicked` fires on every real
+      click including a re-click of the already-checked button (an
+      exclusive-group radio button doesn't uncheck itself on a second
+      click, so `toggled` wouldn't fire again), which is exactly the
+      wanted behavior: re-pressing "T" after having dragged blocks around
+      resets back to the actual Trichrome layout instead of being a
+      no-op. Keyboard shortcuts call `_activate_default_layout(name)`
+      directly (replacing the old bare `.setChecked(True)` calls in
+      `keyPressEvent`) rather than synthesizing a `.click()`, for the
+      same reload-even-if-already-checked reason.
+    - **Built-in presets are Load-only - not Update/Delete-able, and
+      listed directly in the Window menu, not nested in the Layout Preset
+      submenu**, both per explicit user request. `_rebuild_layout_preset_menu()`
+      now skips any name in `_BUILT_IN_LAYOUT_PRESET_NAMES` when building
+      the Layout Preset submenu's per-preset Load/Update/Delete entries -
+      they simply never appear there. Instead, `self.builtin_layout_actions`
+      (built in `_build_ui`, right after Reset Layout, its own separator
+      on each side) holds one plain non-checkable `QAction` per built-in
+      preset, translated in `retranslate_ui()` with the same `"\t<letter>"`
+      shortcut-hint suffix convention every other Window-menu item already
+      uses, triggering `_activate_default_layout` exactly like the
+      toolbar buttons.
+    - **Guard against silently overwriting a built-in via "Save Layout as
+      Preset…".** The Layout Preset submenu no longer offers Update/Delete
+      for a built-in name, but the free-text "Save as Preset…" dialog
+      could still type one of the 4 reserved names verbatim -
+      `on_save_layout_preset()` now checks the entered name against
+      `_BUILT_IN_LAYOUT_PRESET_NAMES` first and shows `show_alert(...)`
+      (`layout_preset_builtin_name_title`/`_text`, the text taking the
+      typed name via `{name}`) instead of saving, rather than silently
+      clobbering the built-in's data. `_delete_layout_preset()` also
+      gained the same guard as defense-in-depth, even though the UI can
+      no longer reach it for a built-in name.
+    - **Tooltip wording**: `settings_toolbar_tooltip` ("Global Correction
+      (E)" / "Correction Globale (E)") renamed to "Color Correction (E)" /
+      "Correction Couleur (E)" to match the preset name it now actually
+      applies - the other 3 tooltips already matched their preset names
+      exactly, so only this one needed changing.
+    - **Custom presets are untouched** - `on_save_layout_preset`/
+      `_save_layout_preset`/`_load_layout_preset`/`_delete_layout_preset`
+      and the Layout Preset submenu's Load/Update/Delete-per-preset
+      pattern all still work exactly as before for any name that isn't
+      one of the 4 reserved ones, per the user's explicit "garde la
+      possibilité de créer et modifier des layouts personnalisés."
+    - Verified headlessly: all 4 buttons enabled and in one 4-member
+      exclusive group; saving presets under `"Trichrome"`/`"Color
+      Correction"` plus a custom `"MyCustom"` name, then confirming the
+      Layout Preset submenu lists only `MyCustom`; `builtin_layout_actions`
+      text/shortcut-hint correctness in both EN and FR;
+      `_activate_default_layout("Color Correction")` correctly flipping
+      the exclusive checked state (trichrome→unchecked, settings→checked)
+      and actually applying that preset's captured `block_visible` data;
+      re-clicking an already-checked button still re-triggers a reload;
+      the builtin-name-collision alert firing (mocked) instead of
+      overwriting; `_delete_layout_preset("Trichrome")` being a correct
+      no-op; and (follow-up check, same day) a real bare-letter "C"
+      keypress driven through an actual `QKeyEvent`/`keyPressEvent`
+      call, confirmed to reach `_activate_default_layout` and check the
+      right button. **Not verified here**: the toolbar buttons' real
+      dim/full-color visual at each checked state - needs the real app.
+  - **Second pass, 2026-09-04, after the user tried it for real - 3 more
+    changes**, all in `main_window.py`/`i18n.py`:
+    1. **Reset Layout moved to the very bottom of the Window menu**,
+       below the Layout Preset submenu (was previously above the 4
+       built-in layout entries, near the top) - the construction order in
+       `_build_ui` was rearranged so `reset_layout_action` is built and
+       added last, after `layout_preset_menu`/`_rebuild_layout_preset_menu()`,
+       with its own separator; `retranslate_ui()`'s corresponding
+       `setText()` call moved to match (order there doesn't affect the
+       menu, but kept it next to the construction order for readability).
+    2. **Built-in layout entries now read "Layout - Trichrome"/"Layout -
+       Color Correction"/"Layout - Crop"/"Layout - Scan"** (French:
+       "Disposition - " - reusing this codebase's already-established
+       "layout" → "disposition" translation, the same word
+       `menu_window_reset_layout`/`menu_window_layout_preset` already
+       use, rather than leaving "Layout" untranslated as a loanword) - a
+       new `menu_window_layout_prefix` i18n key, prepended in
+       `retranslate_ui()` ahead of each entry's existing label key.
+    3. **Display name decoupled from the actual preset loaded.** The user
+       found the layouts saved under the reserved names themselves
+       ("Trichrome"/"Color Correction"/"Crop"/"Scan", from the first
+       pass) didn't match what they'd actually set up, and recreated
+       correct versions as ordinary custom presets named
+       `"NewTrichrome"`/`"NewColorCorrection"`/`"NewCrop"`/`"NewScan"`.
+       Rather than asking the user to keep re-saving under the exact
+       reserved names (which would then be un-updatable per the first
+       pass's own guard - a contradiction with "garde la possibilité de
+       créer et modifier des layouts personnalisés"), `_BUILT_IN_LAYOUT_PRESETS`
+       gained a 4th tuple element - the *source* preset name each display
+       slot actually loads - and a derived `_BUILT_IN_LAYOUT_SOURCE`
+       dict (display name → source name).
+       `_activate_default_layout(name)` now resolves through it before
+       calling `_load_layout_preset()`: `name` (e.g. `"Color Correction"`,
+       the fixed identifier used everywhere else - button lookup, Window
+       menu action, keyboard shortcut) is never itself a real saved
+       preset any more; what actually gets loaded is `NewColorCorrection`.
+       The reserved display names stay reserved (`_BUILT_IN_LAYOUT_PRESET_NAMES`,
+       still guards `on_save_layout_preset`/skips the Layout Preset
+       submenu, unchanged), but the 4 `New*` presets are **ordinary,
+       fully editable custom presets** - they show up normally in the
+       Layout Preset submenu with working Load/Update/Delete, so editing
+       `NewCrop` there and re-pressing "C" picks up the change immediately,
+       which is exactly the live-linking behavior the user's "modifier des
+       layouts personnalisés" ask implies.
+    - Verified headlessly: Window menu's action list ends with
+      `reset_layout_action` as the literal last entry; the 4 built-in
+      entries render as "Layout - Trichrome\tT" etc. in EN and
+      "Disposition - Trichromie\tT" etc. in FR; saving `NewTrichrome`/
+      `NewColorCorrection`/`NewCrop`/`NewScan` as regular presets makes
+      them appear in the Layout Preset submenu (the old reserved-name
+      entries `Trichrome`/`Color Correction`/`Crop`/`Scan` stay hidden,
+      now orphaned data from the first pass, harmless); activating
+      `"Color Correction"` and `"Crop"` each actually applies its
+      *source* preset's distinct `block_visible` data (not the reserved
+      name's own, confirming the decoupling actually works end-to-end,
+      not just that the mapping dict is correct).
 - **Menu bar reworked to match (2026-09-02)**, same pass as the toolbar
   reshuffle above:
   - File menu's Import item reworded "Import…" → **"Import Images…"**
@@ -1341,7 +2359,8 @@ section should stay current rather than becoming a historical log.
 - `CropPanel` (`widgets/crop_panel.py`): aspect ratio (presets + custom +
   "invert orientation", **`"original"` is the default**, ahead of `"free"`),
   straighten, mirror (see below), a grid-style picker, and a header row of
-  Reset/Copy/Paste buttons (see "Copy/paste" below).
+  Activate/Reset buttons (see "Active crop mode" below - the Copy button
+  that used to sit here is gone, 2026-09-04).
 - An interactive draggable crop rectangle drawn directly on `CanvasWidget`'s
   `_ImageLabel` (`widgets/canvas_widget.py`) - corner-handle resize +
   inside-drag move, aspect-ratio-locked when one is set, dimmed surroundings
@@ -1352,18 +2371,18 @@ section should stay current rather than becoming a historical log.
   **live**, like every other slider in the app - but the crop **rectangle**
   itself is only a live canvas-side proposal (`CanvasWidget.crop_rect()`)
   until **Enter** commits it into `item.crop.x/y/width/height`
-  (`MainWindow.on_crop_apply`, wired in `keyPressEvent` only while the Crop
-  tool is active). Switching tools without pressing Enter discards the
-  in-progress drag, never touches the model; applying also switches back to
-  Global Color Correction automatically so you see the result.
+  (`MainWindow.on_crop_apply`, wired in `keyPressEvent` only while active
+  crop mode is on - see "Active crop mode decoupled from block visibility"
+  below). Exiting without pressing Enter (Escape, or turning active mode
+  off any other way) discards the in-progress drag, never touches the model.
 - **The Crop tool's own preview always shows the full straightened/mirrored
   frame**, never the previously-applied crop - `imaging.apply_crop()`
   (straighten → mirror → crop) is a thin wrapper over two separately-callable
   steps, `apply_straighten_mirror()` and `apply_crop_rect()`;
-  `recompute_preview` skips `apply_crop_rect` while
-  `crop_toolbar_btn.isChecked()`. Every other view (Global Color Correction,
-  the histogram, both export paths) shows the fully-cropped result via the
-  combined `apply_crop()`, so cropping never shrinks against a previous crop.
+  `recompute_preview` skips `apply_crop_rect` while `self._crop_active` is
+  True. Every other view (Global Color Correction, the histogram, both
+  export paths) shows the fully-cropped result via the combined
+  `apply_crop()`, so cropping never shrinks against a previous crop.
 - `mirror_h`/`mirror_v` (left/right vs. top/bottom, not a single `mirror`
   flag) - each its own `SvgCheckableToolButton` using `Crop/mirror_line.svg`
   and `Crop/mirror_line_vertical.svg` (the same icon,
@@ -1379,18 +2398,18 @@ section should stay current rather than becoming a historical log.
   "Reset All" (`item.crop.reset()`, also exposed as the Crop panel's own
   Reset button, `General/Reset.svg`).
 - **Copy/paste is deliberately asymmetric.** `_extract_settings()` (used by
-  Cmd+C, the filmstrip's Copy, and the Crop panel's own Copy button - they
-  all funnel through `copy_settings_from`) now captures crop alongside color
-  (`General/copy.svg`, tooltip **"Copy crop setting"** even though it's
-  really "copy everything" - matches the wording the user wanted here). But
-  the regular Paste (Cmd+V, filmstrip Paste) still only restores color, same
-  as before - crop is only ever restored by the dedicated `paste_crop_to()`,
-  reachable via the filmstrip's right-click **"Paste Crop"** entry (only
-  shown once something with crop data has been copied -
+  Cmd+C and the filmstrip's Copy - they all funnel through
+  `copy_settings_from`) captures crop alongside color. The regular Paste
+  (Cmd+V, filmstrip Paste) still only restores color, same as before -
+  crop is only ever restored by the dedicated `paste_crop_to()`, reachable
+  via the filmstrip's right-click **"Paste Crop"** entry (only shown once
+  something with crop data has been copied -
   `CarouselWidget.set_paste_crop_available()`). The Crop panel itself has
-  **no Paste button of its own** (removed 2026-09-01 - it was redundant with
-  the filmstrip entry and the user wanted the panel simpler); only Reset and
-  Copy remain in its header row.
+  **neither a Copy nor a Paste button of its own** - it never had Paste
+  (removed 2026-09-01, redundant with the filmstrip entry), and its own
+  Copy button (which duplicated Cmd+C/filmstrip Copy) was removed
+  2026-09-04 as part of decoupling active crop mode from block visibility
+  (see below) - only Activate and Reset remain in its header row.
 
 **Icons**: `resources/icons/` is organized into subfolders by usage area
 (`Color Correction/`, `Crop/`, `General/`, `Letters/`, `Preview/`, `Scan/`,
@@ -1484,12 +2503,10 @@ sibling in `right_container`'s `QVBoxLayout` (see `_build_ui`), so its own
 position is already unaffected by which of Global/Crop is shown below it -
 no change was needed there.
 
-**Escape and per-photo behavior (2026-09-01):**
-- Escape while the Crop tool is active switches back to Global Color
-  Correction **without** committing the in-progress drag (`keyPressEvent`
-  just flips `settings_toolbar_btn` checked, never calls
-  `on_crop_apply`) - mirrors "switching tools mid-drag discards the
-  proposal" above, just via keyboard.
+**Escape and per-photo behavior (2026-09-01; Escape's own effect superseded
+2026-09-04, see "Active crop mode decoupled from block visibility" below):**
+- Escape while active crop mode is on turns it off **without** committing
+  the in-progress drag - mirrors "exiting mid-drag discards the proposal."
 - In fullscreen, Escape's existing "leave fullscreen" branch is checked
   first and returns early - so leaving fullscreen and leaving Crop mode
   are two separate Escape presses, never both at once.
@@ -1512,6 +2529,96 @@ no change was needed there.
   `canvas_widget.py`. Both previously did `new_h = new_w / ratio` /
   `h = min(w / ratio, ...)` directly in normalized space, which was wrong
   for any non-square photo.
+
+**Active crop mode decoupled from block visibility (2026-09-04).** Since
+the block system overhaul let the Crop block be shown in any custom
+layout, alongside anything else, tying "is the interactive crop overlay
+armed" directly to "is the Crop block visible" (`block_visible.get("crop")`,
+via `_on_crop_block_visibility_changed` - the previous mechanism) meant the
+draggable canvas overlay, Enter-to-apply, and full-vs-cropped preview frame
+could pop on/off unexpectedly any time the block appeared/disappeared while
+reorganizing layouts - not just when the user actually meant to start or
+stop cropping. The user's own framing: "l'outil crop étant désormais
+affichable sur plusieurs layout, cela créé des soucis quant à l'affichage
+de la fenêtre de 'crop actif'."
+- **`MainWindow._crop_active: bool`** (init `False` in `__init__`, next to
+  `_compare_active`) is now the one source of truth for whether crop mode
+  is armed - entirely independent of `block_visible["crop"]` (whether the
+  panel/block happens to be shown). **`_set_crop_active(active)`**
+  (renamed from `_on_crop_block_visibility_changed`) is the single place
+  that changes it: syncs `crop_panel.activate_button`'s checked state
+  (`CropPanel.set_active()`, blockSignals so it can't re-trigger),
+  arms/disarms `canvas.set_crop_enabled()`, disarms the white-balance
+  eyedropper and re-syncs the panel from the model when turning on, and
+  calls `recompute_preview()` either way. **Activating also force-shows
+  the block** (`set_block_visible("crop", True)` - no point arming an
+  invisible tool) **but deactivating never touches visibility** - that
+  would be a layout change, which Escape/apply deliberately are not.
+- **`CropPanel` header, reworked**: the old Copy button is gone; a new
+  checkable **`activate_button`** (`Crop/crop.svg` - the same icon as the
+  top toolbar's "Layout - Crop" button, since it's the same concept) sits
+  where Copy used to, immediately left of Reset - Reset itself moved to
+  be the header's right-most action, matching every other block's own
+  header order (title, [action buttons], Reset last). Toggling it emits
+  `activate_toggled(bool)`, wired straight to `_set_crop_active`.
+- **Every one of the ~10 places that used to read `block_visible.get("crop")`
+  was individually re-examined** and split into two groups, not
+  mechanically renamed as one: call sites that gate the *interactive*
+  behavior (Escape/Enter handlers in `keyPressEvent`, `on_white_balance_picked`'s
+  and `recompute_preview`'s "show full frame while cropping" branches) now
+  check `self._crop_active`; call sites that only refresh the panel's own
+  *displayed* controls when it happens to be on screen
+  (`activate_batch_item`, `paste_crop_to`, `reset_batch_items`,
+  `_restore_state`, `_apply_restored_items` - all "sync `crop_panel` from
+  the model if visible, cheap display optimization, nothing to do with
+  active mode") were deliberately left reading `block_visible.get("crop")`,
+  unchanged.
+- **The 4 explicit behaviors requested, all reachable through
+  `_set_crop_active`/`set_block_visible`**:
+  - Enter validates (`on_crop_apply`) - still commits `canvas.crop_rect()`
+    into `item.crop`, then calls `_set_crop_active(False)` instead of the
+    old `set_block_visible("crop", False)` - the block/layout is no longer
+    touched by applying, only active mode.
+  - Escape exits active mode without changing layout - `keyPressEvent`'s
+    Escape branch now checks `self._crop_active` and calls
+    `_set_crop_active(False)` only, never `set_block_visible`.
+  - Activating the "Crop" layout (toolbar button, bare **C**, or the
+    Window-menu entry - all funnel through `_activate_default_layout`)
+    auto-activates crop mode: after loading its source preset, it calls
+    `self._set_crop_active(name == "Crop")` unconditionally - `True` for
+    the Crop slot, `False` for every other slot. This fires even if the
+    underlying custom preset (e.g. `NewCrop`) hasn't been set up yet
+    (`_load_layout_preset` no-ops silently on a missing preset) - pressing
+    **C** still arms crop mode and shows the block either way, since
+    `_set_crop_active(True)` force-shows it itself.
+  - Changing layout auto-deactivates crop mode - `_apply_restored_layout()`
+    (the shared tail for **every** layout load: session restore, `.trirgb`,
+    and any Layout Preset - custom or built-in) unconditionally ends with
+    `self._set_crop_active(False)`; `reset_layout()` does the same
+    explicitly at its own end, since it doesn't route through
+    `_apply_restored_layout`. `_activate_default_layout`'s own call
+    (previous bullet) runs *after* the preset-load's deactivation, which
+    is what lets it override back to `True` specifically for "Crop."
+  - Not explicitly requested but a direct consequence of the same
+    decoupling, added as a safety net: `set_block_visible("crop", False)`
+    (the block's own close button, or unchecking it in the Tools menu)
+    also calls `_set_crop_active(False)` if it was active - hiding the
+    panel while the canvas overlay stayed armed with nothing to interact
+    from it through wouldn't make sense. This is the one place
+    `set_block_visible` still reaches into crop-active state at all;
+    showing the block never arms it back.
+- `crop_activate_tooltip` i18n key ("Activate Crop mode"/"Activer le mode
+  Recadrage") replaces the removed `crop_copy_tooltip`.
+- Verified headlessly (`QT_QPA_PLATFORM=offscreen`, isolated QSettings
+  domain): header row order (grip → title → stretch → `activate_button` →
+  `reset_button` → collapse → close, no Copy button); clicking
+  `activate_button` arms `canvas.image_label.crop_enabled` and shows the
+  block; Escape deactivates while leaving the block visible; Enter commits
+  the dragged rect into `item.crop` *and* deactivates while leaving the
+  block visible; closing the block while active deactivates it too;
+  `_activate_default_layout("Crop")` activates and shows the block,
+  `_activate_default_layout("Trichrome")` deactivates it;
+  `reset_layout()` deactivates it; EN/FR tooltip text.
 
 ## Harris Shutter Effect (added 2026-09-01)
 
@@ -1838,6 +2945,12 @@ build** (e.g. "compile this as vX.Y.Z"), *before* touching
    both PDFs are regenerated from the files you just edited, in sync with
    the `.app` they ship alongside. Don't run `generate_changelog_pdf.py`
    by hand as a separate step; it's part of the build now.
+4. Commit the changes (git repo at the project root, GitHub remote
+   `origin` since 2026-09-03) - a version-bump/build request implicitly
+   includes committing afterward, no need to ask each time. Message
+   convention: `"vX.Y.Z"` as the summary line. **Commit only - do not
+   `git push` unless the user explicitly asks for that too** in the same
+   or a later message; pushing is a separate, explicit action.
 
 **Unlike `CLAUDE.md` (updated after nearly every substantial change), do
 NOT touch these two files incrementally after each feature/fix - that was
@@ -1866,8 +2979,15 @@ persistence round-trip), and keep it minimal. When you do:
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -c "..."
 ```
 
-Always isolate `QSettings` (monkeypatch `ORG_NAME`/`APP_NAME`) so tests never
-read/write the user's real saved session.
+Always isolate `QSettings` so tests never read/write the user's real saved
+session - monkeypatch the **module-level** `trichrome.main_window.ORG_NAME`/
+`.APP_NAME` (e.g. `mwmod.ORG_NAME = mwmod.APP_NAME = "SomeIsolatedName"`),
+**not** `mw.ORG_NAME`/`MainWindow.ORG_NAME` - see the full incident writeup
+under the session-persistence section above (a class/instance-attribute
+patch is silently a no-op here and once actually corrupted the user's real
+saved Layout Presets during testing). Verify isolation actually held by
+reading back through `QSettings(mwmod.ORG_NAME, mwmod.APP_NAME)` rather
+than assuming the patch landed on the right target.
 
 ## Language
 

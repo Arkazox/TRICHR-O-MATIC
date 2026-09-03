@@ -241,7 +241,7 @@ class HistogramPanel(QWidget):
     preview, drawn as a dashed vertical line per channel on the chart;
     ``clear_marker()`` (also called automatically when the button is
     unchecked) removes it. ``pick_toggled`` re-emits the button's own
-    ``toggled`` for that wiring, mirroring GlobalPanel's
+    ``toggled`` for that wiring, mirroring ColorPanel's
     ``pick_white_balance_btn``/``pick_white_balance_toggled``."""
 
     reset_requested = Signal()

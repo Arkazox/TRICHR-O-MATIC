@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QGroupBox, QHBoxLayout, QLabel, QPushButton, QToolButton,
-    QVBoxLayout, QWidget,
+    QButtonGroup, QGroupBox, QHBoxLayout, QLabel, QPushButton, QToolButton, QWidget,
 )
 
 from .. import i18n
+from .block_header_bar import finish_block_chrome, start_block_chrome
 from .channel_panel import CHANNEL_COLORS, CHANNEL_KEY
 from .controls import ElidingLabel
 from .info_bubble import show_info_bubble
@@ -21,7 +21,18 @@ class ImportPanel(QGroupBox):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        root = QVBoxLayout(self)
+        # Title restored 2026-09-04 (removed 2026-09-03, then the user
+        # asked for it back - "c'était mieux") - only histogram_box stays
+        # title-less.
+        # Block key is "files" (matching main_window.py's _ALL_BLOCK_KEYS
+        # and every block_side/block_visible/block_widgets entry) - was
+        # "import" until 2026-09-04, a real bug: the drag handle's MIME
+        # data carried a key that matched nothing in MainWindow's block
+        # state, so dragging this block silently failed every time,
+        # same-panel included.
+        outer, header_row, self.title_label = start_block_chrome(self, "files", "import_panel_title")
+        header_row.addStretch(1)
+        self.body, root, self.collapse_button, self.close_button = finish_block_chrome(outer, header_row)
 
         self.channel_labels: list[QLabel] = []
         self.filename_labels: list[ElidingLabel] = []
@@ -89,6 +100,7 @@ class ImportPanel(QGroupBox):
             btn.blockSignals(False)
 
     def retranslate_ui(self) -> None:
+        self.title_label.setText(i18n.tr("import_panel_title"))
         for i, label in enumerate(("R", "G", "B")):
             self.channel_labels[i].setText(i18n.tr(CHANNEL_KEY[label]) + ":")
             self.load_buttons[i].setText(i18n.tr("load_image_button"))

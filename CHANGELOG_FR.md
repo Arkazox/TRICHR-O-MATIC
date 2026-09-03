@@ -22,18 +22,61 @@ pas seulement d'historique.
 ## Non publié
 
 ### Tâches restantes pour les prochaines versions
-- **v0.4.5** (prochaine version) : un **outil de courbes** - pas encore
-  spécifié.
-- **v0.5.0** : un **outil de scan de négatifs** avec un mode trichromie -
-  sa propre fenêtre outil, accessible via un bouton de la barre d'outils
-  et un raccourci clavier. Prévu pour être développé d'abord comme un
-  module autonome, testé séparément, puis intégré à l'application
-  principale.
+- **v0.5.0** (prochaine version) : un **outil de courbes**, ainsi que
+  l'intégration de l'**outil de scan de négatifs** autonome (capture via
+  câble déjà testée sur un boîtier réel) dans la barre d'outils de
+  l'application principale.
 - **v0.6.0** : un **panneau de métadonnées** - pas encore spécifié.
 - Quelques anciennes fenêtres d'erreur (erreur de chargement d'image,
   échec de l'alignement automatique, erreurs de chargement de session)
   utilisent encore l'ancien style de fenêtre système et n'ont pas encore
   été basculées vers le style d'alerte propre à l'application.
+
+---
+
+## v0.4.5 — 2026-09-04
+
+### Ajouté
+- **Disposition entièrement personnalisable** : chaque panneau - Fichiers,
+  Canaux RVB, Histogramme, Lumière, Couleur, Recadrage et Scan - est
+  désormais un bloc indépendant. Glissez un bloc par sa poignée pour le
+  réordonner, le déplacer vers l'autre panneau latéral, le réduire à son
+  seul en-tête, ou le fermer complètement ; un nouveau menu **Outils**
+  liste tous les blocs avec une case à cocher pour faire réapparaître
+  ceux qui sont fermés.
+- **Préréglages de disposition** (menu Window ▸ Préréglage de
+  disposition) : enregistrez vos propres arrangements de panneaux sous
+  un nom, puis chargez-les, mettez-les à jour ou supprimez-les à tout
+  moment.
+- **Raccourcis de disposition rapides** : les boutons Trichrome /
+  Correction Couleur / Recadrage / Scan de la barre d'outils (et leurs
+  raccourcis T/E/C/S) basculent désormais directement vers votre propre
+  disposition enregistrée pour cette tâche - un seul est actif à la fois.
+  Ces 4 raccourcis figurent aussi directement dans le menu Window, avec
+  la possibilité de les mettre à jour sur place.
+- **Réinitialiser la disposition** (menu Window) restaure l'arrangement
+  par défaut en un clic.
+- La Correction Globale est désormais scindée en deux panneaux séparés,
+  **Lumière** (exposition, luminosité, contraste, hautes/basses lumières,
+  points noir/blanc, gamma, et Négatif) et **Couleur** (température,
+  teinte, saturation, pipette de balance des blancs) - chacun peut être
+  placé indépendamment d'un côté ou de l'autre de l'écran.
+
+### Modifié
+- Le mode actif de l'outil de recadrage est désormais un bouton dédié
+  dans son propre panneau, indépendant du fait que le panneau soit
+  simplement visible - il ne s'active/désactive plus de façon inattendue
+  lorsque vous réorganisez votre disposition. Échap ne fait plus que
+  quitter le mode recadrage sans changer votre disposition ; passer à une
+  autre disposition enregistrée désactive automatiquement le mode
+  recadrage, et activer la disposition Recadrage le réactive.
+- « Canaux Indépendants » renommé en **Canaux RVB**.
+- En-têtes de bloc plus compacts et cohérents dans toute l'application,
+  avec des tailles d'icônes harmonisées.
+
+### Retiré
+- Le bouton Copier du panneau Recadrage (redondant avec ⌘C / le Copier
+  et le Coller le recadrage du bandeau de vignettes).
 
 ---
 

@@ -9,15 +9,14 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel,
-    QVBoxLayout, QWidget,
+    QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QWidget,
 )
 
 from .. import i18n
+from .block_header_bar import finish_block_chrome, start_block_chrome
 from .controls import SliderSpin
 from .svg_icons import (
     HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE,
-    HEADER_RESET_BTN_SIZE, HEADER_RESET_ICON_SIZE,
     SvgCheckableToolButton, SvgIconLabel, SvgToolButton,
 )
 
@@ -46,11 +45,12 @@ _GRID_ICONS = {
 }
 _MIRROR_BTN_SIZE = (34, 30)
 _MIRROR_ICON_SIZE = 20
-# Reset matches Global Color Correction's Reset exactly (same shared
-# constants); Copy and Invert Orientation are the smaller "companion" size,
-# mirroring how that panel's warning glyph stays smaller next to its Reset -
-# together this keeps both panels' header rows the same width/shape so
-# nothing shifts when switching tools.
+# Every block-header action button (Reset, Copy, Invert Orientation, and
+# every other block's own Reset/eyedropper/Negative) shares this one size
+# now (2026-09-04: "applique la même taille à toutes les icones des blocs
+# outils" - the user specifically liked the histogram block's button size,
+# which is what this constant already was) - keeps every block's header
+# row visually consistent and, not incidentally, narrower.
 _HEADER_BTN_SIZE = HEADER_COMPANION_BTN_SIZE
 _HEADER_ICON_SIZE = HEADER_COMPANION_ICON_SIZE
 
@@ -59,27 +59,31 @@ class CropPanel(QGroupBox):
     settings_changed = Signal()  # straighten/mirror/grid/aspect ratio - applies immediately
     orientation_invert_requested = Signal()
     reset_requested = Signal()
-    copy_requested = Signal()
+    activate_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
         self._portrait = False  # last-known crop.aspect_portrait, for the ratio icon's rotation
 
-        header_row = QHBoxLayout()
-        self.title_label = QLabel()
-        self.title_label.setStyleSheet("font-weight: bold;")
-        header_row.addWidget(self.title_label)
+        outer, header_row, self.title_label = start_block_chrome(self, "crop", "crop_group_title")
         header_row.addStretch(1)
+        # Activates/deactivates "active crop mode" (the interactive
+        # draggable overlay on the canvas) - added 2026-09-04, left of
+        # Reset so Reset stays the header's right-most action, matching
+        # every other block's own header order (title, [action buttons],
+        # Reset). Same icon as the top toolbar's "Layout - Crop" button,
+        # since it represents the same concept (entering crop mode), just
+        # reachable from inside the panel now that Crop block visibility
+        # alone no longer implies active crop mode.
+        self.activate_button = SvgCheckableToolButton(
+            "Crop/crop.svg", size=_HEADER_BTN_SIZE, icon_size=_HEADER_ICON_SIZE)
+        self.activate_button.toggled.connect(self.activate_toggled.emit)
+        header_row.addWidget(self.activate_button)
         self.reset_button = SvgToolButton(
-            "General/Reset.svg", size=HEADER_RESET_BTN_SIZE, icon_size=HEADER_RESET_ICON_SIZE)
+            "General/Reset.svg", size=_HEADER_BTN_SIZE, icon_size=_HEADER_ICON_SIZE)
         self.reset_button.clicked.connect(self.reset_requested.emit)
         header_row.addWidget(self.reset_button)
-        self.copy_button = SvgToolButton(
-            "General/copy.svg", size=_HEADER_BTN_SIZE, icon_size=_HEADER_ICON_SIZE)
-        self.copy_button.clicked.connect(self.copy_requested.emit)
-        header_row.addWidget(self.copy_button)
-        layout.addLayout(header_row)
+        self.body, layout, self.collapse_button, self.close_button = finish_block_chrome(outer, header_row)
 
         ratio_row = QHBoxLayout()
         self.aspect_ratio_icon = SvgIconLabel(_RATIO_ICONS["original"])
@@ -165,6 +169,16 @@ class CropPanel(QGroupBox):
     def grid_mode(self) -> str:
         return _GRID_MODES[self.grid_combo.currentIndex()]
 
+    def set_active(self, active: bool) -> None:
+        """Syncs the activate button's checked state without re-emitting
+        activate_toggled - called from MainWindow._set_crop_active(),
+        the single owner of whether active crop mode is actually on,
+        whenever something other than a direct click on this button
+        changed it (Escape, Enter-to-apply, a layout switch)."""
+        self.activate_button.blockSignals(True)
+        self.activate_button.setChecked(active)
+        self.activate_button.blockSignals(False)
+
     # -- writing settings (e.g. from a freshly-activated photo) ---------
     def set_from_crop(self, crop) -> None:
         self.aspect_ratio_combo.blockSignals(True)
@@ -230,7 +244,7 @@ class CropPanel(QGroupBox):
     def retranslate_ui(self) -> None:
         self.title_label.setText(i18n.tr("crop_group_title"))
         self.reset_button.setToolTip(i18n.tr("crop_reset_tooltip"))
-        self.copy_button.setToolTip(i18n.tr("crop_copy_tooltip"))
+        self.activate_button.setToolTip(i18n.tr("crop_activate_tooltip"))
         self.aspect_ratio_label.setText(i18n.tr("crop_aspect_ratio_label"))
         current = self.aspect_ratio_combo.currentIndex()
         self.aspect_ratio_combo.blockSignals(True)
