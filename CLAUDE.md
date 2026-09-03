@@ -20,6 +20,23 @@ Version string and icon live in `trichrome.spec` (`CFBundleShortVersionString`,
 `icon="resources/icon.icns"`). Bump the version there before a release build;
 don't touch the icon path unless the user explicitly asks for a new icon.
 
+**`build_mac.sh` resets the developer machine's remembered session on every
+build (added 2026-09-04)**, right after the PyInstaller build and changelog
+PDF regen: a small inline Python snippet clears `last_session_file_path`
+and the legacy `session_items` QSettings array/`session_current_index`
+(the exact keys `_restore_session`/`_legacy_restore_session` read at
+launch - see the session-persistence architecture note above) in the real
+`TrichromeMaker`/`TrichromeMaker` domain. This is deliberately narrow -
+only session/photo-import state is cleared; layout presets, language, and
+window/block layout (all in the same QSettings domain) are untouched.
+**Why**: requested so testing a freshly built version always starts from
+a genuine empty state (must explicitly Open/New Session) instead of
+silently reopening whatever session/photos happened to be open on this
+Mac from the previous build - a fresh install on another machine would
+already behave this way naturally (QSettings is per-user, never bundled
+into the `.app`), this just reproduces that same "fresh" starting point
+on the dev machine too, on every build.
+
 ## Terminology (user's vocabulary, agreed 2026-09-03)
 
 The user refers to UI regions with specific French terms - use this mapping
@@ -1458,20 +1475,43 @@ identifiers:
   - File menu's Import item reworded "Import…" → **"Import Images…"**
     (`menu_batch`) - same wording change applied to the toolbar's own
     `import_toolbar_tooltip` for consistency, since they're the same action.
-  - **Language menu relocated into the native macOS Application menu**
-    (the one always named after the app, leftmost in the bar) instead of
-    staying its own top-level entry - `self.language_menu.menuAction()
-    .setMenuRole(QAction.ApplicationSpecificRole)`, the same `menuRole`
-    mechanism `quit_action` already used (`QAction.QuitRole`) to get pulled
-    into that same native menu, just applied to a whole submenu's own
-    `menuAction()` instead of one flat action - a standard, documented Qt/
-    Cocoa pattern for this. **Only verifiable by running the real built
-    `.app`** - the native Cocoa menu merge happens entirely outside Qt's own
-    widget tree, so `self.menuBar().actions()` still lists Language as an
-    ordinary top-level entry even after this change when inspected
-    headlessly (confirmed: the role IS set correctly, `.text()`/child
-    actions are all still intact - what can't be confirmed here is whether
-    it actually *lands* inside the Cocoa Application menu on a real launch).
+  - **Language menu relocated into the native macOS Application menu -
+    attempted, then reverted 2026-09-04 once the user confirmed on real
+    hardware it didn't actually work.** The original attempt:
+    `self.language_menu.menuAction().setMenuRole(QAction.ApplicationSpecificRole)`,
+    the same `menuRole` mechanism `quit_action` uses (`QAction.QuitRole`)
+    to get pulled into the native Application menu, just applied to a
+    whole submenu's own `menuAction()` instead of one flat action. This
+    was flagged at the time as "only verifiable by running the real built
+    `.app`" - and once actually tested, it didn't relocate the submenu at
+    all. Root cause (not chased further empirically, but consistent with
+    Qt's own Cocoa integration): `menuRole` reliably relocates flat leaf
+    `QAction`s (the well-known About/Preferences/Quit singletons), not a
+    `QMenu`'s own `menuAction()` with children - there's no supported way
+    to move a whole submenu into the auto-merged Application menu this
+    way. **Fix: moved Language into the Help menu instead** (`Help ▸
+    Language`, `self.language_menu = self.help_menu.addMenu(...)`, same
+    English/Français `QActionGroup` as before) - ordinary `QMenu` nesting,
+    the same mechanism every other menu in this app already relies on
+    (Tools, Window, the Layout Preset submenu, ...), so no further native-
+    menu gamble. The user's own explicit fallback instruction ("à défaut,
+    ajoute l'option langues dans le menu Help") is what settled this
+    without attempting a third variation blind.
+  - **Real bug caught while touching this area**: `self.help_menu` was
+    reused as the attribute name for **two different `QMenu` objects** -
+    the real menu-bar Help menu (built in `_build_ui`) and the toolbar
+    "?" button's popup dropdown (built later in `_build_top_toolbar`,
+    silently overwriting the same attribute). Since Python name lookup
+    just follows whichever assignment ran last, `self.help_menu` ended up
+    pointing at the toolbar popup for the rest of the object's life -
+    `retranslate_ui()`'s `self.help_menu.setTitle(i18n.tr("menu_help"))`
+    call was therefore retitling the *toolbar popup* (a harmless no-op
+    visually, since a popup `QMenu` has no visible title bar of its own)
+    instead of the real Help menu-bar entry, which then never actually
+    got retranslated on a language switch. Fixed by renaming the toolbar
+    popup's attribute to `self.help_toolbar_menu` - confirmed headlessly
+    that the real Help menu bar title now correctly reads "Aide" after
+    switching to French, which it did not before this fix.
   - **New "Tools" menu** (`self.tools_menu`, positioned where Language used
     to sit in the bar), listing the same 4 tool-switcher buttons as the top
     toolbar's center cluster: Trichrome, Global Correction, Crop, Scan -
@@ -2948,9 +2988,16 @@ build** (e.g. "compile this as vX.Y.Z"), *before* touching
 4. Commit the changes (git repo at the project root, GitHub remote
    `origin` since 2026-09-03) - a version-bump/build request implicitly
    includes committing afterward, no need to ask each time. Message
-   convention: `"vX.Y.Z"` as the summary line. **Commit only - do not
-   `git push` unless the user explicitly asks for that too** in the same
-   or a later message; pushing is a separate, explicit action.
+   convention: `"vX.Y.Z"` as the summary line.
+5. **Push to `origin` right after committing** (2026-09-04: "je veux que
+   tu push pour chaque nouvelle version" - widened from the original
+   commit-only policy). This auto-push authorization is scoped to
+   version-bump/release commits specifically, not a blanket standing
+   push authorization for any other commit. If `git push` fails with a
+   credential error on the HTTPS remote (`could not read Username...
+   Device not configured`), run `gh auth setup-git` first (wires git's
+   credential helper to the already-authenticated `gh` CLI) and retry -
+   confirmed working.
 
 **Unlike `CLAUDE.md` (updated after nearly every substantial change), do
 NOT touch these two files incrementally after each feature/fix - that was

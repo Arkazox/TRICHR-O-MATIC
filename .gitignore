@@ -12,3 +12,6 @@ dist/
 
 # macOS
 .DS_Store
+
+# Personal test resources - not linked to the code, kept out of the repo
+resources/TEST_FILES/

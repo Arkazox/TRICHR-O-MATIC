@@ -73,6 +73,12 @@ pas seulement d'historique.
 - « Canaux Indépendants » renommé en **Canaux RVB**.
 - En-têtes de bloc plus compacts et cohérents dans toute l'application,
   avec des tailles d'icônes harmonisées.
+- Le choix de la langue a été déplacé dans le menu **Aide** (Aide ▸
+  Langue).
+- Une version nouvellement installée ou mise à jour ne rouvre plus la
+  session qui était ouverte auparavant - le premier lancement démarre
+  toujours à vide, il faut donc ouvrir une session existante ou en
+  créer une nouvelle.
 
 ### Retiré
 - Le bouton Copier du panneau Recadrage (redondant avec ⌘C / le Copier

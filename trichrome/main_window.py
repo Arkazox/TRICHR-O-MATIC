@@ -435,30 +435,6 @@ class MainWindow(QMainWindow):
             lambda: self.delete_batch_items(self.carousel.selected_indices()))
         self.edit_menu.addAction(self.delete_selection_action)
 
-        self.language_menu = self.menuBar().addMenu(i18n.tr("menu_language"))
-        # Relocated into the native macOS Application menu (the one always
-        # named after the app, at the very left) instead of staying its own
-        # top-level entry - the same menuRole mechanism quit_action already
-        # uses above, just applied to a whole submenu rather than one leaf
-        # action (a standard, documented Qt/Cocoa pattern: a QMenu's own
-        # menuAction() can carry a role too, and Qt's Cocoa integration
-        # relocates the whole submenu, not just flat actions). This can only
-        # be verified by actually running the built .app - the native menu
-        # merge is a Cocoa-layer behavior invisible to an offscreen/headless
-        # Qt session.
-        self.language_menu.menuAction().setMenuRole(QAction.ApplicationSpecificRole)
-        lang_group = QActionGroup(self)
-        lang_group.setExclusive(True)
-        act_en = QAction("English", self, checkable=True)
-        act_fr = QAction("Français", self, checkable=True)
-        act_en.setChecked(i18n.current_language() == "en")
-        act_fr.setChecked(i18n.current_language() == "fr")
-        act_en.triggered.connect(lambda: self.change_language("en"))
-        act_fr.triggered.connect(lambda: self.change_language("fr"))
-        for act in (act_en, act_fr):
-            lang_group.addAction(act)
-            self.language_menu.addAction(act)
-
         self.tools_menu = self.menuBar().addMenu(i18n.tr("menu_tools"))
         # 2026-09-04: lists every block individually (Files/Channels/
         # Histogram/Light/Color/Crop/Scan), not the old 4 tool-switcher
@@ -570,6 +546,30 @@ class MainWindow(QMainWindow):
         self.shortcuts_action = QAction(i18n.tr("menu_shortcuts_action"), self)
         self.shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
         self.help_menu.addAction(self.shortcuts_action)
+        self.help_menu.addSeparator()
+
+        # Language selection, in the Help menu (2026-09-04) - moved here
+        # after relocating it into the native macOS Application menu (via
+        # menuAction().setMenuRole(QAction.ApplicationSpecificRole), see
+        # git history) turned out not to actually work in the real built
+        # .app, confirmed by the user - Qt's Cocoa menu-role merging only
+        # reliably relocates flat leaf QActions (About/Preferences/Quit-
+        # style singletons), not a whole submenu with children. Rather
+        # than gamble on a second unverifiable native-menu trick, this
+        # uses the same ordinary QMenu nesting every other menu in the app
+        # already relies on (Tools, Window, ...), which is known to work.
+        self.language_menu = self.help_menu.addMenu(i18n.tr("menu_language"))
+        lang_group = QActionGroup(self)
+        lang_group.setExclusive(True)
+        act_en = QAction("English", self, checkable=True)
+        act_fr = QAction("Français", self, checkable=True)
+        act_en.setChecked(i18n.current_language() == "en")
+        act_fr.setChecked(i18n.current_language() == "fr")
+        act_en.triggered.connect(lambda: self.change_language("en"))
+        act_fr.triggered.connect(lambda: self.change_language("fr"))
+        for act in (act_en, act_fr):
+            lang_group.addAction(act)
+            self.language_menu.addAction(act)
 
         fullscreen_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         fullscreen_shortcut.activated.connect(self.toggle_focus_mode)
@@ -928,16 +928,25 @@ class MainWindow(QMainWindow):
 
         # "?" button: a menu rather than a single action, since it now
         # covers both the quick-start guide and the shortcuts reference.
+        # A distinct attribute name from self.help_menu (the real menu-bar
+        # Help menu, built earlier in _build_ui) - the two used to share
+        # the name "help_menu", silently reassigning it here and leaving
+        # retranslate_ui's self.help_menu.setTitle(...) call retitling
+        # this popup instead of the real menu-bar entry (a harmless no-op,
+        # since a popup QMenu has no visible title bar of its own, but the
+        # real Help menu-bar label then never actually got retranslated on
+        # a language switch) - fixed 2026-09-04 while touching this area
+        # for the Language-menu relocation.
         self.help_toolbar_btn = SvgToolButton("Toolbar/help.svg", **btn_kwargs)
         self.help_toolbar_btn.setPopupMode(QToolButton.InstantPopup)
-        self.help_menu = QMenu(self.help_toolbar_btn)
+        self.help_toolbar_menu = QMenu(self.help_toolbar_btn)
         self.quickstart_toolbar_action = QAction(self)
         self.quickstart_toolbar_action.triggered.connect(self.show_quickstart_dialog)
-        self.help_menu.addAction(self.quickstart_toolbar_action)
+        self.help_toolbar_menu.addAction(self.quickstart_toolbar_action)
         self.shortcuts_toolbar_action = QAction(self)
         self.shortcuts_toolbar_action.triggered.connect(self.show_shortcuts_dialog)
-        self.help_menu.addAction(self.shortcuts_toolbar_action)
-        self.help_toolbar_btn.setMenu(self.help_menu)
+        self.help_toolbar_menu.addAction(self.shortcuts_toolbar_action)
+        self.help_toolbar_btn.setMenu(self.help_toolbar_menu)
 
         # Default-layout quick-switch buttons (Trichrome/Color Correction/
         # Crop/Scan), re-purposed 2026-09-04 - now that layout is fully

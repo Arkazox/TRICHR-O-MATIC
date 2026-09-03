@@ -63,6 +63,10 @@ next — so it doubles as a short roadmap snapshot, not just a history.
 - "Independent Channels" renamed to **RGB Channels**.
 - Smaller, more consistent block headers throughout, with matching icon
   sizes.
+- Language selection moved to the **Help** menu (Help ▸ Language).
+- A newly installed or updated version no longer reopens whatever session
+  was last open - the first launch always starts empty, so you'll need to
+  open an existing session or start a new one.
 
 ### Removed
 - The Crop panel's own Copy button (redundant with ⌘C / the filmstrip's
