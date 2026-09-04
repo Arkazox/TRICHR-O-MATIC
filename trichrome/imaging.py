@@ -183,6 +183,38 @@ def apply_invert(image: np.ndarray, invert: bool) -> np.ndarray:
     return (1.0 - image) if invert else image
 
 
+def apply_film_base_correction(
+    image: np.ndarray, film_base: Optional[dict], channel: Optional[str] = None,
+) -> np.ndarray:
+    """Normalizes a raw scan against a sampled film-base reference, applied
+    at load time - before invert, since invert (1 - x) does not preserve a
+    multiplicative per-channel bias linearly (a fixed base/mask tint, like
+    color negative's orange mask, becomes tone-dependent after inversion
+    rather than a uniform cast - see CLAUDE.md's "Sample Film Base"
+    section for the full reasoning). ``channel`` ("R"/"G"/"B") picks one
+    key out of ``film_base`` to correct a single-channel grayscale
+    ``image`` (one trichrome ChannelLayer's own raw density); leave it
+    ``None`` to correct a full color ``image`` (Normal mode), where each
+    of its 3 channels is normalized against its own matching key. A no-op
+    whenever ``film_base`` is falsy or a needed key is missing/non-positive
+    (an unaffected axis stays exactly as loaded, never zeroed out)."""
+    if not film_base:
+        return image
+    if channel is not None:
+        base_value = film_base.get(channel)
+        if not base_value or base_value <= 1e-6:
+            return image
+        return np.clip(image / base_value, 0.0, 1.0)
+    r, g, b = film_base.get("R"), film_base.get("G"), film_base.get("B")
+    if not (r and g and b and r > 1e-6 and g > 1e-6 and b > 1e-6):
+        return image
+    out = image.copy()
+    out[..., 0] = np.clip(out[..., 0] / r, 0.0, 1.0)
+    out[..., 1] = np.clip(out[..., 1] / g, 0.0, 1.0)
+    out[..., 2] = np.clip(out[..., 2] / b, 0.0, 1.0)
+    return out
+
+
 def apply_zone_adjustment(image: np.ndarray, shadows: float, highlights: float) -> np.ndarray:
     """Brighten/darken shadows and highlights independently, Lightroom-style.
 
@@ -283,11 +315,132 @@ def solve_white_balance(r: float, g: float, b: float) -> Optional[tuple[float, f
     return t * 100.0, m * 100.0
 
 
-def apply_global_correction(
+_IDENTITY_CURVE = ((0.0, 0.0), (1.0, 1.0))
+
+
+def evaluate_curve_lut(points, size: int = 256) -> np.ndarray:
+    """Builds a `size`-entry lookup table (x sampled evenly over [0,1]) from
+    a tone curve's sparse control points, via a monotone cubic Hermite
+    spline (Fritsch-Carlson correction) - the same smooth, overshoot-free
+    curve shape a classic Photoshop/Lightroom Curves tool produces, as
+    opposed to a plain piecewise-linear join between points. `points` need
+    not be pre-sorted; fewer than 2 points degenerates to the identity."""
+    pts = sorted(points, key=lambda p: p[0])
+    xs = np.array([p[0] for p in pts], dtype=np.float64)
+    ys = np.array([p[1] for p in pts], dtype=np.float64)
+    n = len(xs)
+    sample_x = np.linspace(0.0, 1.0, size)
+    if n < 2:
+        return np.clip(sample_x, 0.0, 1.0).astype(np.float32)
+
+    dx = np.diff(xs)
+    dx = np.where(np.abs(dx) < 1e-9, 1e-9, dx)
+    delta = np.diff(ys) / dx  # secant slope of each interval, length n-1
+
+    m = np.empty(n, dtype=np.float64)
+    if n == 2:
+        m[0] = m[1] = delta[0]
+    else:
+        m[0] = delta[0]
+        m[-1] = delta[-1]
+        m[1:-1] = (delta[:-1] + delta[1:]) / 2.0
+        # Flatten the tangent at any interior point where the two adjacent
+        # secants disagree in sign (a local min/max at that control point) -
+        # part of the standard Fritsch-Carlson monotonicity guarantee.
+        flat = delta[:-1] * delta[1:] <= 0.0
+        m[1:-1][flat] = 0.0
+    for k in range(n - 1):
+        if delta[k] == 0.0:
+            m[k] = 0.0
+            m[k + 1] = 0.0
+
+    # Rescale each interval's pair of tangents so the interpolated segment
+    # can't overshoot past its own endpoints - what actually prevents the
+    # classic cubic-spline ringing near a sharply-dragged point.
+    for k in range(n - 1):
+        d = delta[k]
+        if d == 0.0:
+            continue
+        alpha, beta = m[k] / d, m[k + 1] / d
+        s = alpha * alpha + beta * beta
+        if s > 9.0:
+            tau = 3.0 / np.sqrt(s)
+            m[k] = tau * alpha * d
+            m[k + 1] = tau * beta * d
+
+    idx = np.clip(np.searchsorted(xs, sample_x, side="right") - 1, 0, n - 2)
+    x0, x1 = xs[idx], xs[idx + 1]
+    y0, y1 = ys[idx], ys[idx + 1]
+    m0, m1 = m[idx], m[idx + 1]
+    seg = np.where(np.abs(x1 - x0) < 1e-9, 1e-9, x1 - x0)
+    t = (sample_x - x0) / seg
+    t2, t3 = t * t, t * t * t
+    h00 = 2 * t3 - 3 * t2 + 1
+    h10 = t3 - 2 * t2 + t
+    h01 = -2 * t3 + 3 * t2
+    h11 = t3 - t2
+    sample_y = h00 * y0 + h10 * seg * m0 + h01 * y1 + h11 * seg * m1
+    # Flat outside the control points' own x-range, not spline
+    # extrapolation - the endpoints can now be dragged inward (2026-09-04),
+    # and a real Curves tool clips input tones beyond a moved endpoint to a
+    # constant output (the classic "black point"/"white point" behavior),
+    # rather than extending the curve's shape unpredictably past its own
+    # defined range.
+    sample_y = np.where(sample_x <= xs[0], ys[0], sample_y)
+    sample_y = np.where(sample_x >= xs[-1], ys[-1], sample_y)
+    return np.clip(sample_y, 0.0, 1.0).astype(np.float32)
+
+
+def _is_identity_curve(points) -> bool:
+    return len(points) == 2 and tuple(points[0]) == _IDENTITY_CURVE[0] and tuple(points[1]) == _IDENTITY_CURVE[1]
+
+
+def apply_curve(image: np.ndarray, points) -> np.ndarray:
+    """Remaps `image` (float array, any shape, values roughly in [0,1])
+    through a single tone curve defined by sparse control points -
+    identical mapping applied to every element, so for an RGB array this
+    is a master/luminosity curve (see apply_curves for independent R/G/B
+    curves). A no-op for the default identity curve (skipped entirely
+    rather than running a LUT pass that would just return the input
+    unchanged)."""
+    if _is_identity_curve(points):
+        return image
+    lut = evaluate_curve_lut(points)
+    lut_x = np.linspace(0.0, 1.0, len(lut))
+    return np.interp(np.clip(image, 0.0, 1.0), lut_x, lut).astype(np.float32)
+
+
+def apply_curves(rgb: np.ndarray, curves: dict) -> np.ndarray:
+    """Applies a full Curves correction (the "Y" master curve, then each of
+    "R"/"G"/"B"'s own independent curve on top) to a composed RGB image -
+    the same channel-selector composition a classic Photoshop Curves
+    dialog uses. `curves` maps a subset of "Y"/"R"/"G"/"B" to a points
+    list; a missing key means identity for that channel. Never mutates
+    `rgb` in place, and only rebuilds the array via np.stack if at least
+    one channel curve actually did something (apply_curve's own identity
+    fast path means an all-identity `curves` dict is nearly free)."""
+    out = apply_curve(rgb, curves.get("Y", _IDENTITY_CURVE))
+    channels = [out[..., i] for i in range(3)]
+    changed = False
+    for i, ch in enumerate(("R", "G", "B")):
+        remapped = apply_curve(channels[i], curves.get(ch, _IDENTITY_CURVE))
+        if remapped is not channels[i]:
+            channels[i] = remapped
+            changed = True
+    return np.stack(channels, axis=-1) if changed else out
+
+
+def apply_global_correction_before_curves(
     rgb: np.ndarray, black_point: float, white_point: float, gamma: float, exposure: float,
     brightness: float, contrast: float, shadows: float, highlights: float,
     saturation: float, temperature: float, tint: float,
 ) -> np.ndarray:
+    """Everything apply_global_correction does except the final Curves
+    step - factored out (2026-09-04) so a caller can get the exact "input"
+    image the Curves tool's own reference-histogram overlay needs: the
+    pipeline result right before curves apply, which by definition never
+    changes while the user is only editing the curve. See MainWindow.
+    recompute_preview's update_curve_reference parameter."""
     out = apply_tone_curve(
         rgb, black_point, white_point, gamma, exposure, brightness, contrast, shadows, highlights)
     out = apply_white_balance(out, temperature, tint)
@@ -299,6 +452,47 @@ def apply_global_correction(
         out = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
     return np.clip(out, 0.0, 1.0)
+
+
+def apply_global_correction(
+    rgb: np.ndarray, black_point: float, white_point: float, gamma: float, exposure: float,
+    brightness: float, contrast: float, shadows: float, highlights: float,
+    saturation: float, temperature: float, tint: float, curves: dict | None = None,
+) -> np.ndarray:
+    out = apply_global_correction_before_curves(
+        rgb, black_point, white_point, gamma, exposure, brightness, contrast, shadows, highlights,
+        saturation, temperature, tint)
+    # The tone curves are the final creative shaping step, applied last -
+    # after saturation/white balance, on the fully color-corrected image.
+    out = apply_curves(out, curves or {})
+    return np.clip(out, 0.0, 1.0)
+
+
+_LUMA_WEIGHTS = (0.299, 0.587, 0.114)
+
+
+def compute_channel_histograms(rgb_uint8: np.ndarray, valid_mask: np.ndarray | None = None) -> dict[str, np.ndarray]:
+    """256-bin histogram counts (float64) for Y (luma-weighted)/R/G/B from
+    an already-composited uint8 RGB image - shared by HistogramWidget and
+    the Curves tool's own reference-histogram overlay so both compute
+    channel data identically. ``valid_mask`` (same H×W, truthy where a
+    pixel is real photographed content) excludes anything False, same
+    convention as warp_coverage_mask/compose_coverage_mask - a pixel a
+    misaligned channel or Straighten padded with a constant border fill
+    shouldn't read as real clipping."""
+    # round(), not a plain truncating cast: 0.299+0.587+0.114 isn't exactly
+    # 1.0 in floating point, so for R=G=B (e.g. a Solo preview) a plain
+    # astype(uint8) truncates ~25% of gray levels down by one, smearing the
+    # Y curve a bin off from R/G/B where they should exactly coincide.
+    luma = np.round(np.dot(rgb_uint8[..., :3], _LUMA_WEIGHTS)).astype(np.uint8)
+    channel_data = {"Y": luma, "R": rgb_uint8[:, :, 0], "G": rgb_uint8[:, :, 1], "B": rgb_uint8[:, :, 2]}
+    if valid_mask is not None:
+        valid_mask = valid_mask.astype(bool)
+        channel_data = {ch: data[valid_mask] for ch, data in channel_data.items()}
+    return {
+        ch: np.histogram(data, bins=256, range=(0, 255))[0].astype(np.float64)
+        for ch, data in channel_data.items()
+    }
 
 
 def compose_rgb_from_channels(images, geo_params, tone_params, ref_index: int) -> np.ndarray:
@@ -373,7 +567,7 @@ def compose_pre_white_balance_rgb(images, geo_params, tone_params, ref_index: in
     call signature; the saturation/temperature/tint entries are unused."""
     rgb = compose_rgb_from_channels(images, geo_params, tone_params, ref_index)
     (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-     _gsat, _gtemp, _gtint) = global_params
+     _gsat, _gtemp, _gtint, _gcurves) = global_params
     return apply_tone_curve(rgb, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights)
 
 
@@ -386,13 +580,28 @@ def compose_trichrome(images, geo_params, tone_params, ref_index: int, global_pa
     tone_params: list of 3 (black, white, gamma, exposure, brightness,
         contrast, shadows, highlights, invert) tuples.
     global_params: (black, white, gamma, exposure, brightness, contrast,
-        shadows, highlights, saturation, temperature, tint) tuple.
+        shadows, highlights, saturation, temperature, tint, curves) tuple -
+        curves is a {"Y"/"R"/"G"/"B": points} dict, see apply_curves.
     """
     rgb = compose_rgb_from_channels(images, geo_params, tone_params, ref_index)
     (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-     gsat, gtemp, gtint) = global_params
+     gsat, gtemp, gtint, gcurves) = global_params
     return apply_global_correction(
-        rgb, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights, gsat, gtemp, gtint)
+        rgb, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
+        gsat, gtemp, gtint, gcurves)
+
+
+def compose_normal(image: np.ndarray, global_params) -> np.ndarray:
+    """Full pipeline for a Normal-mode single photo (see MainWindow's Files
+    block Normal/Trichrome toggle) - the loaded color image already IS the
+    final composite, so unlike compose_trichrome there's no warp/recompose
+    stage first; just the same global-correction stage applied on top,
+    taking the identical global_params tuple shape."""
+    (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
+     gsat, gtemp, gtint, gcurves) = global_params
+    return apply_global_correction(
+        image, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
+        gsat, gtemp, gtint, gcurves)
 
 
 def apply_straighten_mirror(rgb: np.ndarray, rotation_deg: float, mirror_h: bool, mirror_v: bool) -> np.ndarray:

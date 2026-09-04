@@ -207,6 +207,7 @@ class ExportDialog(QDialog):
             items=items,
             full_res_loader=mw._full_res_image,
             full_res_params=mw._full_res_params,
+            full_res_color_loader=mw._full_res_color_image,
             output_dir=output_dir,
             suffix=suffix,
             ext=ext,
@@ -227,20 +228,36 @@ class ExportDialog(QDialog):
 
     def _export_current(self, output_dir: str | None, suffix: str, ext: str, bit_depth: int) -> None:
         mw = self.main_window
-        if not all(l.has_image() for l in mw.layers):
-            QMessageBox.warning(self, i18n.tr("export_dialog_title"), i18n.tr("dialog_export_missing"))
-            return
+        is_normal = (0 <= mw.batch_current_index < len(mw.batch_items)
+                     and mw.batch_items[mw.batch_current_index].mode == "normal")
         ref = mw._reference_layer()
-        if output_dir is None:
-            output_dir = os.path.dirname(ref.path) if ref.path else ""
-        images = [mw._full_res_image(l) for l in mw.layers]
-        geo_params = [mw._full_res_params(l, ref) for l in mw.layers]
-        tone_params = [(l.black_point, l.white_point, l.gamma, l.exposure, l.brightness, l.contrast,
-                        l.shadows, l.highlights, l.invert) for l in mw.layers]
-        gc = mw.global_corr
-        global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
-                          gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint)
-        rgb = imaging.compose_trichrome(images, geo_params, tone_params, ref.color_index, global_params)
+        if is_normal:
+            if not ref.has_image():
+                QMessageBox.warning(self, i18n.tr("export_dialog_title"), i18n.tr("dialog_export_missing"))
+                return
+            if output_dir is None:
+                output_dir = os.path.dirname(ref.path) if ref.path else ""
+            image = imaging.apply_invert(mw._full_res_color_image(ref), ref.invert)
+            gc = mw.global_corr
+            global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
+                              gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
+                              {ch: tuple(pts) for ch, pts in gc.curves.items()})
+            rgb = imaging.compose_normal(image, global_params)
+        else:
+            if not all(l.has_image() for l in mw.layers):
+                QMessageBox.warning(self, i18n.tr("export_dialog_title"), i18n.tr("dialog_export_missing"))
+                return
+            if output_dir is None:
+                output_dir = os.path.dirname(ref.path) if ref.path else ""
+            images = [mw._full_res_image(l) for l in mw.layers]
+            geo_params = [mw._full_res_params(l, ref) for l in mw.layers]
+            tone_params = [(l.black_point, l.white_point, l.gamma, l.exposure, l.brightness, l.contrast,
+                            l.shadows, l.highlights, l.invert) for l in mw.layers]
+            gc = mw.global_corr
+            global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
+                              gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
+                              {ch: tuple(pts) for ch, pts in gc.curves.items()})
+            rgb = imaging.compose_trichrome(images, geo_params, tone_params, ref.color_index, global_params)
         cr = mw.crop
         rgb = imaging.apply_crop(rgb, cr.rotation, cr.mirror_h, cr.mirror_v, cr.x, cr.y, cr.width, cr.height)
 

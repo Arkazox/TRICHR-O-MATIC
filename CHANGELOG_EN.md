@@ -18,10 +18,36 @@ next — so it doubles as a short roadmap snapshot, not just a history.
 
 ## Unreleased
 
+### Added
+- **Curves**: a new tool block for direct tone-curve editing, with
+  independent Y (master), R, G, and B curves - click the diagonal line to
+  add a point, drag it to reshape the curve (including the two endpoints,
+  for a black/white point), double-click a point to remove it. Hidden by
+  default; show it from the Tools menu or by dragging it into a panel like
+  any other block. The curve line and a translucent histogram behind it
+  both match whichever channel you're editing; that background histogram
+  always shows the image *before* your curve edits, so you can see exactly
+  what you're starting from - the main Histogram panel still shows the
+  final, corrected result.
+- **Scan**: a new tool block for tethered capture from a connected camera -
+  live connect/disconnect status, 3 capture modes (Black & White / Color /
+  Color Reversal), an optional on-screen backlight (including an automatic
+  red/green/blue 3-shot sequence for scanning straight into a trichrome
+  triplet), configurable save location and roll numbering, and an optional
+  processed JPG preview alongside each capture. Hidden by default, like
+  every other block. Importing captured photos directly into the current
+  session isn't built yet - captures are saved to disk and logged in the
+  block's own history for now.
+
+### Changed
+- Both histogram charts (the Histogram panel and the Curves tool's own
+  overlay) now plot bin height on a plain linear scale instead of a
+  compressed one - tall and short peaks read at their real relative sizes.
+  A single very dominant spike (e.g. a large pure-black or pure-white
+  area) can still dwarf the rest of the chart - the small clip-warning
+  bars at the chart's edges are there for exactly that case.
+
 ### Remaining tasks for future versions
-- **v0.5.0** (next): a **Curves tool**, plus integrating the standalone
-  **Negative Scan tool** (tethered capture, already tested against a real
-  camera) into the main app's toolbar.
 - **v0.6.0**: a **metadata panel** - not yet specified.
 - A handful of older error dialogs (image load errors, auto-align
   failure, session-load errors) still use the old system-dialog look and

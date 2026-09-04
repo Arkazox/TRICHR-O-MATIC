@@ -9,8 +9,15 @@ selected) - that selection is what "export selected" uses.
 Cards can also be dragged to reorder the strip; a drop anywhere (including
 past the last card) is resolved to an insertion point and reported upward
 via ``reordered`` as a permutation of the old indices.
+
+The strip is also a drop target for image files dragged in from Finder -
+those are reported upward via ``files_dropped`` (a plain list of local
+paths) rather than handled here, since deciding what to do with them
+(new Normal-mode photos, appended at the end) is MainWindow's job.
 """
 from __future__ import annotations
+
+import os
 
 from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtGui import QDrag, QPixmap
@@ -25,6 +32,17 @@ SELECTED_COLOR = "#8a7a3a"
 DEFAULT_COLOR = "#444"
 
 _REORDER_MIME = "application/x-trichrome-carousel-index"
+# Same set load_image's own file-picker filter accepts.
+_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
+
+
+def _local_image_paths(mime_data: QMimeData) -> list[str]:
+    if not mime_data.hasUrls():
+        return []
+    return [
+        url.toLocalFile() for url in mime_data.urls()
+        if url.isLocalFile() and os.path.splitext(url.toLocalFile())[1].lower() in _IMAGE_EXTENSIONS
+    ]
 
 
 class _CarouselCard(QFrame):
@@ -122,28 +140,35 @@ class _CarouselCard(QFrame):
 
 class _CarouselStrip(QWidget):
     """The row of cards; also the drop target for reordering, spanning the
-    trailing empty space too so dropping past the last card appends it."""
+    trailing empty space too so dropping past the last card appends it -
+    and, separately, for image files dragged in from Finder (see
+    files_dropped)."""
     card_dropped = Signal(int, float)  # from_index, drop x (local coords)
+    files_dropped = Signal(list)  # local file paths
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasFormat(_REORDER_MIME):
+        if event.mimeData().hasFormat(_REORDER_MIME) or _local_image_paths(event.mimeData()):
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event) -> None:
-        if event.mimeData().hasFormat(_REORDER_MIME):
+        if event.mimeData().hasFormat(_REORDER_MIME) or _local_image_paths(event.mimeData()):
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:
-        if not event.mimeData().hasFormat(_REORDER_MIME):
+        if event.mimeData().hasFormat(_REORDER_MIME):
+            from_index = int(bytes(event.mimeData().data(_REORDER_MIME)).decode())
+            pos = event.position() if hasattr(event, "position") else event.pos()
+            self.card_dropped.emit(from_index, float(pos.x()))
+            event.acceptProposedAction()
             return
-        from_index = int(bytes(event.mimeData().data(_REORDER_MIME)).decode())
-        pos = event.position() if hasattr(event, "position") else event.pos()
-        self.card_dropped.emit(from_index, float(pos.x()))
-        event.acceptProposedAction()
+        paths = _local_image_paths(event.mimeData())
+        if paths:
+            self.files_dropped.emit(paths)
+            event.acceptProposedAction()
 
 
 class CarouselWidget(QWidget):
@@ -156,6 +181,7 @@ class CarouselWidget(QWidget):
     reset_requested = Signal(list)
     duplicate_requested = Signal(int)
     reordered = Signal(list)  # order[new_position] = old_index
+    files_dropped = Signal(list)  # local file paths dragged in from Finder
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -184,6 +210,7 @@ class CarouselWidget(QWidget):
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.strip = _CarouselStrip()
         self.strip.card_dropped.connect(self._on_card_dropped)
+        self.strip.files_dropped.connect(self.files_dropped.emit)
         self.strip_layout = QHBoxLayout(self.strip)
         self.strip_layout.setContentsMargins(6, 4, 6, 4)
         self.strip_layout.setSpacing(6)

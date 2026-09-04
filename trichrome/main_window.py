@@ -30,10 +30,11 @@ from .widgets.block_header_bar import (
 )
 from .widgets.canvas_widget import CanvasWidget
 from .widgets.carousel_widget import CarouselWidget
-from .widgets.channel_panel import ChannelPanel
+from .widgets.channel_panel import CHANNEL_COLORS, CHANNEL_KEY, ChannelPanel
 from .widgets.compare_button import CompareButton
 from .widgets.crop_panel import CropPanel
 from .widgets.controls import ArrowKeyScrollArea
+from .widgets.curves_panel import CurvesPanel
 from .widgets.export_dialog import ExportDialog
 from .widgets.filmstrip_toggle_button import FilmstripToggleButton
 from .widgets.fullscreen_toggle_button import FullscreenToggleButton
@@ -43,11 +44,13 @@ from .widgets.alert_dialog import show_alert
 from .widgets.import_panel import ImportPanel
 from .widgets.info_bubble import show_info_bubble
 from .widgets.missing_files_banner import MissingFilesBanner
+from .widgets.mode_switch_dialog import ModeSwitchDialog
 from .widgets.rotate_toggle_button import RotateLeftButton, RotateRightButton
+from .widgets.scan_panel import ScanPanel
 from .widgets.sort_button import SortButton
 from .widgets.svg_icons import (
     HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE,
-    SvgCheckableToolButton, SvgToolButton, SvgTwoStateToggleButton,
+    SvgCheckableToolButton, SvgLetterToggleButton, SvgToolButton, SvgTwoStateToggleButton,
 )
 from .widgets.unsaved_changes_dialog import UnsavedChangesDialog
 
@@ -57,12 +60,68 @@ from .widgets.unsaved_changes_dialog import UnsavedChangesDialog
 # Alignment and invert are deliberately NOT part of this - compare only
 # bypasses color.
 _NEUTRAL_TONE = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-_NEUTRAL_GLOBAL = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+_IDENTITY_CURVE = ((0.0, 0.0), (1.0, 1.0))
+_CURVE_CHANNELS = ("Y", "R", "G", "B")
+_IDENTITY_CURVES = {ch: _IDENTITY_CURVE for ch in _CURVE_CHANNELS}
+_NEUTRAL_GLOBAL = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, _IDENTITY_CURVES)
+
+
+def _decode_curves(raw: str) -> dict[str, list[tuple[float, float]]]:
+    """Parses the Curves tool's QSettings-string encoding (a JSON
+    {"Y"/"R"/"G"/"B": [[x, y], ...]} object, the same json.dumps/loads-a-
+    string convention already used for layout_preset_data_*) back into a
+    {channel: [(x, y), ...]} dict - all-identity for a missing/empty/
+    corrupt value (a session saved before the Curves tool existed, before
+    it went per-channel, or anything unparseable), and any channel key
+    missing from an otherwise-valid value defaults to identity too."""
+    if not raw:
+        return {ch: [tuple(p) for p in _IDENTITY_CURVE] for ch in _CURVE_CHANNELS}
+    try:
+        data = json.loads(raw)
+        return {
+            ch: [(float(x), float(y)) for x, y in data[ch]] if ch in data else [tuple(p) for p in _IDENTITY_CURVE]
+            for ch in _CURVE_CHANNELS
+        }
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {ch: [tuple(p) for p in _IDENTITY_CURVE] for ch in _CURVE_CHANNELS}
+
+
+def _decode_film_base(raw: str) -> dict | None:
+    """Parses a ChannelLayer.film_base value's QSettings-string encoding
+    (the same json.dumps/loads-a-string convention _decode_curves uses) -
+    None for a missing/empty/corrupt value (no correction), unlike
+    _decode_curves' all-identity default, since "no film base sampled" is
+    film_base's own natural default rather than a per-key fallback."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    result = {k: float(v) for k, v in data.items() if k in ("R", "G", "B") and isinstance(v, (int, float))}
+    return result or None
 
 # Matches the "(N)" version suffix Duplicate Selection appends, so
 # duplicating an already-duplicated photo increments N instead of stacking
 # another suffix (e.g. "IMG_1234 (2)" -> "IMG_1234 (3)", not "... (2) (2)").
 _DUPLICATE_SUFFIX_RE = re.compile(r"^(.*) \((\d+)\)$")
+
+# Dragging a curve point emits `changed` on every raw mouse-move (unlike a
+# QSlider, which is quantized to its own step range) - triggering a full
+# recompute_preview() (warp + composite + histogram + canvas repaint) on
+# every single one of those can't keep up with a fast drag, and unlike a
+# 1D slider's value catching up a frame late, a laggy 2D curve point read
+# as visibly janky against the cursor (2026-09-04, "la modification de la
+# courbe n'est pas très fluide"). CurveEditor's own on-screen redraw stays
+# instant/unthrottled (see on_curve_changed) - only the expensive full
+# image recompute is throttled, to at most one per this many ms. 16ms
+# matches a 60Hz display (~62.5fps) - most screens' refresh rate, and the
+# user's own explicit choice (2026-09-04) over the initial, more
+# conservative 40ms guess. Below this, recompute_preview()'s own real
+# cost (not this timer) becomes the limiting factor regardless.
+_CURVE_RECOMPUTE_THROTTLE_MS = 16
 
 # The block system (2026-09-04): every side-panel block (Files/Channels on
 # the left; Histogram/Light/Color/Crop on the right; Scan can live on
@@ -73,17 +132,23 @@ _DUPLICATE_SUFFIX_RE = re.compile(r"^(.*) \((\d+)\)$")
 # Window > Reset Layout restores - matches what the old exclusive
 # tool-switcher used to show by default (Files+Channels left;
 # Histogram+Light+Color right; Crop/Scan hidden until enabled).
-_ALL_BLOCK_KEYS = ("files", "channels", "histogram", "light", "color", "crop", "scan")
+# Order here is what the Tools menu lists top-to-bottom (built by
+# iterating this tuple directly, see _build_ui) - "curves" sits between
+# "light" and "color" specifically for that menu (2026-09-04, the user's
+# own explicit placement); it does NOT affect the actual default panel
+# position, which is _DEFAULT_RIGHT_BLOCK_ORDER's own separate list
+# (curves stays last there, after crop).
+_ALL_BLOCK_KEYS = ("files", "channels", "histogram", "light", "curves", "color", "crop", "scan")
 _DEFAULT_BLOCK_SIDE = {
     "files": "left", "channels": "left", "scan": "left",
-    "histogram": "right", "light": "right", "color": "right", "crop": "right",
+    "histogram": "right", "light": "right", "color": "right", "crop": "right", "curves": "right",
 }
 _DEFAULT_BLOCK_VISIBLE = {
     "files": True, "channels": True, "scan": False,
-    "histogram": True, "light": True, "color": True, "crop": False,
+    "histogram": True, "light": True, "color": True, "crop": False, "curves": False,
 }
 _DEFAULT_LEFT_BLOCK_ORDER = ["files", "channels", "scan"]
-_DEFAULT_RIGHT_BLOCK_ORDER = ["histogram", "light", "color", "crop"]
+_DEFAULT_RIGHT_BLOCK_ORDER = ["histogram", "light", "color", "crop", "curves"]
 
 # Both side panels share one width range (2026-09-04 fix) - they used to
 # differ (left 360-420, right 300-360), which is exactly backwards now
@@ -103,6 +168,7 @@ _BLOCK_MENU_LABEL_KEYS = {
     "color": "global_color_subheader",
     "crop": "menu_tools_crop",
     "scan": "menu_tools_scan",
+    "curves": "curves_group_title",
 }
 
 # The 4 built-in default-layout menu entries (2026-09-04), each backing one
@@ -153,6 +219,11 @@ class MainWindow(QMainWindow):
         self.layers = new_project_layers()
         self.global_corr = GlobalCorrection()
         self.crop = CropSettings()
+        # Normal mode's single-photo holder (see BatchItem.normal_layer in
+        # model.py) - aliased the same way self.layers/global_corr/crop
+        # already are, kept in sync with the active item by
+        # activate_batch_item/_restore_state/_apply_restored_items.
+        self.normal_layer = ChannelLayer(color_index=0, label="Normal")
         self.active_index: int | None = None
         self._is_focus_mode = False
         self._compare_active = False
@@ -162,6 +233,15 @@ class MainWindow(QMainWindow):
         # since the block can now be shown in any custom layout. See
         # _set_crop_active().
         self._crop_active = False
+        # Throttles recompute_preview() during a live curve drag - see
+        # _CURVE_RECOMPUTE_THROTTLE_MS and on_curve_changed(). Always calls
+        # with update_curve_reference=False (via the lambda, since
+        # QTimer.timeout carries no args and would otherwise fall back to
+        # recompute_preview's own True default) - a curve-only recompute
+        # must never refresh the Curves tool's "input" reference histogram.
+        self._curve_recompute_timer = QTimer(self)
+        self._curve_recompute_timer.setSingleShot(True)
+        self._curve_recompute_timer.timeout.connect(lambda: self.recompute_preview(update_curve_reference=False))
         # The exact array last handed to canvas.set_image_rgb/set_image_gray
         # and histogram.set_image - the histogram pixel-pick tool samples
         # from this on hover instead of recomposing anything itself.
@@ -180,7 +260,8 @@ class MainWindow(QMainWindow):
         # item) - the carousel/batch machinery is unified with Simple mode,
         # it just stays hidden while there's only one item to show.
         initial_item = BatchItem(base="", paths={}, layers=self.layers,
-                                  global_corr=self.global_corr, crop=self.crop, selected=True)
+                                  global_corr=self.global_corr, crop=self.crop,
+                                  normal_layer=self.normal_layer, selected=True)
         self.batch_items: list = [initial_item]
         self.batch_current_index: int = 0
         self.sort_mode: str = "import_order"
@@ -290,6 +371,12 @@ class MainWindow(QMainWindow):
 
         self.import_panel.retranslate_ui()
         self.independent_channels_title_label.setText(i18n.tr("independent_channels_group_title"))
+        if self.channels_disabled_label.isVisible():
+            self.channels_disabled_label.setText(i18n.tr("channels_disabled_normal_mode"))
+        self.auto_align_button.setText(i18n.tr("auto_align_button"))
+        self.lock_label.setText(i18n.tr("lock_layer_position_label"))
+        for i, label in enumerate(("R", "G", "B")):
+            self.lock_buttons[i].setToolTip(i18n.tr(CHANNEL_KEY[label]))
         self.reset_all_alignment_button.setToolTip(i18n.tr("reset_all_alignment_tooltip"))
         self.reset_all_color_button.setToolTip(i18n.tr("reset_all_color_tooltip"))
         self.harris_shutter_checkbox.setText(i18n.tr("harris_shutter_checkbox"))
@@ -299,12 +386,10 @@ class MainWindow(QMainWindow):
         self.light_panel.retranslate_ui()
         self.color_panel.retranslate_ui()
         self.crop_panel.retranslate_ui()
+        self.curves_panel.retranslate_ui()
         self.histogram_title_label.setText(i18n.tr("menu_tools_histogram"))
         self.histogram.retranslate_ui()
-        # scan_title_label.setText() was missing entirely (2026-09-04 bug -
-        # the label existed in the header row but was never given text,
-        # so "Scan" never actually appeared).
-        self.scan_title_label.setText(i18n.tr("menu_tools_scan"))
+        self.scan_panel.retranslate_ui()
         self.canvas.retranslate_ui()
         self.carousel.retranslate_ui()
         self.missing_files_banner.retranslate_ui()
@@ -580,8 +665,9 @@ class MainWindow(QMainWindow):
 
         self.import_panel = ImportPanel()
         self.import_panel.load_requested.connect(self.load_image)
-        self.import_panel.auto_align_requested.connect(self.on_auto_align_all)
-        self.import_panel.lock_requested.connect(lambda idx: self.on_reference_toggled(idx, True))
+        self.import_panel.mode_change_requested.connect(self.on_import_mode_change_requested)
+        self.import_panel.load_normal_requested.connect(self.load_normal_image)
+        self.import_panel.add_photo_requested.connect(self.on_add_photo_clicked)
 
         self.channel_panels = [ChannelPanel(layer.label) for layer in self.layers]
         self.independent_channels_group = QGroupBox()
@@ -615,6 +701,48 @@ class MainWindow(QMainWindow):
         # themselves; these 3 inline-built blocks need it set explicitly.
         self.independent_channels_group.body = self.independent_channels_body
 
+        # Lock Layer Position + Auto Align (moved here from the Files block,
+        # 2026-09-04, per the user's explicit request - they only ever
+        # applied to the 3 trichrome channels this block itself controls,
+        # not to Files' own load-image concerns). Auto Align sits below
+        # Lock (2026-09-04 follow-up) since which channel is locked is what
+        # Auto Align aligns the other two against - picking a lock target
+        # naturally reads as the step before running it.
+        lock_row = QHBoxLayout()
+        self.lock_label = QLabel()
+        lock_row.addWidget(self.lock_label)
+        self.lock_buttons: list[SvgLetterToggleButton] = []
+        self.lock_group = QButtonGroup(self)
+        self.lock_group.setExclusive(True)
+        for i, label in enumerate(("R", "G", "B")):
+            color = CHANNEL_COLORS.get(label, "#888")
+            btn = SvgLetterToggleButton(label, color, size=(32, 28), icon_size=22)
+            btn.toggled.connect(lambda checked, idx=i: self.on_reference_toggled(idx, True) if checked else None)
+            self.lock_group.addButton(btn)
+            lock_row.addWidget(btn)
+            self.lock_buttons.append(btn)
+        lock_row.addStretch(1)
+        self.lock_info_button = QToolButton()
+        self.lock_info_button.setText("?")
+        self.lock_info_button.setFixedSize(18, 18)
+        self.lock_info_button.setStyleSheet("QToolButton { border-radius: 9px; }")
+        self.lock_info_button.clicked.connect(
+            lambda: show_info_bubble(i18n.tr("lock_layer_position_info"), self.lock_info_button))
+        lock_row.addWidget(self.lock_info_button)
+        independent_channels_layout.addLayout(lock_row)
+
+        self.auto_align_button = QPushButton()
+        self.auto_align_button.clicked.connect(self.on_auto_align_all)
+        independent_channels_layout.addWidget(self.auto_align_button)
+
+        # Shown instead-of/alongside the (disabled) channel panels while the
+        # active photo is in Normal mode - see _sync_channels_panel_availability.
+        self.channels_disabled_label = QLabel()
+        self.channels_disabled_label.setWordWrap(True)
+        self.channels_disabled_label.setStyleSheet("color: #888; font-size: 11px; font-style: italic;")
+        self.channels_disabled_label.hide()
+        independent_channels_layout.addWidget(self.channels_disabled_label)
+
         for panel in self.channel_panels:
             independent_channels_layout.addWidget(panel)
 
@@ -632,20 +760,12 @@ class MainWindow(QMainWindow):
         harris_shutter_row.addWidget(self.harris_shutter_info_button)
         independent_channels_layout.addLayout(harris_shutter_row)
 
-        # Scan is a first-class block like every other one now (grip/
-        # collapse/close/title), even though its body is still just a
-        # placeholder ahead of the real scan tool integration.
-        self.scan_panel = QGroupBox()
-        scan_outer, scan_header, self.scan_title_label = start_block_chrome(self.scan_panel, "scan", "menu_tools_scan")
-        scan_header.addStretch(1)
-        (self.scan_body, scan_layout, self.scan_collapse_button, self.scan_close_button) = finish_block_chrome(
-            scan_outer, scan_header)
-        self.scan_panel.body = self.scan_body
-        scan_placeholder_label = QLabel(i18n.tr("scan_panel_placeholder"))
-        scan_placeholder_label.setWordWrap(True)
-        scan_placeholder_label.setAlignment(Qt.AlignCenter)
-        scan_placeholder_label.setStyleSheet("color: #888;")
-        scan_layout.addWidget(scan_placeholder_label)
+        # Scan is a first-class block like every other one (grip/collapse/
+        # close/title) - 2026-09-04, the placeholder body that used to sit
+        # here replaced with the real ScanPanel, ported over from the
+        # standalone trichrome.scan_tool package (kept alive there too, for
+        # separate beta testing per the user's explicit request).
+        self.scan_panel = ScanPanel()
 
         # left_container/right_container (below) are BlockReorderZone
         # instances holding every block assigned to that side directly -
@@ -754,6 +874,10 @@ class MainWindow(QMainWindow):
         self.carousel.reset_requested.connect(self.reset_batch_items)
         self.carousel.duplicate_requested.connect(self.duplicate_batch_item)
         self.carousel.reordered.connect(self.on_carousel_reordered)
+        self.carousel.files_dropped.connect(self.on_carousel_files_dropped)
+        self.scan_panel.add_to_session_requested.connect(self.on_scan_add_to_session_requested)
+        self.scan_panel.pick_film_base_from_photo_toggled.connect(self.on_pick_film_base_from_photo_toggled)
+        self.scan_panel.apply_film_base_requested.connect(self.on_apply_film_base_requested)
 
         self.missing_files_banner = MissingFilesBanner()
         self.missing_files_banner.locate_clicked.connect(self.on_locate_missing_files)
@@ -783,6 +907,7 @@ class MainWindow(QMainWindow):
         self.light_panel = LightPanel()
         self.color_panel = ColorPanel()
         self.crop_panel = CropPanel()
+        self.curves_panel = CurvesPanel()
 
         self.right_container = BlockReorderZone()
         self.right_layout = QVBoxLayout(self.right_container)
@@ -829,6 +954,7 @@ class MainWindow(QMainWindow):
             "color": self.color_panel,
             "crop": self.crop_panel,
             "scan": self.scan_panel,
+            "curves": self.curves_panel,
         }
         self.block_collapse_buttons: dict[str, SvgToolButton] = {
             "files": self.import_panel.collapse_button,
@@ -837,7 +963,8 @@ class MainWindow(QMainWindow):
             "light": self.light_panel.collapse_button,
             "color": self.color_panel.collapse_button,
             "crop": self.crop_panel.collapse_button,
-            "scan": self.scan_collapse_button,
+            "scan": self.scan_panel.collapse_button,
+            "curves": self.curves_panel.collapse_button,
         }
         self.block_close_buttons: dict[str, SvgToolButton] = {
             "files": self.import_panel.close_button,
@@ -846,7 +973,8 @@ class MainWindow(QMainWindow):
             "light": self.light_panel.close_button,
             "color": self.color_panel.close_button,
             "crop": self.crop_panel.close_button,
-            "scan": self.scan_close_button,
+            "scan": self.scan_panel.close_button,
+            "curves": self.curves_panel.close_button,
         }
         for key, btn in self.block_collapse_buttons.items():
             btn.clicked.connect(lambda _checked=False, k=key: self._toggle_block_collapsed(k))
@@ -1354,6 +1482,7 @@ class MainWindow(QMainWindow):
         self.color_panel.reset_requested.connect(self.on_reset_white_balance)
         self.color_panel.pick_white_balance_toggled.connect(self.on_pick_white_balance_toggled)
         self.canvas.white_balance_pick_requested.connect(self.on_white_balance_picked)
+        self.canvas.film_base_pick_requested.connect(self.on_film_base_pick_requested)
         self.histogram.pick_toggled.connect(self.canvas.set_histogram_pick_enabled)
         self.canvas.histogram_pixel_hovered.connect(self.on_histogram_pixel_hovered)
         self.canvas.histogram_pixel_left.connect(self.on_histogram_pixel_left)
@@ -1362,6 +1491,9 @@ class MainWindow(QMainWindow):
         self.crop_panel.orientation_invert_requested.connect(self.on_crop_orientation_invert)
         self.crop_panel.reset_requested.connect(self.on_crop_reset)
         self.crop_panel.activate_toggled.connect(self._set_crop_active)
+
+        self.curves_panel.changed.connect(self.on_curve_changed)
+        self.curves_panel.reset_requested.connect(self.on_curve_reset)
 
         self.canvas.drag_delta.connect(self.on_canvas_drag)
         self.canvas.scale_delta.connect(self.on_canvas_scale)
@@ -1444,6 +1576,12 @@ class MainWindow(QMainWindow):
 
         if not text_editing and event.key() == Qt.Key_Colon:
             self.compare_btn.toggle()
+            event.accept()
+            return
+
+        if (not text_editing and event.key() == Qt.Key_W
+                and event.modifiers() == Qt.NoModifier):
+            self.color_panel.pick_white_balance_btn.toggle()
             event.accept()
             return
 
@@ -1723,6 +1861,18 @@ class MainWindow(QMainWindow):
 
     def _refresh_carousel_thumbnail_for_item(self, index: int) -> None:
         item = self.batch_items[index]
+        if item.mode == "normal":
+            nl = item.normal_layer
+            if not nl.has_image():
+                return
+            image = imaging.apply_invert(nl.image_preview, nl.invert)
+            gc = item.global_corr
+            global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
+                              gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
+                              {ch: tuple(pts) for ch, pts in gc.curves.items()})
+            rgb = imaging.compose_normal(image, global_params)
+            self._update_carousel_thumbnail(index, imaging.to_uint8(rgb))
+            return
         ref = next((l for l in item.layers if l.is_reference), item.layers[0])
         if not ref.has_image():
             return
@@ -1732,7 +1882,8 @@ class MainWindow(QMainWindow):
                         l.shadows, l.highlights, l.invert) for l in item.layers]
         gc = item.global_corr
         global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
-                          gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint)
+                          gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
+                          {ch: tuple(pts) for ch, pts in gc.curves.items()})
         rgb = imaging.compose_trichrome(images, geo_params, tone_params, ref.color_index, global_params)
         self._update_carousel_thumbnail(index, imaging.to_uint8(rgb))
 
@@ -1743,6 +1894,351 @@ class MainWindow(QMainWindow):
         qimg = QImage(small.data, w, h, w * 3, QImage.Format_RGB888).copy()
         self.carousel.set_thumbnail(index, QPixmap.fromImage(qimg))
 
+    # ------------------------------------------------------------------
+    # Normal / Trichrome mode (added 2026-09-04) - see BatchItem.mode/
+    # normal_layer in model.py. Trichrome is the app's original behavior (3
+    # R/G/B shots recomposed); Normal is a single already-color photo,
+    # loaded straight through without any warp/alignment/recompose step -
+    # Light/Color/Crop/Curves still apply on top either way (see
+    # recompute_preview's mode branch), only the RGB Channels tool (which
+    # only makes sense for the 3-channel case) becomes unavailable.
+    # ------------------------------------------------------------------
+    def _sync_channels_panel_availability(self, mode: str) -> None:
+        is_normal = mode == "normal"
+        for panel in self.channel_panels:
+            panel.setEnabled(not is_normal)
+        self.harris_shutter_checkbox.setEnabled(not is_normal)
+        self.harris_shutter_info_button.setEnabled(not is_normal)
+        self.auto_align_button.setEnabled(not is_normal)
+        self.lock_label.setEnabled(not is_normal)
+        for btn in self.lock_buttons:
+            btn.setEnabled(not is_normal)
+        self.lock_info_button.setEnabled(not is_normal)
+        self.channels_disabled_label.setText(i18n.tr("channels_disabled_normal_mode") if is_normal else "")
+        self.channels_disabled_label.setVisible(is_normal)
+
+    def _sync_import_and_channels_ui(self) -> None:
+        """Shared tail, called any time the active item's mode or Normal-mode
+        photo might have changed - activate_batch_item, undo/redo, session
+        restore, and the mode-switch handlers below."""
+        if 0 <= self.batch_current_index < len(self.batch_items):
+            mode = self.batch_items[self.batch_current_index].mode
+        else:
+            mode = "trichrome"
+        self.import_panel.set_mode(mode)
+        self.import_panel.set_normal_filename(
+            os.path.basename(self.normal_layer.path) if self.normal_layer.path else "")
+        self._sync_channels_panel_availability(mode)
+
+    def on_import_mode_change_requested(self, mode: str) -> None:
+        if not (0 <= self.batch_current_index < len(self.batch_items)):
+            return
+        item = self.batch_items[self.batch_current_index]
+        if item.mode == mode:
+            return
+
+        if mode == "trichrome":
+            self._switch_to_trichrome_mode(item)
+            return
+
+        available = [l.has_image() for l in item.layers]
+        loaded_count = sum(available)
+        if loaded_count > 1:
+            # Switching away from an already-multi-channel trichrome photo
+            # would leave 1-2 loaded channels invisible/unused - ask which
+            # one to keep editing, per the user's explicit spec, instead of
+            # silently picking one.
+            dialog = ModeSwitchDialog(available, self)
+            dialog.exec()
+            if dialog.chosen_index is None:
+                self.import_panel.set_mode("trichrome")  # revert the toggle, nothing changed
+                return
+            self._switch_to_normal_mode(item, item.layers[dialog.chosen_index])
+        elif loaded_count == 1:
+            self._switch_to_normal_mode(item, item.layers[available.index(True)])
+        else:
+            # Nothing loaded in any channel yet - a trivial mode flip, no
+            # photo to carry over.
+            self.push_undo()
+            item.mode = "normal"
+            self._sync_import_and_channels_ui()
+            self.recompute_preview()
+
+    def _switch_to_normal_mode(self, item, source_layer) -> None:
+        """Reloads ``source_layer``'s own file (always one of item.layers,
+        already has an image - never item.normal_layer itself) as a full-
+        color image into item.normal_layer, and switches item.mode. The 3
+        original channels stay completely untouched, so switching back to
+        Trichrome mode later restores them exactly as they were."""
+        try:
+            full = imaging.load_color(source_layer.path)
+        except Exception as exc:
+            QMessageBox.critical(self, i18n.tr("dialog_load_error_title"),
+                                  i18n.tr("dialog_load_error_text", error=exc))
+            self.import_panel.set_mode("trichrome")
+            return
+        if source_layer.quarter_turns:
+            full = np.ascontiguousarray(np.rot90(full, source_layer.quarter_turns))
+
+        self.push_undo()
+        preview, preview_scale = imaging.make_preview(full)
+        item.mode = "normal"
+        item.normal_layer.path = source_layer.path
+        item.normal_layer.image_full = full
+        item.normal_layer.image_preview = preview
+        item.normal_layer.preview_scale = preview_scale
+        item.normal_layer.quarter_turns = source_layer.quarter_turns
+        item.normal_layer.invert = source_layer.invert
+        self.normal_layer = item.normal_layer
+        self._sync_import_and_channels_ui()
+        self.recompute_preview()
+        self.canvas.zoom_fit()
+
+    def _switch_to_trichrome_mode(self, item) -> None:
+        self.push_undo()
+        item.mode = "trichrome"
+        self._sync_import_and_channels_ui()
+        self.recompute_preview()
+        self.canvas.zoom_fit()
+
+    def load_normal_image(self) -> None:
+        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
+        settings = QSettings(ORG_NAME, APP_NAME)
+        start_dir = settings.value("last_import_dir", "")
+        path, _ = QFileDialog.getOpenFileName(
+            self, i18n.tr("load_normal_dialog_title"), start_dir, name_filter)
+        if not path:
+            return
+        settings.setValue("last_import_dir", os.path.dirname(path))
+        self._load_normal_image_from_path(path)
+
+    def _load_normal_image_from_path(self, path: str, state: dict | None = None) -> bool:
+        """Load ``path`` as the active item's Normal-mode photo. With
+        ``state`` omitted (a fresh, manual load) quarter_turns resets to 0;
+        with ``state`` given (restoring the same file from a previous
+        session) it's restored from it instead - mirrors
+        _load_image_from_path's own ``state`` convention."""
+        try:
+            full = imaging.load_color(path)
+        except Exception as exc:
+            QMessageBox.critical(self, i18n.tr("dialog_load_error_title"),
+                                  i18n.tr("dialog_load_error_text", error=exc))
+            return False
+
+        self.push_undo()
+        film_base = state.get("film_base") if state is not None else None
+        full = imaging.apply_film_base_correction(full, film_base)
+        preview, preview_scale = imaging.make_preview(full)
+        layer = self.normal_layer
+        layer.path = path
+        layer.image_full = full
+        layer.image_preview = preview
+        layer.preview_scale = preview_scale
+        layer.quarter_turns = state.get("quarter_turns", 0) if state is not None else 0
+        layer.film_base = film_base
+        if 0 <= self.batch_current_index < len(self.batch_items):
+            item = self.batch_items[self.batch_current_index]
+            item.base = os.path.splitext(os.path.basename(path))[0]
+            # Defensive, not just relying on the Load button only being
+            # reachable while normal_container is already shown - loading a
+            # Normal photo always implies Normal mode is now active.
+            if item.mode != "normal":
+                item.mode = "normal"
+                self._sync_channels_panel_availability("normal")
+
+        self.import_panel.set_mode("normal")
+        self.import_panel.set_normal_filename(os.path.basename(path))
+        self.recompute_preview()
+        self.canvas.zoom_fit()
+        return True
+
+    def on_add_photo_clicked(self) -> None:
+        """Files block header button ("Add Photo") - appends a brand-new
+        photo to the carousel, rather than loading into the active one.
+        Normal mode: picks one file and adds it directly, already loaded.
+        Trichrome mode: adds an empty trichrome item, ready for its 3 R/G/B
+        channels to be loaded via the Files block as usual."""
+        is_normal = (0 <= self.batch_current_index < len(self.batch_items)
+                     and self.batch_items[self.batch_current_index].mode == "normal")
+        if is_normal:
+            self._add_normal_photo()
+        else:
+            self._add_trichrome_photo()
+
+    def _add_normal_photo(self) -> None:
+        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
+        settings = QSettings(ORG_NAME, APP_NAME)
+        start_dir = settings.value("last_import_dir", "")
+        path, _ = QFileDialog.getOpenFileName(
+            self, i18n.tr("load_normal_dialog_title"), start_dir, name_filter)
+        if not path:
+            return
+        settings.setValue("last_import_dir", os.path.dirname(path))
+        try:
+            new_item = self._build_normal_batch_item(path)
+        except Exception as exc:
+            QMessageBox.critical(self, i18n.tr("dialog_load_error_title"),
+                                  i18n.tr("dialog_load_error_text", error=exc))
+            return
+        self.push_undo()
+        self._append_new_batch_items([new_item])
+
+    def _add_trichrome_photo(self) -> None:
+        new_item = BatchItem(
+            base="", paths={}, layers=new_project_layers(),
+            global_corr=GlobalCorrection(), mode="trichrome", selected=True)
+        self.push_undo()
+        self._append_new_batch_items([new_item])
+
+    def on_carousel_files_dropped(self, paths: list[str]) -> None:
+        """Photos dragged in from Finder directly onto the thumbnail strip -
+        each becomes its own new Normal-mode photo, appended at the end
+        (per the user's explicit spec: dropped files show up at the end of
+        the filmstrip, treated as Normal mode by default). One unreadable
+        file among several doesn't abort the rest."""
+        new_items = []
+        failed = []
+        for path in paths:
+            try:
+                new_items.append(self._build_normal_batch_item(path))
+            except Exception:
+                failed.append(os.path.basename(path))
+        if new_items:
+            self.push_undo()
+            self._append_new_batch_items(new_items)
+        if failed:
+            show_alert(self, i18n.tr("dialog_load_error_title"),
+                       i18n.tr("dialog_drop_photos_failed_text", files=", ".join(failed)))
+
+    def _build_normal_batch_item(self, path: str, film_base: dict | None = None) -> BatchItem:
+        """Loads ``path`` as a fresh Normal-mode BatchItem, ready to append -
+        shared by _add_normal_photo (file picker), on_carousel_files_dropped
+        (drag-and-drop from Finder), and on_scan_add_to_session_requested
+        (Scan tool captures). Raises whatever imaging.load_color raises on
+        a bad/unreadable file - callers decide how to surface that.
+
+        ``film_base`` (optional {"R"/"G"/"B": float}) is stored on the
+        layer *and* applied to the loaded pixel data - see
+        ChannelLayer.film_base's own docstring in model.py for why this
+        needs to be a real, persisted field (not baked in once) rather
+        than a one-shot correction: every later reload of this same photo
+        (a full-res export reload, a session restore, a relink) must keep
+        reapplying it, or the correction would silently vanish there."""
+        full = imaging.load_color(path)
+        full = imaging.apply_film_base_correction(full, film_base)
+        preview, preview_scale = imaging.make_preview(full)
+        normal_layer = ChannelLayer(color_index=0, label="Normal")
+        normal_layer.path = path
+        normal_layer.image_full = full
+        normal_layer.image_preview = preview
+        normal_layer.preview_scale = preview_scale
+        normal_layer.film_base = film_base
+        return BatchItem(
+            base=os.path.splitext(os.path.basename(path))[0], paths={}, layers=new_project_layers(),
+            global_corr=GlobalCorrection(), mode="normal", normal_layer=normal_layer, selected=True)
+
+    def _build_trichrome_batch_item_from_paths(
+        self, paths_by_channel: dict, invert: bool, film_base: dict | None = None,
+    ) -> BatchItem:
+        """Builds a Trichrome-mode BatchItem from 3 already-known R/G/B file
+        paths (currently only the Scan tool's RGB Light triplet - see
+        on_scan_add_to_session_requested) - same load/layer shape as
+        BatchImportWorker._build_item (import_worker.py), minus auto-align:
+        left at identity, same as _add_trichrome_photo's empty item, since
+        the Trichrome Process block's own Auto Align button is right there
+        to run afterward rather than guessing whether the user wants it.
+        ``invert`` is applied uniformly to all 3 layers, same invariant
+        on_invert_toggled maintains elsewhere. Raises whatever
+        imaging.load_grayscale raises on a bad/unreadable file - the caller
+        decides how to surface that.
+
+        ``film_base`` (optional {"R"/"G"/"B": float}, the Scan tool's
+        "Sample Film Base" reference - a per-channel mean of the film's own
+        clear/unexposed base) is stored on each layer *and* divided out of
+        its own channel's raw density *before* invert (see
+        ChannelLayer.film_base's docstring in model.py) - color negative's
+        orange mask biases the raw RGB-Light-scanned channels unevenly
+        (e.g. much less blue transmitted than red/green even at a neutral
+        scene point), and that bias does NOT survive as a simple uniform
+        tint through the 1-x invert (it becomes tone-dependent - see
+        CLAUDE.md's writeup), which is exactly why a post-invert white-
+        balance pick alone can't remove it. Normalizing so the sampled
+        clear-film value maps to 1.0 in every channel *before* inverting is
+        what lets the resulting positive be genuinely neutral in the
+        shadows, not just at whichever one tone was picked."""
+        layers = []
+        for ci, letter in enumerate(CHANNEL_NAMES):
+            full = imaging.load_grayscale(paths_by_channel[letter])
+            full = imaging.apply_film_base_correction(full, film_base, channel=letter)
+            preview, preview_scale = imaging.make_preview(full)
+            layer = ChannelLayer(color_index=ci, label=letter)
+            layer.path = paths_by_channel[letter]
+            layer.image_full = full
+            layer.image_preview = preview
+            layer.preview_scale = preview_scale
+            layer.is_reference = (letter == "G")
+            layer.invert = invert
+            layer.film_base = film_base
+            layers.append(layer)
+        item_base = os.path.splitext(os.path.basename(paths_by_channel["G"]))[0]
+        capture_date = imaging.extract_capture_date(paths_by_channel["G"])
+        return BatchItem(
+            base=item_base, paths=dict(paths_by_channel), layers=layers,
+            global_corr=GlobalCorrection(), mode="trichrome", capture_date=capture_date, selected=True)
+
+    def on_scan_add_to_session_requested(self, groups: list) -> None:
+        """Handles ScanPanel.add_to_session_requested - one entry per
+        capture group (a single External/White-light shot, or a complete
+        RGB Light triplet), each already resolved to real file path(s) and
+        the invert value the Scan tool's own Film mode implies. Mirrors
+        on_carousel_files_dropped's "load what you can, report the rest"
+        convention: one bad file among several doesn't block the others."""
+        new_items = []
+        failed = []
+        for g in groups:
+            label = g["path"] if g["kind"] == "normal" else g["paths"].get("G", "")
+            try:
+                if g["kind"] == "normal":
+                    item = self._build_normal_batch_item(g["path"])
+                    item.normal_layer.invert = g["invert"]
+                else:
+                    item = self._build_trichrome_batch_item_from_paths(
+                        g["paths"], g["invert"], g.get("film_base"))
+                new_items.append(item)
+            except Exception:
+                failed.append(os.path.basename(label) if label else "?")
+        if new_items:
+            self.push_undo()
+            self._append_new_batch_items(new_items)
+        if failed:
+            show_alert(self, i18n.tr("dialog_load_error_title"),
+                       i18n.tr("dialog_drop_photos_failed_text", files=", ".join(failed)))
+
+    def _append_new_batch_items(self, items: list) -> None:
+        """Shared tail for "Add Photo" (both modes) and dropping files onto
+        the carousel - appends ``items`` at the end of batch_items, makes
+        them the sole selection, activates the last one, and refreshes the
+        carousel/thumbnails. Mirrors duplicate_batch_item's own carousel-
+        update sequence."""
+        if not items:
+            return
+        self.batch_items.extend(items)
+        new_index = len(self.batch_items) - 1
+        added_ids = {id(it) for it in items}
+        for it in self.batch_items:
+            it.selected = id(it) in added_ids
+
+        self.carousel.set_items([it.base for it in self.batch_items])
+        for i, it in enumerate(self.batch_items):
+            self.carousel.set_selected(i, it.selected)
+        self.activate_batch_item(new_index)
+        self._update_carousel_visibility(force_show=True)
+        self._refresh_all_carousel_thumbnails()
+        if len(items) == 1:
+            self.statusBar().showMessage(i18n.tr("status_photo_added"), 4000)
+        else:
+            self.statusBar().showMessage(i18n.tr("status_photos_added", n=len(items)), 4000)
+
     def activate_batch_item(self, index: int) -> None:
         if not (0 <= index < len(self.batch_items)):
             return
@@ -1751,10 +2247,13 @@ class MainWindow(QMainWindow):
         self.layers = item.layers
         self.global_corr = item.global_corr
         self.crop = item.crop
+        self.normal_layer = item.normal_layer
         self.active_index = None
         self.carousel.set_current(index)
         self.color_panel.set_pick_white_balance_active(False)
         self.canvas.set_wb_pick_enabled(False)
+        self.scan_panel.set_pick_from_photo_active(False)
+        self.canvas.set_film_base_pick_enabled(False)
 
         for i, panel in enumerate(self.channel_panels):
             panel.active_checkbox.blockSignals(True)
@@ -1769,10 +2268,11 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.light_panel.set_invert(self.layers[0].invert)
+        self.light_panel.set_invert(self._active_invert_state())
         self._sync_harris_shutter_checkbox()
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
+        self._sync_import_and_channels_ui()
         if self.block_visible.get("crop", False):
             self._sync_crop_panel_from_item()
 
@@ -1810,6 +2310,7 @@ class MainWindow(QMainWindow):
             "shadows": gc.shadows,
             "highlights": gc.highlights, "saturation": gc.saturation,
             "temperature": gc.temperature, "tint": gc.tint,
+            "curves": {ch: list(pts) for ch, pts in gc.curves.items()},
         }
         # Crop rides along in every copy (like color, unlike alignment), but
         # deliberately isn't restored by the regular Paste below - only the
@@ -1841,6 +2342,12 @@ class MainWindow(QMainWindow):
                 layer.brightness, layer.contrast = data["brightness"], data["contrast"]
                 layer.shadows, layer.highlights = data["shadows"], data["highlights"]
                 layer.invert = data["invert"]
+            # Mirrors the same invert value onto normal_layer too, so
+            # pasting onto a Normal-mode item also takes effect there -
+            # invert is always kept identical across all 3 trichrome
+            # channels (see on_invert_toggled), so channel 0's copied
+            # value is representative of the whole photo either way.
+            item.normal_layer.invert = self._clipboard_settings["layers"][0]["invert"]
             gdata = self._clipboard_settings["global"]
             gc = item.global_corr
             gc.black_point, gc.white_point = gdata["black_point"], gdata["white_point"]
@@ -1849,11 +2356,12 @@ class MainWindow(QMainWindow):
             gc.shadows, gc.highlights = gdata["shadows"], gdata["highlights"]
             gc.saturation = gdata["saturation"]
             gc.temperature, gc.tint = gdata["temperature"], gdata["tint"]
+            gc.curves = {ch: list(pts) for ch, pts in gdata["curves"].items()}
 
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.light_panel.set_invert(self.layers[0].invert)
+            self.light_panel.set_invert(self._active_invert_state())
             self._sync_harris_shutter_checkbox()
             self._sync_global_panel_from_model()
             self.recompute_preview()
@@ -1936,13 +2444,14 @@ class MainWindow(QMainWindow):
                 layer.reset_alignment()
                 layer.reset_tone()
                 layer.invert = False
+            item.normal_layer.invert = False
             item.global_corr.reset()
             item.crop.reset()
 
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.light_panel.set_invert(self.layers[0].invert)
+            self.light_panel.set_invert(self._active_invert_state())
             self._sync_harris_shutter_checkbox()
             self._sync_global_panel_from_model()
             if self.block_visible.get("crop", False):
@@ -1982,6 +2491,7 @@ class MainWindow(QMainWindow):
             paths=dict(src.paths),
             layers=[copy.copy(l) for l in src.layers],
             global_corr=copy.copy(src.global_corr),
+            mode=src.mode, normal_layer=copy.copy(src.normal_layer),
             selected=False,
             capture_date=src.capture_date,
         )
@@ -2007,6 +2517,7 @@ class MainWindow(QMainWindow):
                     layers=[copy.copy(l) for l in it.layers],
                     global_corr=copy.copy(it.global_corr),
                     crop=copy.copy(it.crop),
+                    mode=it.mode, normal_layer=copy.copy(it.normal_layer),
                     selected=it.selected, uid=it.uid,
                     capture_date=it.capture_date, custom_order=it.custom_order,
                 ) for it in self.batch_items
@@ -2021,6 +2532,7 @@ class MainWindow(QMainWindow):
         self.layers = self.batch_items[index].layers
         self.global_corr = self.batch_items[index].global_corr
         self.crop = self.batch_items[index].crop
+        self.normal_layer = self.batch_items[index].normal_layer
         self.active_index = None
         self.canvas.set_align_enabled(False)
 
@@ -2042,10 +2554,11 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.light_panel.set_invert(self.layers[0].invert)
+        self.light_panel.set_invert(self._active_invert_state())
         self._sync_harris_shutter_checkbox()
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
+        self._sync_import_and_channels_ui()
         if self.block_visible.get("crop", False):
             self._sync_crop_panel_from_item()
 
@@ -2141,12 +2654,15 @@ class MainWindow(QMainWindow):
             return False
 
         self.push_undo()
+        film_base = state.get("film_base") if state is not None else None
+        full = imaging.apply_film_base_correction(full, film_base, channel=CHANNEL_NAMES[index])
         preview, preview_scale = imaging.make_preview(full)
         layer.path = path
         layer.image_full = full
         layer.image_preview = preview
         layer.preview_scale = preview_scale
         layer.harris_shutter = self.harris_shutter_checkbox.isChecked()
+        layer.film_base = film_base
         if layer.is_reference and 0 <= self.batch_current_index < len(self.batch_items):
             self.batch_items[self.batch_current_index].base = os.path.splitext(os.path.basename(path))[0]
 
@@ -2306,6 +2822,10 @@ class MainWindow(QMainWindow):
                 path, channel=CHANNEL_NAMES[ci] if layer.harris_shutter else None)
         except Exception:
             return False
+        # Preserves this channel's own existing film_base correction too,
+        # same reasoning as harris_shutter just above - relinking restores
+        # the same photo's own settings, not a fresh reinterpretation.
+        full = imaging.apply_film_base_correction(full, layer.film_base, channel=CHANNEL_NAMES[ci])
         if layer.quarter_turns:
             full = np.ascontiguousarray(np.rot90(full, layer.quarter_turns))
         preview, preview_scale = imaging.make_preview(full)
@@ -2442,6 +2962,7 @@ class MainWindow(QMainWindow):
                 layer.shadows = settings.value(prefix + "shadows", 0.0, type=float)
                 layer.highlights = settings.value(prefix + "highlights", 0.0, type=float)
                 layer.quarter_turns = settings.value(prefix + "quarter_turns", 0, type=int)
+                layer.film_base = _decode_film_base(settings.value(prefix + "film_base", "", type=str))
 
                 path = settings.value(prefix + "path", "", type=str)
                 stored_mtime = settings.value(prefix + "mtime", -1.0, type=float)
@@ -2462,6 +2983,8 @@ class MainWindow(QMainWindow):
                         except Exception:
                             full = None
                         if full is not None:
+                            full = imaging.apply_film_base_correction(
+                                full, layer.film_base, channel=CHANNEL_NAMES[ci])
                             if layer.quarter_turns:
                                 full = np.ascontiguousarray(np.rot90(full, layer.quarter_turns))
                             preview, preview_scale = imaging.make_preview(full)
@@ -2470,8 +2993,37 @@ class MainWindow(QMainWindow):
                             any_loaded = True
                 layers.append(layer)
 
-            if not any_loaded and not any(l.path for l in layers):
-                continue  # a genuinely empty item (never had any channel) - drop it
+            mode = settings.value("mode", "trichrome", type=str)
+            if mode not in ("trichrome", "normal"):
+                mode = "trichrome"
+            normal_layer = ChannelLayer(color_index=0, label="Normal")
+            normal_layer.quarter_turns = settings.value("normal_quarter_turns", 0, type=int)
+            normal_layer.invert = settings.value("normal_invert", False, type=bool)
+            normal_layer.film_base = _decode_film_base(settings.value("normal_film_base", "", type=str))
+            normal_path = settings.value("normal_path", "", type=str)
+            normal_mtime = settings.value("normal_mtime", -1.0, type=float)
+            if normal_path:
+                normal_layer.path = normal_path
+            if normal_path and normal_mtime >= 0 and os.path.isfile(normal_path):
+                try:
+                    normal_current_mtime = os.path.getmtime(normal_path)
+                except OSError:
+                    normal_current_mtime = None
+                if normal_current_mtime is not None and abs(normal_current_mtime - normal_mtime) <= 1e-6:
+                    try:
+                        normal_full = imaging.load_color(normal_path)
+                    except Exception:
+                        normal_full = None
+                    if normal_full is not None:
+                        normal_full = imaging.apply_film_base_correction(normal_full, normal_layer.film_base)
+                        if normal_layer.quarter_turns:
+                            normal_full = np.ascontiguousarray(np.rot90(normal_full, normal_layer.quarter_turns))
+                        normal_preview, normal_preview_scale = imaging.make_preview(normal_full)
+                        normal_layer.image_preview = normal_preview
+                        normal_layer.preview_scale = normal_preview_scale
+
+            if not any_loaded and not any(l.path for l in layers) and not normal_path:
+                continue  # a genuinely empty item (never had any channel or normal photo) - drop it
 
             gc = GlobalCorrection()
             gc.black_point = settings.value("g_black", 0.0, type=float)
@@ -2485,6 +3037,7 @@ class MainWindow(QMainWindow):
             gc.saturation = settings.value("g_saturation", 1.0, type=float)
             gc.temperature = settings.value("g_temperature", 0.0, type=float)
             gc.tint = settings.value("g_tint", 0.0, type=float)
+            gc.curves = _decode_curves(settings.value("g_curves", "", type=str))
 
             cr = CropSettings()
             cr.x = settings.value("crop_x", 0.0, type=float)
@@ -2507,7 +3060,8 @@ class MainWindow(QMainWindow):
             if raw_custom_order >= 0:
                 item_kwargs["custom_order"] = raw_custom_order
             restored_items.append(BatchItem(base=base, paths={}, layers=layers,
-                                             global_corr=gc, crop=cr, selected=selected, **item_kwargs))
+                                             global_corr=gc, crop=cr, mode=mode, normal_layer=normal_layer,
+                                             selected=selected, **item_kwargs))
         settings.endArray()
 
         if not restored_items:
@@ -2614,6 +3168,7 @@ class MainWindow(QMainWindow):
         self.layers = self.batch_items[self.batch_current_index].layers
         self.global_corr = self.batch_items[self.batch_current_index].global_corr
         self.crop = self.batch_items[self.batch_current_index].crop
+        self.normal_layer = self.batch_items[self.batch_current_index].normal_layer
 
         self.carousel.set_items([it.base for it in self.batch_items])
         for i, it in enumerate(self.batch_items):
@@ -2629,10 +3184,11 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.light_panel.set_invert(self.layers[0].invert)
+        self.light_panel.set_invert(self._active_invert_state())
         self._sync_harris_shutter_checkbox()
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
+        self._sync_import_and_channels_ui()
         if self.block_visible.get("crop", False):
             self._sync_crop_panel_from_item()
         self._refresh_all_carousel_thumbnails()
@@ -2653,6 +3209,7 @@ class MainWindow(QMainWindow):
                     "harris_shutter": layer.harris_shutter,
                     "dx": layer.dx, "dy": layer.dy, "scale": layer.scale, "rotation": layer.rotation,
                     "quarter_turns": layer.quarter_turns,
+                    "film_base": layer.film_base,
                     "black": layer.black_point, "white": layer.white_point, "gamma": layer.gamma,
                     "exposure": layer.exposure,
                     "brightness": layer.brightness, "contrast": layer.contrast,
@@ -2660,6 +3217,7 @@ class MainWindow(QMainWindow):
                 })
             gc = item.global_corr
             cr = item.crop
+            nl = item.normal_layer
             items_data.append({
                 "base": item.base,
                 "selected": item.selected,
@@ -2667,12 +3225,18 @@ class MainWindow(QMainWindow):
                 "capture_date": item.capture_date,
                 "custom_order": item.custom_order,
                 "channels": channels_data,
+                "mode": item.mode,
+                "normal": {
+                    "path": nl.path or "", "quarter_turns": nl.quarter_turns, "invert": nl.invert,
+                    "film_base": nl.film_base,
+                },
                 "global": {
                     "black": gc.black_point, "white": gc.white_point, "gamma": gc.gamma,
                     "exposure": gc.exposure,
                     "brightness": gc.brightness, "contrast": gc.contrast,
                     "shadows": gc.shadows, "highlights": gc.highlights,
                     "saturation": gc.saturation, "temperature": gc.temperature, "tint": gc.tint,
+                    "curves": {ch: [[x, y] for x, y in pts] for ch, pts in gc.curves.items()},
                 },
                 "crop": {
                     "x": cr.x, "y": cr.y, "width": cr.width, "height": cr.height,
@@ -2689,6 +3253,7 @@ class MainWindow(QMainWindow):
             "sort_reversed": self.sort_reversed,
             "current_index": self.batch_current_index,
             **self._capture_layout_state(),
+            "scan_settings": self.scan_panel.settings_snapshot(),
             "items": items_data,
             "preferences": {
                 "last_import_dir": settings.value("last_import_dir", "", type=str),
@@ -2729,6 +3294,7 @@ class MainWindow(QMainWindow):
                 layer.shadows = ch.get("shadows", 0.0)
                 layer.highlights = ch.get("highlights", 0.0)
                 layer.quarter_turns = ch.get("quarter_turns", 0)
+                layer.film_base = ch.get("film_base")
 
                 path = ch.get("path", "")
                 if path:
@@ -2743,6 +3309,8 @@ class MainWindow(QMainWindow):
                     except Exception:
                         full = None
                     if full is not None:
+                        full = imaging.apply_film_base_correction(
+                            full, layer.film_base, channel=CHANNEL_NAMES[ci])
                         if layer.quarter_turns:
                             full = np.ascontiguousarray(np.rot90(full, layer.quarter_turns))
                         preview, preview_scale = imaging.make_preview(full)
@@ -2751,8 +3319,31 @@ class MainWindow(QMainWindow):
                         any_loaded = True
                 layers.append(layer)
 
-            if not any_loaded and not any(l.path for l in layers):
-                continue
+            normal_layer = ChannelLayer(color_index=0, label="Normal")
+            n = item_data.get("normal", {})
+            normal_path = n.get("path", "")
+            normal_layer.quarter_turns = n.get("quarter_turns", 0)
+            normal_layer.invert = n.get("invert", False)
+            normal_layer.film_base = n.get("film_base")
+            if normal_path:
+                # Same is_missing()-on-load-failure retention as the 3
+                # trichrome channels above.
+                normal_layer.path = normal_path
+            if normal_path and os.path.isfile(normal_path):
+                try:
+                    normal_full = imaging.load_color(normal_path)
+                except Exception:
+                    normal_full = None
+                if normal_full is not None:
+                    normal_full = imaging.apply_film_base_correction(normal_full, normal_layer.film_base)
+                    if normal_layer.quarter_turns:
+                        normal_full = np.ascontiguousarray(np.rot90(normal_full, normal_layer.quarter_turns))
+                    normal_preview, normal_preview_scale = imaging.make_preview(normal_full)
+                    normal_layer.image_preview = normal_preview
+                    normal_layer.preview_scale = normal_preview_scale
+
+            if not any_loaded and not any(l.path for l in layers) and not normal_path:
+                continue  # a genuinely empty item (never had any channel or normal photo) - drop it
 
             gc = GlobalCorrection()
             g = item_data.get("global", {})
@@ -2767,6 +3358,12 @@ class MainWindow(QMainWindow):
             gc.saturation = g.get("saturation", 1.0)
             gc.temperature = g.get("temperature", 0.0)
             gc.tint = g.get("tint", 0.0)
+            raw_curves = g.get("curves")
+            gc.curves = {
+                ch: [(float(x), float(y)) for x, y in raw_curves[ch]] if raw_curves and ch in raw_curves
+                else [tuple(p) for p in _IDENTITY_CURVE]
+                for ch in _CURVE_CHANNELS
+            }
 
             cr = CropSettings()
             c = item_data.get("crop", {})
@@ -2789,8 +3386,11 @@ class MainWindow(QMainWindow):
                 item_kwargs["capture_date"] = item_data["capture_date"]
             if item_data.get("custom_order") is not None:
                 item_kwargs["custom_order"] = item_data["custom_order"]
+            mode = item_data.get("mode", "trichrome")
             restored_items.append(BatchItem(
                 base=item_data.get("base", ""), paths={}, layers=layers, global_corr=gc, crop=cr,
+                mode=mode if mode in ("trichrome", "normal") else "trichrome",
+                normal_layer=normal_layer,
                 selected=item_data.get("selected", False), **item_kwargs))
 
         sort_mode = data.get("sort_mode", "import_order")
@@ -2872,6 +3472,7 @@ class MainWindow(QMainWindow):
 
         self._apply_restored_items(restored_items, sort_mode, sort_reversed, current_index)
         self._apply_layout_state(data)
+        self.scan_panel.apply_settings_snapshot(data.get("scan_settings", {}))
         self._sync_sort_menu_state()
         self.recompute_preview()
         self.canvas.zoom_fit()
@@ -2932,6 +3533,9 @@ class MainWindow(QMainWindow):
         cp.temperature.set_value(gc.temperature)
         cp.tint.set_value(gc.tint)
         cp.block_signals_all(False)
+        # CurveEditor.set_points() doesn't emit `changed` itself (only real
+        # mouse interaction does), so no blockSignals dance needed here.
+        self.curves_panel.set_curves(gc.curves)
 
     def _save_session_state(self) -> None:
         """Persist every batch item (photos + their alignment/color settings)
@@ -2974,6 +3578,21 @@ class MainWindow(QMainWindow):
                 settings.setValue(prefix + "shadows", layer.shadows)
                 settings.setValue(prefix + "highlights", layer.highlights)
                 settings.setValue(prefix + "quarter_turns", layer.quarter_turns)
+                settings.setValue(prefix + "film_base", json.dumps(layer.film_base) if layer.film_base else "")
+
+            nl = item.normal_layer
+            normal_mtime = -1.0
+            if nl.has_image() and nl.path:
+                try:
+                    normal_mtime = os.path.getmtime(nl.path)
+                except OSError:
+                    normal_mtime = -1.0
+            settings.setValue("mode", item.mode)
+            settings.setValue("normal_path", nl.path or "")
+            settings.setValue("normal_mtime", normal_mtime)
+            settings.setValue("normal_quarter_turns", nl.quarter_turns)
+            settings.setValue("normal_invert", nl.invert)
+            settings.setValue("normal_film_base", json.dumps(nl.film_base) if nl.film_base else "")
 
             gc = item.global_corr
             settings.setValue("g_black", gc.black_point)
@@ -2987,6 +3606,7 @@ class MainWindow(QMainWindow):
             settings.setValue("g_saturation", gc.saturation)
             settings.setValue("g_temperature", gc.temperature)
             settings.setValue("g_tint", gc.tint)
+            settings.setValue("g_curves", json.dumps({ch: list(pts) for ch, pts in gc.curves.items()}))
 
             cr = item.crop
             settings.setValue("crop_x", cr.x)
@@ -3080,12 +3700,28 @@ class MainWindow(QMainWindow):
         self._save_session_state()
         if self.batch_window is not None:
             self.batch_window.close()
+        # ScanPanel is an embedded block now, not its own top-level window,
+        # so it never gets its own closeEvent() - stop its poll timer, close
+        # the backlight window if open, and wait for any in-flight process
+        # thread explicitly here instead.
+        self.scan_panel.shutdown()
         super().closeEvent(event)
 
     # ------------------------------------------------------------------
     # Reference / solo / active management
     # ------------------------------------------------------------------
     def _reference_layer(self):
+        """The layer every "give me the composed image's own size/path"
+        call site reads from - self.normal_layer while the active item is
+        in Normal mode (a single already-color photo, no per-channel
+        reference concept), else whichever trichrome channel is marked
+        is_reference. This one change is what makes _current_crop_ratio_value/
+        _composed_image_ratio/_current_export_base_name (and every other
+        read-only caller of this method) correct for Normal mode too,
+        without each needing its own mode check."""
+        if (0 <= self.batch_current_index < len(self.batch_items)
+                and self.batch_items[self.batch_current_index].mode == "normal"):
+            return self.normal_layer
         for layer in self.layers:
             if layer.is_reference:
                 return layer
@@ -3094,7 +3730,10 @@ class MainWindow(QMainWindow):
     def _refresh_reference_ui(self) -> None:
         for i, layer in enumerate(self.layers):
             if layer.is_reference:
-                self.import_panel.set_locked_channel(i)
+                for j, btn in enumerate(self.lock_buttons):
+                    btn.blockSignals(True)
+                    btn.setChecked(j == i)
+                    btn.blockSignals(False)
 
     def on_reference_toggled(self, index: int, checked: bool) -> None:
         # Locking a channel only changes which one Auto Align treats as the
@@ -3150,8 +3789,14 @@ class MainWindow(QMainWindow):
             return
         self.push_undo()
         for idx in targets:
-            for layer in self.batch_items[idx].layers:
+            item = self.batch_items[idx]
+            for layer in item.layers:
                 layer.invert = checked
+            # Always written on both, mirroring how BatchItem.layers/
+            # normal_layer both always exist regardless of mode elsewhere
+            # in this file - harmless on whichever one the item's own
+            # mode doesn't currently read from.
+            item.normal_layer.invert = checked
         if self.batch_current_index in targets:
             self.recompute_preview()
         for idx in targets:
@@ -3160,7 +3805,7 @@ class MainWindow(QMainWindow):
         # Re-derive from the active photo's actual (possibly unchanged, if
         # it wasn't among targets) state, rather than trusting `checked`
         # blindly - keeps the button honest in that edge case.
-        self.light_panel.set_invert(self.layers[0].invert)
+        self.light_panel.set_invert(self._active_invert_state())
 
     def on_active_toggled(self, index: int, checked: bool) -> None:
         if checked:
@@ -3173,6 +3818,17 @@ class MainWindow(QMainWindow):
         elif self.active_index == index:
             self.active_index = None
         self.canvas.set_align_enabled(self.active_index is not None)
+
+    def _active_invert_state(self) -> bool:
+        """Which invert/Negative state the Light panel's button should
+        show - the active item's normal_layer.invert in Normal mode
+        (self.layers' own invert has no effect there, since
+        _recompute_preview_normal never reads it), the trichrome layers'
+        shared invert otherwise (see on_invert_toggled)."""
+        if (0 <= self.batch_current_index < len(self.batch_items)
+                and self.batch_items[self.batch_current_index].mode == "normal"):
+            return self.normal_layer.invert
+        return self.layers[0].invert
 
     def _sync_harris_shutter_checkbox(self) -> None:
         """Reflects the active photo's own Harris Shutter mode
@@ -3294,6 +3950,7 @@ class MainWindow(QMainWindow):
                     full = imaging.load_grayscale(layer.path, channel=channel)
                 except Exception:
                     continue
+                full = imaging.apply_film_base_correction(full, layer.film_base, channel=CHANNEL_NAMES[ci])
                 if layer.quarter_turns:
                     full = np.ascontiguousarray(np.rot90(full, layer.quarter_turns))
                 preview, preview_scale = imaging.make_preview(full)
@@ -3318,6 +3975,17 @@ class MainWindow(QMainWindow):
         self._rotate_all_channels(clockwise=False)
 
     def _rotate_all_channels(self, clockwise: bool) -> None:
+        is_normal_mode = (0 <= self.batch_current_index < len(self.batch_items)
+                           and self.batch_items[self.batch_current_index].mode == "normal")
+        if is_normal_mode:
+            if not self.normal_layer.has_image():
+                return
+            self.push_undo()
+            self.normal_layer.rotate_quarter(clockwise)
+            self.recompute_preview()
+            self.canvas.zoom_fit()
+            self._refresh_carousel_thumbnail_for_item(self.batch_current_index)
+            return
         if not any(l.has_image() for l in self.layers):
             return
         self.push_undo()
@@ -3390,14 +4058,28 @@ class MainWindow(QMainWindow):
         ref = self._reference_layer()
         if ref is None or not ref.has_image():
             return
-        images = [l.image_preview if l.has_image() else None for l in self.layers]
-        geo_params = [(l.dx, l.dy, l.scale, l.rotation) for l in self.layers]
-        tone_params = [(l.black_point, l.white_point, l.gamma, l.exposure, l.brightness, l.contrast,
-                        l.shadows, l.highlights, l.invert) for l in self.layers]
         gc = self.global_corr
         global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
-                          gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint)
-        pre_wb = imaging.compose_pre_white_balance_rgb(images, geo_params, tone_params, ref.color_index, global_params)
+                          gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
+                          {ch: tuple(pts) for ch, pts in gc.curves.items()})
+        is_normal = (0 <= self.batch_current_index < len(self.batch_items)
+                     and self.batch_items[self.batch_current_index].mode == "normal")
+        if is_normal:
+            # No warp/recompose step in Normal mode - ref (the single
+            # already-color photo) already IS the pre-recompose image, so
+            # this is just the tone-curve stage compose_pre_white_balance_rgb
+            # would otherwise apply on top of the trichrome recompose.
+            (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights, *_rest) = global_params
+            pre_wb = imaging.apply_tone_curve(
+                imaging.apply_invert(ref.image_preview, ref.invert),
+                gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights)
+        else:
+            images = [l.image_preview if l.has_image() else None for l in self.layers]
+            geo_params = [(l.dx, l.dy, l.scale, l.rotation) for l in self.layers]
+            tone_params = [(l.black_point, l.white_point, l.gamma, l.exposure, l.brightness, l.contrast,
+                            l.shadows, l.highlights, l.invert) for l in self.layers]
+            pre_wb = imaging.compose_pre_white_balance_rgb(
+                images, geo_params, tone_params, ref.color_index, global_params)
         # (u, v) are normalized against what's actually on screen - the
         # straightened/mirrored/cropped frame, same as recompute_preview.
         pre_wb = imaging.apply_straighten_mirror(pre_wb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
@@ -3421,6 +4103,185 @@ class MainWindow(QMainWindow):
         self._sync_global_panel_from_model()
         self.recompute_preview()
         self.statusBar().showMessage(i18n.tr("white_balance_picked"), 3000)
+
+    def _active_item_valid_for_film_base_pick(self):
+        """Returns the active BatchItem if it has real image data to pick a
+        film-base reference from (either mode - widened 2026-09-04 from
+        Trichrome-only), else None."""
+        if not (0 <= self.batch_current_index < len(self.batch_items)):
+            return None
+        item = self.batch_items[self.batch_current_index]
+        if item.mode == "trichrome" and all(l.has_image() for l in item.layers):
+            return item
+        if item.mode == "normal" and item.normal_layer.has_image():
+            return item
+        return None
+
+    def on_pick_film_base_from_photo_toggled(self, checked: bool) -> None:
+        """The Scan tool's eyedropper alternative to a dedicated 3-shot
+        Sample Film Base capture - validated *here*, at arm time, rather
+        than only on click, so an invalid active photo gives immediate
+        feedback instead of arming a tool that can only fail later. Works
+        on a Trichrome photo (all 3 channels loaded) or a Normal-mode one
+        (its own composited image) - widened 2026-09-04, see the "film
+        base on Normal mode" entry in CLAUDE.md."""
+        if checked and self._active_item_valid_for_film_base_pick() is None:
+            self.scan_panel.set_pick_from_photo_active(False)
+            show_alert(self, i18n.tr("scan_error_title"), i18n.tr("scan_pick_film_base_requires_photo"))
+            return
+        self.canvas.set_film_base_pick_enabled(checked)
+
+    def on_film_base_pick_requested(self, u: float, v: float) -> None:
+        """Samples the Scan tool's film-base reference from a point on the
+        *active* photo, instead of a dedicated calibration capture - see
+        ScanPanel.set_film_base_from_pick and the "Sample Film Base"
+        section in CLAUDE.md for why this reference (and not a post-invert
+        white-balance pick) is what actually corrects color negative's
+        orange mask. Single-shot, like the white balance/histogram
+        eyedroppers - disarms itself immediately.
+
+        Trichrome: each channel is warped to canvas space first
+        (imaging.build_similarity_matrix/warp_to_canvas, the same per-
+        channel math recompute_preview's own composite path uses) before
+        sampling - required for correctness whenever the photo has real
+        per-channel alignment (e.g. after running Auto Align), where the
+        same (u, v) canvas position maps to a *different* raw pixel in
+        each channel's own, differently-warped array. Normal mode: no warp
+        needed (one image, not 3 separately-aligned channels) - just reads
+        its own R/G/B pixel value directly, straighten/mirror/crop applied
+        the same way on_white_balance_picked's Normal-mode branch already
+        does. Either way, reads raw density directly (no invert/tone-curve
+        applied) - the same kind of quantity a dedicated 3-shot sample
+        already stores."""
+        self.scan_panel.set_pick_from_photo_active(False)
+        self.canvas.set_film_base_pick_enabled(False)
+
+        item = self._active_item_valid_for_film_base_pick()
+        if item is None:
+            return
+
+        if item.mode == "normal":
+            img = imaging.apply_straighten_mirror(
+                item.normal_layer.image_preview, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
+            if not self._crop_active:
+                img = imaging.apply_crop_rect(img, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
+            hh, ww = img.shape[:2]
+            if hh == 0 or ww == 0:
+                return
+            px = min(max(int(u * ww), 0), ww - 1)
+            py = min(max(int(v * hh), 0), hh - 1)
+            r, g, b = (float(x) for x in img[py, px])
+            base = {"R": r, "G": g, "B": b}
+        else:
+            ref = self._reference_layer()
+            canvas_h, canvas_w = ref.image_preview.shape[:2]
+            canvas_size = (canvas_w, canvas_h)
+            base = {}
+            for letter, layer in zip(CHANNEL_NAMES, item.layers):
+                h, w = layer.image_preview.shape[:2]
+                matrix = imaging.build_similarity_matrix(
+                    layer.dx, layer.dy, layer.scale, layer.rotation,
+                    src_center=(w / 2, h / 2), dst_center=(canvas_w / 2, canvas_h / 2))
+                warped = imaging.warp_to_canvas(layer.image_preview, matrix, canvas_size)
+                warped = imaging.apply_straighten_mirror(
+                    warped, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
+                if not self._crop_active:
+                    warped = imaging.apply_crop_rect(
+                        warped, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
+                hh, ww = warped.shape[:2]
+                if hh == 0 or ww == 0:
+                    return
+                px = min(max(int(u * ww), 0), ww - 1)
+                py = min(max(int(v * hh), 0), hh - 1)
+                base[letter] = float(warped[py, px])
+
+        self.scan_panel.set_film_base_from_pick(base)
+        self.statusBar().showMessage(i18n.tr("status_film_base_picked"), 3000)
+
+    def on_apply_film_base_requested(self) -> None:
+        """The "a posteriori" case: applies the Scan tool's currently
+        sampled/picked film-base reference to already-imported photo(s) -
+        the selected carousel photos, falling back to just the active one
+        (_target_batch_indices, same convention as on_invert_toggled/
+        on_harris_shutter_toggled) - regardless of how they got into the
+        session (Scan tool auto-add, manual Add Photo, drag-and-drop,
+        batch import...). Reloads each target's own source file(s) from
+        disk and re-applies imaging.apply_film_base_correction, same as a
+        fresh Scan-tool import would - see ChannelLayer.film_base's
+        docstring in model.py for why this needs a real reload rather than
+        a live transform. One bad/missing file among several targets
+        doesn't block the rest, same "load what you can, report the rest"
+        convention as on_carousel_files_dropped."""
+        film_base = self.scan_panel.film_base()
+        if film_base is None:
+            return
+        targets = self._target_batch_indices()
+        if not targets:
+            return
+        self.push_undo()
+        applied = 0
+        failed = []
+        for idx in targets:
+            item = self.batch_items[idx]
+            if item.mode == "trichrome":
+                ok = self._apply_film_base_to_trichrome_item(item, film_base)
+            else:
+                ok = self._apply_film_base_to_normal_item(item, film_base)
+            if ok:
+                applied += 1
+            else:
+                failed.append(item.base or "?")
+            if idx != self.batch_current_index:
+                self._refresh_carousel_thumbnail_for_item(idx)
+        if self.batch_current_index in targets:
+            self.recompute_preview()
+        if applied:
+            self.statusBar().showMessage(i18n.tr("status_film_base_applied", n=applied), 4000)
+        if failed:
+            show_alert(self, i18n.tr("dialog_load_error_title"),
+                       i18n.tr("dialog_drop_photos_failed_text", files=", ".join(failed)))
+
+    def _apply_film_base_to_trichrome_item(self, item, film_base: dict) -> bool:
+        """Reloads all 3 channels of ``item`` from their own source files
+        and re-applies ``film_base`` to each - requires every channel's
+        file to still exist (a partial reload would leave the trichrome
+        recompose using a stale, uncorrected channel alongside 2 corrected
+        ones, a worse outcome than just reporting failure)."""
+        if not all(l.path and os.path.isfile(l.path) for l in item.layers):
+            return False
+        for letter, layer in zip(CHANNEL_NAMES, item.layers):
+            try:
+                full = imaging.load_grayscale(
+                    layer.path, channel=CHANNEL_NAMES[layer.color_index] if layer.harris_shutter else None)
+            except Exception:
+                return False
+            layer.film_base = dict(film_base)
+            full = imaging.apply_film_base_correction(full, layer.film_base, channel=letter)
+            if layer.quarter_turns:
+                full = np.ascontiguousarray(np.rot90(full, layer.quarter_turns))
+            preview, preview_scale = imaging.make_preview(full)
+            layer.image_full = full
+            layer.image_preview = preview
+            layer.preview_scale = preview_scale
+        return True
+
+    def _apply_film_base_to_normal_item(self, item, film_base: dict) -> bool:
+        nl = item.normal_layer
+        if not nl.path or not os.path.isfile(nl.path):
+            return False
+        try:
+            full = imaging.load_color(nl.path)
+        except Exception:
+            return False
+        nl.film_base = dict(film_base)
+        full = imaging.apply_film_base_correction(full, nl.film_base)
+        if nl.quarter_turns:
+            full = np.ascontiguousarray(np.rot90(full, nl.quarter_turns))
+        preview, preview_scale = imaging.make_preview(full)
+        nl.image_full = full
+        nl.image_preview = preview
+        nl.preview_scale = preview_scale
+        return True
 
     def on_histogram_pixel_hovered(self, u: float, v: float) -> None:
         """Live readout for the histogram's own pick tool - unlike the
@@ -3471,10 +4332,13 @@ class MainWindow(QMainWindow):
         self.crop_panel.set_active(active)
         self.canvas.set_crop_enabled(active)
         if active:
-            # Crop dragging and the white balance eyedropper are mutually
-            # exclusive canvas click modes - disarm the latter if it was left armed.
+            # Crop dragging and the click-to-sample eyedroppers (white
+            # balance, film base) are mutually exclusive canvas click
+            # modes - disarm them if left armed.
             self.color_panel.set_pick_white_balance_active(False)
             self.canvas.set_wb_pick_enabled(False)
+            self.scan_panel.set_pick_from_photo_active(False)
+            self.canvas.set_film_base_pick_enabled(False)
             self._sync_crop_panel_from_item()
         # The full-vs-cropped frame shown in the preview depends on whether
         # crop mode is active (see recompute_preview) - refresh either way.
@@ -3569,6 +4433,31 @@ class MainWindow(QMainWindow):
         self._sync_crop_panel_from_item()
         self.recompute_preview()
 
+    def on_curve_changed(self) -> None:
+        """Fires continuously while a curve point is being dragged - same
+        coalesced-undo convention as a slider drag, keyed per-photo *and*
+        per-channel so dragging Y then immediately dragging R doesn't
+        coalesce into a single undo step covering both. The model is
+        updated immediately (cheap) on every call, but the expensive
+        recompute_preview() itself is throttled (see
+        _CURVE_RECOMPUTE_THROTTLE_MS) - CurveEditor's own on-screen curve
+        already redrew itself instantly before this even ran, so the
+        throttle only affects how quickly the *image* preview catches up,
+        not how responsive the curve itself feels under the cursor."""
+        self._push_undo_coalesced(f"curve_{self.batch_current_index}_{self.curves_panel.active_channel()}")
+        self.global_corr.curves = self.curves_panel.curves()
+        if not self._curve_recompute_timer.isActive():
+            self._curve_recompute_timer.start(_CURVE_RECOMPUTE_THROTTLE_MS)
+
+    def on_curve_reset(self) -> None:
+        """Resets all 4 channel curves at once, matching every other
+        block's own "reset everything this block controls" convention -
+        not just whichever channel happens to be selected right now."""
+        self.push_undo()
+        self.global_corr.curves = {ch: [(0.0, 0.0), (1.0, 1.0)] for ch in _CURVE_CHANNELS}
+        self.curves_panel.set_curves(self.global_corr.curves)
+        self.recompute_preview()
+
     # ------------------------------------------------------------------
     # Canvas mouse/wheel interaction on the active layer
     # ------------------------------------------------------------------
@@ -3604,6 +4493,14 @@ class MainWindow(QMainWindow):
     # Auto alignment
     # ------------------------------------------------------------------
     def on_auto_align_all(self) -> None:
+        # Not reachable via the UI while the active item is in Normal mode
+        # (the Auto Align button lives in ImportPanel's trichrome-only
+        # container, hidden then) - guarded anyway since _reference_layer()
+        # would otherwise return self.normal_layer here, which has no
+        # is_reference-based "other 2 channels to align" concept at all.
+        if (0 <= self.batch_current_index < len(self.batch_items)
+                and self.batch_items[self.batch_current_index].mode == "normal"):
+            return
         ref = self._reference_layer()
         targets = [i for i, layer in enumerate(self.layers) if not layer.is_reference]
         if not ref.has_image() or any(not self.layers[i].has_image() for i in targets):
@@ -3655,16 +4552,48 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Compositing pipeline (preview resolution)
     # ------------------------------------------------------------------
-    def recompute_preview(self) -> None:
+    def recompute_preview(self, update_curve_reference: bool = True) -> None:
+        """``update_curve_reference`` gates whether the Curves tool's own
+        "input" reference-histogram overlay (curves_panel.set_reference_histogram)
+        gets refreshed this call - it must be True for every ordinary
+        recompute (a photo switch, a slider drag, anything upstream of the
+        curve changing) but False for the throttled recompute a live curve
+        drag itself triggers (_curve_recompute_timer, see on_curve_changed):
+        the whole point of that histogram is that it reflects the pipeline's
+        state *before* the curve, so it must never move while the curve
+        itself is being dragged - see the user's own requirement, quoted in
+        CLAUDE.md's Curves tool section. Skipping it on a curve-only tick
+        also avoids paying for a second straighten/crop/to_uint8 pass that
+        would just get thrown away unused."""
+        self.light_panel.reset_button.setEnabled(self.global_corr.has_light_correction())
+        self.color_panel.reset_button.setEnabled(self.global_corr.has_color_correction())
+        self.crop_panel.reset_button.setEnabled(self.crop.has_crop())
+        self.curves_panel.reset_button.setEnabled(self.global_corr.has_curve_correction())
+
+        is_normal_mode = (0 <= self.batch_current_index < len(self.batch_items)
+                           and self.batch_items[self.batch_current_index].mode == "normal")
+        if is_normal_mode:
+            # Alignment/per-channel-tone reset buttons have nothing to
+            # reflect in Normal mode (no channels to align, RGB Channels is
+            # disabled) - always greyed rather than reading stale state from
+            # whatever self.layers happen to still hold.
+            self.missing_files_banner.set_missing(
+                [(i18n.tr("normal_photo_label"), self.normal_layer.path)]
+                if self.normal_layer.is_missing() else [])
+            self.reset_all_alignment_button.setEnabled(False)
+            self.reset_all_color_button.setEnabled(False)
+            for panel in self.channel_panels:
+                panel.reset_align_button.setEnabled(False)
+                panel.reset_tone_button.setEnabled(False)
+            self._recompute_preview_normal(update_curve_reference)
+            return
+
         self.missing_files_banner.set_missing(
             [(l.label, l.path) for l in self.layers if l.is_missing()])
         self.reset_all_alignment_button.setEnabled(
             any(l.has_alignment_correction() for l in self.layers))
         self.reset_all_color_button.setEnabled(
             any(l.has_tone_correction() for l in self.layers))
-        self.light_panel.reset_button.setEnabled(self.global_corr.has_light_correction())
-        self.color_panel.reset_button.setEnabled(self.global_corr.has_color_correction())
-        self.crop_panel.reset_button.setEnabled(self.crop.has_crop())
         for i, layer in enumerate(self.layers):
             panel = self.channel_panels[i]
             panel.reset_align_button.setEnabled(layer.has_alignment_correction())
@@ -3690,10 +4619,11 @@ class MainWindow(QMainWindow):
                 self.histogram.clear()
                 self._last_preview_rgb_u8 = None
                 return
-            warped, toned = self._warp_and_tone(solo_layer, canvas_size, ref)
+            warped, pre_curve_toned, gcurve = self._warp_and_tone(solo_layer, canvas_size, ref)
             mask = imaging.warp_coverage_mask(
                 solo_layer.image_preview.shape[:2],
                 (solo_layer.dx, solo_layer.dy, solo_layer.scale, solo_layer.rotation), canvas_size)
+            toned = imaging.apply_curve(pre_curve_toned, gcurve)
             toned = imaging.apply_straighten_mirror(toned, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
             mask = imaging.apply_straighten_mirror(mask, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
             if not self._crop_active:
@@ -3710,6 +4640,15 @@ class MainWindow(QMainWindow):
             self.canvas.set_image_gray(gray_u8)
             self.histogram.set_image(rgb_u8, valid_mask=mask > 0.5)
             self._last_preview_rgb_u8 = rgb_u8
+            if update_curve_reference:
+                pre_curve_toned = imaging.apply_straighten_mirror(
+                    pre_curve_toned, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
+                if not self._crop_active:
+                    pre_curve_toned = imaging.apply_crop_rect(
+                        pre_curve_toned, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
+                pre_curve_gray_u8 = imaging.to_uint8(pre_curve_toned)
+                pre_curve_rgb_u8 = np.repeat(pre_curve_gray_u8[:, :, None], 3, axis=2)
+                self.curves_panel.set_reference_histogram(pre_curve_rgb_u8, valid_mask=mask > 0.5)
             return
 
         images = [l.image_preview if l.has_image() else None for l in self.layers]
@@ -3722,9 +4661,21 @@ class MainWindow(QMainWindow):
                             l.shadows, l.highlights, l.invert) for l in self.layers]
             gc = self.global_corr
             global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
-                              gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint)
-        rgb = imaging.compose_trichrome(images, geo_params, tone_params, ref.color_index, global_params)
+                              gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
+                              {ch: tuple(pts) for ch, pts in gc.curves.items()})
+        # Split what compose_trichrome would otherwise do as one call, so
+        # the pre-curve intermediate is available for the Curves tool's own
+        # reference histogram without warping the 3 channels a second time.
+        rgb0 = imaging.compose_rgb_from_channels(images, geo_params, tone_params, ref.color_index)
         mask = imaging.compose_coverage_mask(images, geo_params, ref.color_index)
+        (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
+         gsat, gtemp, gtint, gcurves) = global_params
+        pre_curve_rgb = imaging.apply_global_correction_before_curves(
+            rgb0, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
+            gsat, gtemp, gtint)
+        rgb = imaging.apply_curves(pre_curve_rgb, gcurves)
+        rgb = np.clip(rgb, 0.0, 1.0)
+
         rgb = imaging.apply_straighten_mirror(rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
         mask = imaging.apply_straighten_mirror(mask, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
         if not self._crop_active:
@@ -3736,6 +4687,64 @@ class MainWindow(QMainWindow):
         self.canvas.set_image_rgb(rgb_u8)
         self.histogram.set_image(rgb_u8, valid_mask=mask > 0.5)
         self._last_preview_rgb_u8 = rgb_u8
+
+        if update_curve_reference:
+            pre_curve_rgb = imaging.apply_straighten_mirror(
+                pre_curve_rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
+            if not self._crop_active:
+                pre_curve_rgb = imaging.apply_crop_rect(
+                    pre_curve_rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
+            self.curves_panel.set_reference_histogram(imaging.to_uint8(pre_curve_rgb), valid_mask=mask > 0.5)
+
+        if 0 <= self.batch_current_index < len(self.batch_items):
+            self._update_carousel_thumbnail(self.batch_current_index, rgb_u8)
+
+    def _recompute_preview_normal(self, update_curve_reference: bool) -> None:
+        """Normal-mode counterpart of the main recompute_preview body above -
+        no warp/alignment/harris-shutter/trichrome-recompose step, since
+        self.normal_layer's own already-color image IS the composite; only
+        straighten/mirror/crop and the same Light/Color/Curves global
+        correction apply, via imaging.compose_normal. No coverage mask
+        either (that concept only exists to exclude a misaligned channel's
+        warp-padding border, which Normal mode has none of)."""
+        layer = self.normal_layer
+        if not layer.has_image():
+            self.canvas.clear_image()
+            self.histogram.clear()
+            self._last_preview_rgb_u8 = None
+            return
+
+        image = imaging.apply_invert(layer.image_preview, layer.invert)
+        if self._compare_active:
+            global_params = _NEUTRAL_GLOBAL
+        else:
+            gc = self.global_corr
+            global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
+                              gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
+                              {ch: tuple(pts) for ch, pts in gc.curves.items()})
+        (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
+         gsat, gtemp, gtint, gcurves) = global_params
+        pre_curve_rgb = imaging.apply_global_correction_before_curves(
+            image, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
+            gsat, gtemp, gtint)
+        rgb = imaging.apply_curves(pre_curve_rgb, gcurves)
+        rgb = np.clip(rgb, 0.0, 1.0)
+
+        rgb = imaging.apply_straighten_mirror(rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
+        if not self._crop_active:
+            rgb = imaging.apply_crop_rect(rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
+        rgb_u8 = imaging.to_uint8(rgb)
+        self.canvas.set_image_rgb(rgb_u8)
+        self.histogram.set_image(rgb_u8)
+        self._last_preview_rgb_u8 = rgb_u8
+
+        if update_curve_reference:
+            pre_curve_rgb = imaging.apply_straighten_mirror(
+                pre_curve_rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
+            if not self._crop_active:
+                pre_curve_rgb = imaging.apply_crop_rect(
+                    pre_curve_rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
+            self.curves_panel.set_reference_histogram(imaging.to_uint8(pre_curve_rgb))
 
         if 0 <= self.batch_current_index < len(self.batch_items):
             self._update_carousel_thumbnail(self.batch_current_index, rgb_u8)
@@ -3752,6 +4761,7 @@ class MainWindow(QMainWindow):
         if self._compare_active:
             black, white, gamma, exposure, brightness, contrast, shadows, highlights = _NEUTRAL_TONE
             gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights = _NEUTRAL_TONE
+            gcurve = _IDENTITY_CURVE
         else:
             black, white, gamma, exposure, brightness, contrast, shadows, highlights = (
                 layer.black_point, layer.white_point, layer.gamma, layer.exposure,
@@ -3762,6 +4772,7 @@ class MainWindow(QMainWindow):
                 gc.black_point, gc.white_point, gc.gamma, gc.exposure,
                 gc.brightness, gc.contrast, gc.shadows, gc.highlights,
             )
+            gcurve = gc.curves.get("Y", _IDENTITY_CURVE)
         toned = imaging.apply_tone_curve(
             warped, black, white, gamma, exposure, brightness, contrast, shadows, highlights,
         )
@@ -3772,11 +4783,22 @@ class MainWindow(QMainWindow):
         # white-balance/saturation portion of that function, which is
         # color-only and meaningless on a single-channel grayscale image.
         # Solo used to skip Global entirely, silently ignoring it while
-        # isolating a channel.
+        # isolating a channel. The Curves tool's "Y" (master) curve is a
+        # tone remap, not a color operation, so it applies here too
+        # (2026-09-04) - same relative position (last) as in
+        # apply_global_correction, but applied by the caller, not here (see
+        # the comment on the return statement below). The per-channel R/G/B
+        # curves are NOT applied here, same reasoning as saturation/
+        # temperature/tint being excluded - there's no separate R/G/B data
+        # in a single-channel Solo preview, only "Y" is meaningful on it.
         toned = imaging.apply_tone_curve(
             toned, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
         )
-        return warped, toned
+        # Curve deliberately NOT applied here - the caller (recompute_preview)
+        # needs both the pre-curve array (for the Curves tool's own "input"
+        # reference histogram, which must never reflect the curve's own
+        # output) and the curved one, so it applies gcurve itself.
+        return warped, toned, gcurve
 
     # ------------------------------------------------------------------
     # Full resolution export
@@ -3800,6 +4822,18 @@ class MainWindow(QMainWindow):
         # necessarily the active photo's own layers.
         channel = CHANNEL_NAMES[layer.color_index] if layer.harris_shutter else None
         full = imaging.load_grayscale(layer.path, channel=channel)
+        full = imaging.apply_film_base_correction(full, layer.film_base, channel=CHANNEL_NAMES[layer.color_index])
+        if layer.quarter_turns:
+            full = np.ascontiguousarray(np.rot90(full, layer.quarter_turns))
+        return full
+
+    def _full_res_color_image(self, layer) -> np.ndarray:
+        """Normal-mode counterpart of _full_res_image - never collapses to
+        grayscale, since a Normal-mode photo's own real color is the point."""
+        if layer.image_full is not None:
+            return layer.image_full
+        full = imaging.load_color(layer.path)
+        full = imaging.apply_film_base_correction(full, layer.film_base)
         if layer.quarter_turns:
             full = np.ascontiguousarray(np.rot90(full, layer.quarter_turns))
         return full

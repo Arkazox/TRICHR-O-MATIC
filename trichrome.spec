@@ -67,6 +67,11 @@ app = BUNDLE(
         "CFBundleShortVersionString": "0.4.5",
         "CFBundleName": "Trichr-o-matic",
         "NSHumanReadableCopyright": "© 2026",
+        # TEMPORARY (added 2026-09-04, see trichrome/scan_tool/webcam_backend.py):
+        # only needed for the Scan block's temporary "Use webcam / iPhone"
+        # testing option - remove both keys when that feature is removed.
+        "NSCameraUsageDescription": "Used by the Scan tool's temporary webcam/iPhone testing option.",
+        "NSCameraUseContinuityCameraDeviceType": "True",
         "CFBundleDocumentTypes": [
             {
                 "CFBundleTypeName": "Trichr-o-matic Session",

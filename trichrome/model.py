@@ -66,6 +66,28 @@ class ChannelLayer:
     # changes what the pixel data *is*, not a live transform on top of it).
     harris_shutter: bool = False
 
+    # Film base correction (2026-09-04, see the "Sample Film Base" section
+    # in CLAUDE.md) - a per-channel reference {"R"/"G"/"B": float} sampled
+    # from the film's own clear/unexposed base, normalized out of the raw
+    # loaded pixel data *before* invert (imaging.apply_film_base_correction)
+    # to remove a fixed base/mask tint (e.g. color negative's orange mask)
+    # that a post-invert white-balance pick can't fully undo. Same
+    # invariant as harris_shutter: changing it requires an actual reload
+    # from disk, not a live transform layered on top - a trichrome
+    # ChannelLayer only ever reads its own R/G/B key from this dict (the
+    # other 2 keys are unused but harmless to carry), while normal_layer
+    # (a full color image, not one channel) uses all 3. None means no
+    # correction. Deliberately excluded from copy/paste and Reset All,
+    # same reasoning as harris_shutter: it's the photo's own source-
+    # interpretation of a specific roll's film base, not a general "look"
+    # that makes sense on an unrelated photo or has an obvious reset
+    # default. WARNING: like GlobalCorrection.curve_points, this is a
+    # mutable dict - undo/redo's shallow copy.copy() means every write
+    # site must *replace* this field with a fresh dict, never mutate one
+    # in place, or a pushed undo snapshot can silently share state with
+    # the live object.
+    film_base: Optional[dict] = None
+
     is_reference: bool = False
     solo: bool = False
 
@@ -146,6 +168,28 @@ class GlobalCorrection:
     saturation: float = 1.0
     temperature: float = 0.0
     tint: float = 0.0
+    # Classic tone curves (Curves block) - 4 independent channel curves,
+    # "Y" (master/luminosity, applied to R/G/B identically) plus "R"/"G"/"B"
+    # (each applied only to its own channel, on top of "Y") - the same
+    # channel-selector composition a classic Photoshop Curves dialog uses.
+    # Added as one master curve 2026-09-04, split into per-channel the same
+    # day once the user asked to edit them separately ("je veux pouvoir
+    # modifier séparément les courbes YRGB"). Each value is a list of
+    # (input, output) control points in [0,1], sorted by input - the
+    # endpoints (input 0 and 1 in the *default* identity curve) can be
+    # dragged inward too, which clips input tones beyond them to a flat
+    # output (a black/white point), not just move vertically - see
+    # imaging.evaluate_curve_lut/apply_curve/apply_curves. Always REPLACE a
+    # channel's list wholesale rather than mutating it in place
+    # (CurveEditor.points() already returns a fresh list each time) -
+    # _snapshot_state's undo/redo copy is a shallow copy.copy() of the
+    # whole GlobalCorrection, which would otherwise share list identity
+    # between the live object and a saved snapshot.
+    curves: dict[str, list[tuple[float, float]]] = field(
+        default_factory=lambda: {ch: [(0.0, 0.0), (1.0, 1.0)] for ch in ("Y", "R", "G", "B")})
+
+    _IDENTITY_CURVE = [(0.0, 0.0), (1.0, 1.0)]
+    _CURVE_CHANNELS = ("Y", "R", "G", "B")
 
     def reset(self) -> None:
         self.__init__()
@@ -160,6 +204,10 @@ class GlobalCorrection:
 
     def has_color_correction(self) -> bool:
         return self.saturation != 1.0 or self.temperature != 0.0 or self.tint != 0.0
+
+    def has_curve_correction(self) -> bool:
+        return any(list(self.curves.get(ch, self._IDENTITY_CURVE)) != self._IDENTITY_CURVE
+                   for ch in self._CURVE_CHANNELS)
 
     def has_correction(self) -> bool:
         return self.has_light_correction() or self.has_color_correction()
@@ -245,6 +293,30 @@ class BatchItem:
     global_corr: GlobalCorrection
     selected: bool = False  # by default only the active photo is selected
     crop: CropSettings = field(default_factory=CropSettings)
+
+    # Normal/Trichrome mode (added 2026-09-04, first step of widening the
+    # app beyond trichromy) - "trichrome" (default, preserves all existing
+    # behavior) recomposes the image from ``layers`` (3 B&W-through-filter
+    # shots); "normal" is a single already-color photo, loaded straight into
+    # ``normal_layer`` and never warped/aligned/recomposed - Light/Color/
+    # Crop/Curves still apply on top either way (see MainWindow.
+    # recompute_preview's mode branch). ``layers`` still always exists (3
+    # default ChannelLayers) even in "normal" mode, deliberately never
+    # repurposed or left as None - every one of the many existing call sites
+    # across this codebase that unconditionally reads `item.layers[i]` stays
+    # correct without needing to know about mode at all; only the places
+    # that actually compose/display/export the image, or gate the RGB
+    # Channels tool, need to check it.
+    mode: str = "trichrome"  # "trichrome" | "normal"
+    # A plain ChannelLayer reused as a convenient single-image holder (gets
+    # has_image()/is_missing() for free) - NOT one of the 3 trichrome
+    # channels and never passed into compose_trichrome/compose_rgb_from_channels;
+    # its own alignment/tone/harris_shutter fields are unused (Normal mode
+    # has no per-channel controls, no UI exposes them), only
+    # path/image_full/image_preview/preview_scale/quarter_turns/invert
+    # matter here.
+    normal_layer: ChannelLayer = field(
+        default_factory=lambda: ChannelLayer(color_index=0, label="Normal"))
 
     # Stable identity, assigned once and never reassigned (even by undo/redo
     # or a resort) - lets the UI track "this same photo" across reordering,

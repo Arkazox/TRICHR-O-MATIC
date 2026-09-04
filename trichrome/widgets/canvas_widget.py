@@ -31,6 +31,7 @@ class _ImageLabel(QLabel):
     zoom_delta = Signal(float)         # multiplicative factor (view zoom, not a layer)
     crop_rect_dragged = Signal(float, float, float, float)  # normalized x, y, w, h
     white_balance_pick_requested = Signal(float, float)  # normalized x, y
+    film_base_pick_requested = Signal(float, float)  # normalized x, y
     histogram_pixel_hovered = Signal(float, float)  # normalized x, y
     histogram_pixel_left = Signal()
 
@@ -42,6 +43,7 @@ class _ImageLabel(QLabel):
         self._dragging = False
         self._last_pos = None
         self.wb_pick_enabled = False
+        self.film_base_pick_enabled = False
         self.histogram_pick_enabled = False
 
         self.crop_enabled = False
@@ -58,10 +60,10 @@ class _ImageLabel(QLabel):
 
     # -- white balance eyedropper / histogram pixel pick --------------------
     def _refresh_cursor(self) -> None:
-        # Both eyedropper-style tools (white balance pick, histogram pixel
-        # pick) share the same cursor - whichever reason it's armed for, the
-        # gesture (point at a pixel) is the same.
-        if self.wb_pick_enabled or self.histogram_pick_enabled:
+        # All 3 eyedropper-style tools (white balance pick, histogram pixel
+        # pick, film base pick) share the same cursor - whichever reason
+        # it's armed for, the gesture (point at a pixel) is the same.
+        if self.wb_pick_enabled or self.histogram_pick_enabled or self.film_base_pick_enabled:
             dpr = self.devicePixelRatioF() or 1.0
             size = 28
             pixmap = tinted_svg_pixmap("Color Correction/eyedropper.svg", size, QColor(Qt.white), dpr)
@@ -76,6 +78,10 @@ class _ImageLabel(QLabel):
 
     def set_wb_pick_enabled(self, enabled: bool) -> None:
         self.wb_pick_enabled = enabled
+        self._refresh_cursor()
+
+    def set_film_base_pick_enabled(self, enabled: bool) -> None:
+        self.film_base_pick_enabled = enabled
         self._refresh_cursor()
 
     def set_histogram_pick_enabled(self, enabled: bool) -> None:
@@ -177,6 +183,13 @@ class _ImageLabel(QLabel):
             u = min(max(pos.x() / w, 0.0), 1.0)
             v = min(max(pos.y() / h, 0.0), 1.0)
             self.white_balance_pick_requested.emit(u, v)
+            event.accept()
+        elif event.button() == Qt.LeftButton and self.film_base_pick_enabled:
+            pos = event.position()
+            w, h = max(1, self.width()), max(1, self.height())
+            u = min(max(pos.x() / w, 0.0), 1.0)
+            v = min(max(pos.y() / h, 0.0), 1.0)
+            self.film_base_pick_requested.emit(u, v)
             event.accept()
         elif event.button() == Qt.LeftButton and self.crop_enabled:
             mode = self._hit_test_crop(event.position())
@@ -341,6 +354,7 @@ class CanvasWidget(QScrollArea):
         self.rotate_delta = self.image_label.rotate_delta
         self.crop_rect_dragged = self.image_label.crop_rect_dragged
         self.white_balance_pick_requested = self.image_label.white_balance_pick_requested
+        self.film_base_pick_requested = self.image_label.film_base_pick_requested
         self.histogram_pixel_hovered = self.image_label.histogram_pixel_hovered
         self.histogram_pixel_left = self.image_label.histogram_pixel_left
         self.image_label.zoom_delta.connect(self._on_zoom_delta)
@@ -384,6 +398,9 @@ class CanvasWidget(QScrollArea):
 
     def set_wb_pick_enabled(self, enabled: bool) -> None:
         self.image_label.set_wb_pick_enabled(enabled)
+
+    def set_film_base_pick_enabled(self, enabled: bool) -> None:
+        self.image_label.set_film_base_pick_enabled(enabled)
 
     def set_histogram_pick_enabled(self, enabled: bool) -> None:
         self.image_label.set_histogram_pick_enabled(enabled)

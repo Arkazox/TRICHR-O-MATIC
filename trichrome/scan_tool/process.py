@@ -25,7 +25,15 @@ from ..alignment import AlignmentError, auto_align_layer
 PROCESSED_SUBFOLDER = "processed"
 
 _NEUTRAL_TONE = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-_NEUTRAL_GLOBAL = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+# 12th element is the Curves tool's per-channel curves dict (added to
+# imaging.compose_trichrome's global_params shape 2026-09-04, after this
+# module was originally written) - {} here means identity on every
+# channel, same as _IDENTITY_CURVES in main_window.py. Without this,
+# compose_trichrome's positional unpack would raise
+# "not enough values to unpack" on every RGB-triplet recompose - a real
+# latent bug this integration pass caught, since nothing had exercised
+# process_rgb_triplet since curves were added.
+_NEUTRAL_GLOBAL = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, {})
 _REF_INDEX = 1  # "G" - matches the main app's default reference channel.
 
 

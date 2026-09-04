@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from .. import i18n
+from .. import i18n, imaging
 from .channel_panel import CHANNEL_COLORS
 from .svg_icons import SvgCheckableToolButton, SvgLetterToggleButton, SvgToolButton
 
@@ -17,7 +17,6 @@ _CHANNEL_COLORS = {
     "G": QColor(CHANNEL_COLORS["G"]),
     "B": QColor(CHANNEL_COLORS["B"]),
 }
-_LUMA_WEIGHTS = (0.299, 0.587, 0.114)
 
 
 class HistogramWidget(QWidget):
@@ -39,21 +38,11 @@ class HistogramWidget(QWidget):
         composite with (see imaging.compose_coverage_mask/warp_coverage_mask),
         which would otherwise read as real over/underexposure. ``None``
         means every pixel counts, unchanged from before this existed."""
-        # round(), not a plain truncating cast: 0.299+0.587+0.114 isn't
-        # exactly 1.0 in floating point, so for R=G=B (e.g. Solo preview)
-        # a plain astype(uint8) truncates ~25% of gray levels down by one,
-        # smearing the Y curve a bin off from R/G/B and making it look
-        # jagged/hatched where it should exactly coincide with them.
-        luma = np.round(np.dot(rgb_uint8[..., :3], _LUMA_WEIGHTS)).astype(np.uint8)
-        channel_data = {"Y": luma, "R": rgb_uint8[:, :, 0], "G": rgb_uint8[:, :, 1], "B": rgb_uint8[:, :, 2]}
-        if valid_mask is not None:
-            valid_mask = valid_mask.astype(bool)
-            channel_data = {ch: data[valid_mask] for ch, data in channel_data.items()}
-        self._curves = {
-            ch: np.histogram(data, bins=256, range=(0, 255))[0].astype(np.float64)
-            for ch, data in channel_data.items()
-        }
-        total = next(iter(channel_data.values())).size if channel_data else 0
+        # Shared with the Curves tool's own reference-histogram overlay
+        # (imaging.compute_channel_histograms) so both compute channel data
+        # identically.
+        self._curves = imaging.compute_channel_histograms(rgb_uint8, valid_mask)
+        total = float(self._curves["Y"].sum()) if self._curves else 0.0
         if total == 0:
             self._clip_shadow = {ch: 0.0 for ch in _CHANNELS}
             self._clip_highlight = {ch: 0.0 for ch in _CHANNELS}
@@ -118,11 +107,16 @@ class HistogramWidget(QWidget):
         if not shown:
             painter.end()
             return
-        # Log scale: a single clipped bin (all-black/all-white pile-up) can
-        # hold a large fraction of the pixels, which would otherwise flatten
-        # every other bin to invisibility on a linear scale.
-        log_curves = {ch: np.log1p(self._curves[ch]) for ch in shown}
-        max_val = max(float(curve.max()) for curve in log_curves.values()) or 1.0
+        # Linear scale (2026-09-04) - tried log1p, then sqrt, both replaced
+        # after the user compared all 3 (via the temporary
+        # histogram_compression_lab.py script) and preferred plain linear
+        # bin counts, each channel normalized to its own tallest bin same
+        # as before. A dominant clipped-bin spike does dwarf everything
+        # else under this scale - accepted, since the clip indicator bars
+        # below already exist specifically to surface that case regardless
+        # of how tall the main curve reads.
+        scaled_curves = {ch: self._curves[ch] for ch in shown}
+        max_val = max(float(curve.max()) for curve in scaled_curves.values()) or 1.0
 
         # Lightroom-style rendering: a soft, additively-blended translucent
         # fill under each curve (so overlapping channels wash into lighter
@@ -133,7 +127,7 @@ class HistogramWidget(QWidget):
         curve_paths: dict[str, QPainterPath] = {}
         fill_paths: dict[str, QPainterPath] = {}
         for ch in shown:
-            curve = log_curves[ch]
+            curve = scaled_curves[ch]
             n = len(curve)
             outline = QPainterPath()
             for i, v in enumerate(curve):
@@ -167,7 +161,7 @@ class HistogramWidget(QWidget):
             painter.drawPath(curve_paths[ch])
 
         # Clipping indicators: a thin bar at each edge per channel that has a
-        # non-negligible fraction of pixels pinned at 0 or 255 — the log-scale
+        # non-negligible fraction of pixels pinned at 0 or 255 — the scaled
         # curve alone can still under-represent how much detail is lost there.
         # Height *and* opacity both scale with the clipped fraction instead of
         # jumping straight to a fixed size at the threshold - a fraction just

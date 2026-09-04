@@ -1693,6 +1693,21 @@ identifiers:
     matching Light-only reset, added the same day, via the new
     `GlobalCorrection.has_light_correction()` - `has_correction()` is now
     just `has_light_correction() or has_color_correction()`.
+  - **Bare `W` keyboard shortcut added 2026-09-04** (`MainWindow.keyPressEvent`,
+    grouped next to the `:` Compare toggle - both are canvas-tool toggles):
+    `self.color_panel.pick_white_balance_btn.toggle()`, same
+    `not text_editing and event.modifiers() == Qt.NoModifier` guard as
+    every other bare-letter shortcut in this file. Toggling the button
+    directly (not calling `on_pick_white_balance_toggled` itself) reuses
+    the exact same `toggled` signal path a real click already goes
+    through, so the existing arm/disarm/cursor/scope logic didn't need
+    any changes. `pick_white_balance_tooltip` gained a `(W)` hint (EN/FR),
+    matching the `"Color Correction (E)"`-style convention already used
+    for other shortcut-bound buttons, and the Shortcuts help dialog's
+    Preview section gained a matching `W` line (EN/FR) - note that
+    section was already missing a few other real shortcuts (I/O/P, T/E/C/S)
+    from before this pass; only the new W line was added, not a full
+    audit of the dialog's existing gaps.
 - **Histogram pixel pick (added 2026-09-02):** `HistogramPanel.pick_button`
   (`widgets/histogram_widget.py`, `SvgCheckableToolButton`, same
   `Color Correction/eyedropper.svg` as the white balance tool above) sits
@@ -2046,40 +2061,519 @@ version was bumped/built as v0.4.4 the same day:
        above - not a replacement for it - since even after masking,
        genuine but small real clipping should still look small.
 
-## Curves tool (planned for v0.4.5, added 2026-09-02)
+## Curves tool (built 2026-09-04)
 
-Stated by the user right after v0.4.4 was built as their goal for the next
-version: "ajouter un outil de courbes" - a curves tool. **Direction only,
-not a functional spec** - don't start writing feature code from this
-alone. Open questions to resolve with the user before implementation:
-whether it's per-channel (alongside each `ChannelPanel`'s tone controls),
-global (alongside `GlobalPanel`'s Light section), or both; whether it
-replaces or sits alongside the existing black/white point + gamma +
-shadows/highlights + exposure/brightness/contrast parametric tone
-controls, or is purely an additional, more expressive alternative; and
-where it lives in the UI (its own collapsible section, a dedicated tool
-like Crop, etc.). `imaging.py`'s tone pipeline (`apply_tone_curve`) is the
-natural integration point once scoped - it already takes a `tone_params`/
-`global_params` tuple threaded through many call sites (see the Exposure
-slider entry above for the full list of places a new tone parameter has
-to be threaded through: model fields, `compose_trichrome`'s tuples,
-session persistence ×2 mechanisms, undo, copy/paste, resets, i18n) - a
-curves control would likely need the same treatment, but as an array/LUT
-rather than a scalar, which is a different enough shape that it may not
-reuse that exact tuple-based plumbing as-is.
+A classic tone-curve editor, shipped as its own block (`curves_group_title`,
+`"Curves"`/`"Courbes"`) alongside Files/RGB Channels/Histogram/Light/Color/
+Crop/Scan - hidden by default (`_DEFAULT_BLOCK_VISIBLE["curves"] = False`),
+right side, after Crop in `_DEFAULT_RIGHT_BLOCK_ORDER`. Resolved the open
+questions the earlier "planned" note above left unanswered, directly from
+the user's own request: **sits alongside** the existing parametric tone
+controls rather than replacing them (both stack - the curves are simply
+the pipeline's last step). **Originally one global master curve, split
+into 4 independent Y/R/G/B channel curves the same day** (see the "Fourth
+pass" entry further down - "je veux pouvoir modifier séparément les
+courbes YRGB") - treat the fourth-pass entry as the current shape of the
+feature, this paragraph's "one master curve" framing is what the *first*
+pass shipped, kept here as history rather than rewritten in place. Header
+is deliberately minimal versus every other block: just Reset (no other
+header action button) plus the standard collapse/close - "les mêmes
+fonctions que tous les autres tool blocks, avec les 3 boutons reset,
+hide/show et close" was the exact ask; the block's *body* later gained the
+Y/R/G/B channel row (fourth pass) but that row lives below the curve
+editor, not in the header, and isn't a header action button.
 
-## Negative scan tool (planned for v0.5.0; v1 capture harness built 2026-09-02)
+- **`trichrome/widgets/curve_editor.py` (`CurveEditor`)** is the actual
+  interactive surface - a custom-painted `QWidget`, not a native chart
+  widget. Control points are `(input, output)` pairs in `[0,1]²`; the two
+  endpoints (`x=0`/`x=1`) always exist and can't be removed, only their
+  `y` moves. Click empty space to add+immediately-drag a new point; drag
+  an existing point (interior points: both axes move, `x` clamped between
+  neighbors by `_MIN_X_GAP`; endpoints: `y` only); double-click a non-
+  endpoint point to delete it. **Handles are drawn with the exact same
+  recipe as `_ResettableSlider`'s own handle** (`controls.py`) - same
+  `HANDLE_RADIUS`/`HANDLE_BORDER` values, hollow ring at rest, filled
+  solid while held - per the user's explicit "garde la même chartre
+  graphique (bouton rond) que les sliders." The drawn curve itself is
+  produced by the *same* `imaging.evaluate_curve_lut()` the real pipeline
+  samples from (128 points for drawing, 256 for the real LUT), so what's
+  drawn always matches what actually gets applied - no separate/divergent
+  preview math. `points()`/`set_points()` are the widget's only public
+  state API - see the aliasing note below for why `points()` always
+  returns a **fresh** list of fresh tuples rather than a reference to its
+  own internal mutable buffer.
+- **`trichrome/widgets/curves_panel.py` (`CurvesPanel`)** is the thin
+  block-chrome wrapper (`start_block_chrome`/`finish_block_chrome`, same
+  as every other block) - title, stretch, Reset, collapse, close, then
+  the `CurveEditor` plus a muted hint label (`curves_hint`, styled like
+  `CropPanel.apply_hint_label`) explaining the click/drag/double-click
+  gestures, since none of them are otherwise discoverable.
+- **The math - `imaging.evaluate_curve_lut()`/`apply_curve()`**: a
+  **monotone cubic Hermite spline (Fritsch-Carlson correction)**, not a
+  plain piecewise-linear join between points - deliberately chosen so the
+  drawn/applied curve reads as a real smooth "curve," matching what a
+  classic Photoshop/Lightroom Curves tool produces, with no overshoot/
+  ringing near a sharply-dragged point (the actual failure mode a naive
+  cubic spline has, which Fritsch-Carlson's tangent-rescaling step
+  specifically prevents - verified numerically: an S-curve's LUT stays
+  monotonic and within `[0,1]` even with points dragged hard). `evaluate_curve_lut()`
+  builds a 256-entry LUT by evaluating the spline at evenly-spaced `x`;
+  `apply_curve(image, points)` then remaps any float array (grayscale or
+  RGB, any shape) through it via `np.interp` - a no-op fast path
+  (returns the input array unchanged, no LUT built) when the curve is
+  still the default 2-point identity.
+- **Pipeline integration - the curve is the *last* step, after
+  saturation/white balance**: `GlobalCorrection.curve_points` (see model
+  note below) flows through `apply_global_correction()`'s new trailing
+  `curve_points` parameter (defaulted to the identity curve, so any
+  straggling caller that doesn't pass it explicitly still works) and
+  `compose_trichrome()`'s `global_params` tuple, which grew a 12th
+  element - **position matters** (plain tuple, unpacked positionally),
+  appended at the very end since that's genuinely where curves apply in
+  a real edit, matching the Exposure slider's own precedent for how a new
+  global tone parameter has to be threaded through every construction/
+  unpacking site: `main_window.py` (3 `global_params` construction sites
+  + `_NEUTRAL_GLOBAL` + `_warp_and_tone`'s Solo-mode branch),
+  `export_worker.py`, `widgets/export_dialog.py`, and
+  `compose_pre_white_balance_rgb`'s unpacking (curve unused there on
+  purpose - that function stops *before* white balance/saturation, i.e.
+  before the curve's own place in the pipeline too).
+  - **Also applied to the Solo (B&W) preview**, in `_warp_and_tone`'s
+    existing second `apply_tone_curve` pass (the one that already layers
+    Global's "Light" fields onto a soloed channel - see the "Solo preview
+    now includes Global Light correction" entry above) - a tone curve is
+    a luminance remap, not a color operation, so unlike temperature/tint/
+    saturation (deliberately excluded from Solo as meaningless on
+    grayscale) it belongs there. `"Compare"` mode's neutral params
+    (`_NEUTRAL_TONE`/`_NEUTRAL_GLOBAL`) both bypass it too, via the same
+    identity-curve constant.
+- **Model: `GlobalCorrection.curve_points: list[tuple[float,float]]`**
+  (`model.py`), default `[(0.0,0.0),(1.0,1.0)]` via `field(default_factory=...)`
+  (a mutable dataclass default can't be a bare `=`). `has_curve_correction()`
+  gates `curves_panel.reset_button`'s greyed-out state, same convention as
+  every other block's Reset. **A real aliasing risk, documented directly
+  in the model's own comment**: `_snapshot_state`'s undo/redo copy is a
+  *shallow* `copy.copy()` of the whole `GlobalCorrection` - fine for every
+  previously-existing scalar field, but `curve_points` is a mutable list,
+  so a shallow copy shares the *same list object* between the live model
+  and a pushed undo snapshot. The fix isn't a deep-copy (would need
+  special-casing this one field) but a **discipline**: every write site
+  (`CurveEditor.points()`, `MainWindow.on_curve_changed`/`on_curve_reset`,
+  copy/paste, session restore) always **replaces** `curve_points` with a
+  freshly-built list/tuples, never mutates one in place - verified
+  directly (a `copy.copy()`'d snapshot's `curve_points` provably diverges
+  from the live object after a later reassignment, not silently sharing
+  state).
+- **Threaded through everywhere a `GlobalCorrection` field must be** (per
+  the session-persistence/undo/copy-paste conventions elsewhere in this
+  file): `on_curve_changed` (coalesced undo, keyed `f"curve_{batch_current_index}"`,
+  same convention as a slider/crop drag) / `on_curve_reset` (`push_undo`);
+  `_sync_global_panel_from_model()` (`curves_panel.set_points(gc.curve_points)`
+  - no `blockSignals` needed, since `set_points()` itself never emits
+  `changed`, only real mouse interaction does); `recompute_preview()`'s
+  reset-button-enabled line; `_extract_settings`/`paste_settings_to`
+  (copy/paste, `"curve_points"` key); QSettings autosave (`g_curve`, a
+  `json.dumps`/`json.loads`-encoded string - the same string-encoding
+  convention `layout_preset_data_*` already uses - via a shared
+  `_decode_curve_points()` helper that defaults to the identity curve for
+  a missing/empty/corrupt value, so an old session saved before this
+  feature existed loads correctly); `.trirgb` JSON (`"curve"` key, a
+  native list-of-`[x,y]`-lists - no string-encoding needed there since
+  the whole session dict is already one JSON blob). `_snapshot_state`/
+  `_restore_state` (undo/redo) needed **no changes** beyond the aliasing
+  discipline above - `copy.copy()` already picks up any new dataclass
+  field automatically, same reason the Exposure slider needed none either.
+  `reset_batch_items` ("Reset All") also needed no changes - `item.global_corr.reset()`
+  is `self.__init__()`, which already resets `curve_points` to identity
+  for free.
+- **A real bug caught by testing, unrelated to the curve math itself**:
+  `MainWindow.retranslate_ui()` was missing a `self.curves_panel.retranslate_ui()`
+  call (every other panel's own `retranslate_ui()` is called from there -
+  `light_panel`/`color_panel`/`crop_panel`/etc.) - without it, switching
+  to French left the Curves block's title/hint/tooltip stuck in English
+  while the Tools-menu label for the same block (which goes through the
+  generic `_BLOCK_MENU_LABEL_KEYS` loop, a separate code path) correctly
+  updated - a real, easy-to-miss inconsistency caught only by explicitly
+  checking the panel's own labels after a language switch, not just the
+  Tools menu's.
+- Verified headlessly (`QT_QPA_PLATFORM=offscreen`, isolated QSettings
+  domain): the spline math itself (identity no-op, an S-curve staying
+  monotonic/bounded and passing near-exactly through its own control
+  points, a lifted-shadow curve); `CurveEditor` point add/drag/remove,
+  `changed` firing during a drag, endpoint `x`-locking, `points()`
+  returning a fresh list each call; the full `on_curve_changed`/
+  `on_curve_reset` flow including the Reset button's enabled state;
+  undo/redo (including the aliasing safety specifically); copy/paste;
+  both session-persistence mechanisms' full round-trip (QSettings
+  autosave *and* `.trirgb`, both tested by restoring onto the *same*
+  `MainWindow` instance that saved, not a second one - see the note
+  below); the old-format/missing-key backward-compat fallback for both
+  mechanisms; `reset_layout()` hiding the block again; and French
+  retranslation (after the bug above was fixed). **Not verified here**:
+  the real drag gesture's visual feel (does the round handle read clearly
+  at real size/DPI, does the smooth curve look right against real photo
+  content) - needs the user's own pass in the real app, same as any other
+  visual/interactive change per the Testing section below.
+  - **A real test-harness trap hit while verifying session persistence,
+    worth remembering for any future test in this area**: constructing a
+    *second* `MainWindow()` in the same process/`QApplication` to
+    simulate "restart the app" does **not** correctly pick up settings a
+    first instance wrote - confirmed this reproduces even for completely
+    pre-existing, untouched fields (`black_point`), so it's not a bug in
+    this feature or even a QSettings sync/caching issue (`settings.sync()`
+    didn't fix it either) - just an invalid way to simulate a restart in
+    this environment. The correct pattern is calling `_legacy_restore_session()`/
+    `_build_restored_items_from_data()` directly **on the same instance**
+    that saved, which reproduces a real round-trip correctly without that
+    confound.
+- **Second pass, 2026-09-04, after the user tried it for real - 2
+  changes:**
+  1. **Hint label removed** ("Click the curve to add a point..." /
+     `curves_hint`) - "il est assez intuitif" (intuitive enough without
+     it). `CurvesPanel` no longer has a `hint_label` attribute at all; the
+     `curves_hint` i18n key was removed from both EN/FR (confirmed dead
+     via grep before deleting, same convention as every other i18n
+     cleanup in this file).
+  2. **Dragging felt laggy - throttled the expensive recompute, not the
+     widget itself.** Root cause: `CurveEditor.mouseMoveEvent` emits
+     `changed` on *every* raw mouse-move (unlike a `QSlider`, which is
+     quantized to a fixed integer step range and so naturally emits
+     `valueChanged` far less often for the same physical drag distance) -
+     each `changed` was driving a full `recompute_preview()` (warp +
+     composite + histogram + canvas repaint), which can't keep up with a
+     fast continuous 2D drag the way it can with a 1D slider's coarser
+     value changes; unlike a slider's value catching up a frame late, a
+     laggy *curve point* reads as immediately, visibly detached from the
+     cursor. This is not "Python is too slow for this" - the curve math
+     itself (`evaluate_curve_lut`) is cheap; it's an unthrottled expensive
+     operation on a high-frequency continuous input, a standard class of
+     UI problem with a standard fix.
+  - **Fix: `MainWindow._curve_recompute_timer`** (a single-shot `QTimer`,
+    constructed once in `__init__`, `timeout` wired to `recompute_preview`)
+    throttles the recompute to at most one per `_CURVE_RECOMPUTE_THROTTLE_MS`
+    (initially 40ms/~25fps; changed to **16ms (~60fps, matching a 60Hz
+    display)** the same day, the user's own explicit choice once they
+    knew the value was freely tunable - see the follow-up pass just
+    below) during a drag. `on_curve_changed()` still updates
+    `self.global_corr.curve_points` **synchronously on every single call**
+    (cheap - no data loss risk even if the app were closed mid-drag,
+    since only the *visual* recompute is deferred, not the model write) -
+    it only guards the expensive call: `if not
+    self._curve_recompute_timer.isActive(): self._curve_recompute_timer.start(...)`.
+    Because the model is always current by the time the timer actually
+    fires, whichever position was *last* set is always what gets
+    rendered, regardless of how many intermediate positions were skipped
+    in between - no explicit "force a final recompute on mouse release"
+    call was needed, the throttle is self-correcting. `CurveEditor`'s own
+    on-screen redraw (`self.update()` in `_move_drag_point`) is
+    completely unthrottled and instant - only the full-image preview
+    lags slightly behind the cursor, never the curve itself.
+  - **Deliberately scoped to curve dragging only** - no other slider/drag
+    interaction in the app was touched, since none of them were reported
+    as laggy; this avoids risking a regression in already-working
+    interactions to fix one specific reported one.
+  - Verified headlessly: a rapid 20-call burst (simulating a fast drag)
+    triggers exactly 1 `recompute_preview()` call, not 20; the model
+    (`global_corr.curve_points`) reflects the *last* point immediately
+    even while throttled; a second burst after the first throttle window
+    elapses correctly schedules and fires again (confirms the timer
+    isn't a one-shot-ever, it correctly re-arms). **Not verified here**:
+    the real subjective "does it feel fluid now" - needs the user's own
+    pass, same as any interactive/visual change.
+- **Third pass, 2026-09-04, same day - the throttle interval itself
+  tuned.** The user asked whether the interval was adjustable to trade
+  off smoothness; explained the real ceiling is however long a genuine
+  `recompute_preview()` call actually takes on their machine/image size
+  (unmeasurable from this environment) - below that, tightening the timer
+  stops helping since the pipeline itself becomes the bottleneck instead.
+  The user then asked specifically for 60Hz (most displays' refresh rate)
+  - `_CURVE_RECOMPUTE_THROTTLE_MS` changed from `40` to `16` (16ms ≈
+  62.5fps, the standard "60fps" timer value used in UI/game-loop code
+  generally, rather than a stricter `1000/60 ≈ 16.667` truncation).
+  Purely a constant change - no other logic touched.
+- **Fourth pass, 2026-09-04, same day - split into 4 independent Y/R/G/B
+  curves, movable endpoints, and a channel-selector row copied from the
+  histogram.** 3 requests in one message: (1) the two endpoints could only
+  move vertically, the user wanted horizontal movement too - a real black/
+  white-point feature, not just cosmetic; (2) edit Y/R/G/B independently,
+  not one master curve; (3) add "exactement les mêmes boutons" as
+  `HistogramPanel`'s own Y/R/G/B row below the curve, minus its Reset
+  button, exclusive selection (only one active), default "Y".
+  - **`GlobalCorrection.curve_points` (a single points list) → `curves:
+    dict[str, list[tuple[float,float]]]`** keyed `"Y"/"R"/"G"/"B"`, each
+    defaulting to the identity curve (`model.py`). `has_curve_correction()`
+    now checks all 4. This was a clean rename/reshape, not a migration -
+    the single-curve field had never actually shipped in a built/pushed
+    version yet (added and reworked entirely within this same
+    conversation), so there was no real user data in the old shape to
+    preserve compatibility with.
+  - **Composition order - "Y" (master) first, then each of "R"/"G"/"B" on
+    top of it** (`imaging.apply_curves()`, new function) - the same
+    channel-selector composition a classic Photoshop Curves dialog uses.
+    Never mutates the input array in place (builds a list of 3 channel
+    arrays, `np.stack`s them back only if at least one channel curve
+    actually did something - `apply_curve`'s own identity-curve fast path
+    already makes an all-identity `curves` dict nearly free). Solo (B&W)
+    preview only ever gets "Y" applied (`_warp_and_tone`, via the single-
+    curve `apply_curve`, unchanged) - same reasoning as saturation/
+    temperature/tint being excluded from Solo already: there's no separate
+    R/G/B data on a single-channel grayscale array for those 3 curves to
+    mean anything on.
+  - **Movable endpoints - real black/white-point clipping, not just a
+    cosmetic unlock.** `CurveEditor._move_drag_point()` now clamps every
+    point (endpoints included) the same way: between its neighbors, or the
+    plot's own 0.0/1.0 edge where there's no neighbor - removing the old
+    hard `x = 0.0`/`x = 1.0` special-case for index 0/last entirely, not
+    just widening its range. This alone would have been visually wrong
+    without a matching fix in `imaging.evaluate_curve_lut()`: previously,
+    a sample `x` outside the control points' own range would extrapolate
+    the Hermite spline (an unpredictable curving/overshooting shape,
+    computed anyway since `idx` clamps into range but `t` doesn't) -
+    now explicitly overridden flat (`ys[0]` below `xs[0]`, `ys[-1]` above
+    `xs[-1]`) via `np.where` after the spline evaluation, matching how a
+    real Curves tool's moved endpoint clips the tone range rather than
+    bending it. Verified numerically: a black point dragged to `x=0.2`
+    flatlines the LUT at `y=0` for every sample below 0.2, and symmetric
+    for a white point moved to `x=0.8`.
+  - **`CurvesPanel` restructured into the channel-aware orchestrator** -
+    `CurveEditor` itself stays single-curve (unchanged responsibility);
+    `CurvesPanel` now holds `self._curves: dict[str, list]` (all 4
+    channels) and `self._active_channel` (default `"Y"`), swapping
+    `curve_editor.set_points(...)` in/out on `_select_channel()` and
+    mirroring the editor's `changed` back into `self._curves[active]` via
+    `_on_editor_changed`. Public API: `curves()`/`set_curves()` (the
+    fresh-copy-everywhere discipline from the aliasing note above still
+    applies - both always build brand new lists/dicts, never hand back or
+    accept a reference to an internal mutable buffer) and
+    `active_channel()` (so `MainWindow.on_curve_changed`'s undo-coalescing
+    key can include the channel - `f"curve_{batch_current_index}_{active_channel()}"`
+    - dragging Y then immediately dragging R must not coalesce into one
+    undo step covering both).
+  - **The Y/R/G/B row is a deliberate, exact visual copy of
+    `HistogramPanel`'s own channel row** - same `SvgLetterToggleButton`
+    widget, same `size=(32,28)`/`icon_size=22`, same colors (`_CHANNEL_COLORS`
+    in `curves_panel.py`, re-deriving the identical values - `channel_panel.CHANNEL_COLORS`
+    for R/G/B, `QColor(220,220,220)` for Y - histogram_widget.py's own
+    `_CHANNEL_COLORS` was the source, not re-exported since it's a private
+    module-level dict there). **Behavior deliberately differs**, per the
+    user's own explicit override: histogram's row is a non-exclusive
+    "which channels are shown" isolator (several/all four active at once,
+    with its own Reset restoring "all four"); curves' row is a true
+    exclusive selector (`setCheckable(False)` + manual `set_active()` per
+    button, same underlying mechanism, just driven to always leave exactly
+    one active) with **no Reset button of its own** - "pas besoin de
+    bouton reset, dans le cas de la courbe, une seule peut etre active à
+    la fois" was explicit. The block's own header Reset button (unchanged
+    from the first pass) still resets all 4 channel curves at once, same
+    "reset everything this block controls" convention as every other
+    block - that's unrelated to this row and wasn't in question.
+  - **Persistence reshaped to match** (per the usual 2-mechanism
+    threading convention): QSettings key `g_curve` (a single JSON-encoded
+    points list) → `g_curves` (one JSON-encoded `{channel: points}`
+    object) via a rewritten `_decode_curves()` (was `_decode_curve_points()`)
+    that defaults *per-channel* to identity - so a value that's valid JSON
+    but missing one channel key doesn't lose the others. `.trirgb` JSON
+    key `"curve"` (a bare list) → `"curves"` (a nested
+    `{channel: [[x,y],...]}` dict), same per-channel-default fallback.
+    Copy/paste (`_extract_settings`/`paste_settings_to`) key
+    `"curve_points"` → `"curves"`. `global_params`'s 12th tuple element
+    changed shape from a single points-tuple to a `{channel: tuple(pts)}`
+    dict - every construction site (3× `main_window.py`, `export_worker.py`,
+    `widgets/export_dialog.py`) updated to build it as
+    `{ch: tuple(pts) for ch, pts in gc.curves.items()}`; `_NEUTRAL_GLOBAL`'s
+    matching entry became `_IDENTITY_CURVES` (all 4 channels identity).
+  - Verified headlessly: channel switching preserves each channel's own
+    edits independently (Y edited, switch to R, edit R, switch back to Y -
+    still shows the Y edit, G/B still identity); both endpoints move on
+    x now, clamped correctly against each other; the flat-clip LUT math
+    numerically; `on_curve_reset()` clears all 4 channels and correctly
+    re-greys the Reset button; undo/redo round-trips the whole 4-channel
+    dict correctly (including the aliasing-safety discipline, now for a
+    dict-of-lists rather than a single list); copy/paste; both session-
+    persistence mechanisms' full round-trip (tested by restoring onto the
+    *same* instance that saved, per the earlier test-harness note); the
+    missing-key backward-compat fallback for both; and a real
+    `recompute_preview()` cycle with a non-identity per-channel curve
+    active, no crash. **Not verified here**: the real interaction feel
+    (does dragging an endpoint horizontally read as intentional/discoverable,
+    does the Y/R/G/B row look right at real size next to the curve) -
+    needs the user's own pass, same as any interactive/visual change.
+- **Fifth pass, 2026-09-04, same day - channel-colored curve, a
+  translucent "input" histogram overlay, and a square plot.** 3 requests:
+  (1) recolor the curve line to match Y/R/G/B; (2) show a translucent,
+  outline-free histogram behind the curve, matching whichever channel is
+  active; (3, the important one, with a precise invariant spelled out by
+  the user) that histogram must be the pipeline's *input* to the curve -
+  frozen while the curve is being edited - while the separate Histogram
+  block keeps reflecting the *output*; when the curve is at its identity
+  default, the two must read identical. Then, mid-turn: the curve plot
+  itself must be square. All done together since the histogram-overlay
+  color and the curve-line color share the same channel lookup.
+  - **Curve/histogram color**: `CURVE_CHANNEL_COLORS` (renamed from a
+    per-file private `_CHANNEL_COLORS`, now the one shared, public
+    definition - `curve_editor.py`, imported by `curves_panel.py` for its
+    button row too instead of keeping its own duplicate copy) drives both
+    `CurveEditor.set_channel()` (recolors the curve line - was a fixed
+    blue before) and the histogram fill. `CurvesPanel._select_channel()`
+    calls `curve_editor.set_channel(channel)` alongside the existing
+    `set_points()` swap.
+  - **Histogram fill, not outline**: `CurveEditor.set_histogram(counts)`
+    stores a 256-bin array; `paintEvent` scales it (originally log1p, see
+    below for why that changed the same day; sqrt now, same reasoning as
+    the main Histogram chart: an unscaled single clipped bin would flatten
+    every other bin to invisibility) and fills a closed path baseline-to-
+    curve with the channel color at low alpha (`setAlpha(70)`, `Qt.NoPen`
+    - no stroke around it, per "sans la outline") - drawn behind the curve
+    line and its handles, after the grid/diagonal.
+  - **The input/output split - the architecturally significant part.**
+    `imaging.apply_global_correction` was split into
+    `apply_global_correction_before_curves()` (tone curve → white balance
+    → saturation, unchanged logic, just everything except the final
+    curves step) plus a thin `apply_global_correction()` wrapper that adds
+    `apply_curves()` on top - so the exact pre-curve intermediate is now a
+    real, callable, reusable value instead of only existing transiently
+    inside one function. `MainWindow.recompute_preview()` gained an
+    `update_curve_reference: bool = True` parameter: when true (the
+    default - every ordinary recompute: a slider drag, a photo switch,
+    anything upstream of the curve), it also straightens/crops/converts
+    the *pre-curve* array and feeds it to the new
+    `CurvesPanel.set_reference_histogram()` (which computes all 4
+    channels' histograms at once via the new shared
+    `imaging.compute_channel_histograms()` and pushes only the currently-
+    active one into the editor); when false, that whole side path is
+    skipped entirely - both for correctness (the histogram must not move)
+    and so a curve-only recompute doesn't pay for an extra straighten/
+    crop/to_uint8 pass it would just discard. The one caller that must
+    pass `False` is the throttled curve-drag timer itself
+    (`_curve_recompute_timer.timeout`, previously connected directly to
+    `self.recompute_preview` - now a `lambda: self.recompute_preview(update_curve_reference=False)`,
+    since a bare `QTimer.timeout` connection would otherwise silently fall
+    back to the `True` default and defeat the whole point).
+  - **`_warp_and_tone` (Solo/B&W preview) reworked to match**: it used to
+    apply the "Y" curve internally as its last step; now it returns the
+    *pre-curve* toned array plus `gcurve` itself, and `recompute_preview`'s
+    Solo branch applies `imaging.apply_curve()` explicitly - mirroring the
+    composite branch's same split, and letting Solo mode's own reference-
+    histogram path reuse the identical pre-curve array before it's been
+    curved, straightened, or cropped.
+  - **`imaging.compute_channel_histograms()`** (shared, new) replaces
+    `HistogramWidget.set_image()`'s own inline luma/binning logic verbatim
+    - both the main Histogram chart and the Curves tool's overlay now
+    compute Y/R/G/B counts identically, which is what actually guarantees
+    the "identical when the curve is at default" invariant holds exactly,
+    not just approximately. `HistogramWidget`'s own `_clip_shadow`/
+    `_clip_highlight` fraction calc now derives `total` from
+    `self._curves["Y"].sum()` (histogram counts always sum to the exact
+    valid-pixel count) instead of a separately-tracked pixel count, since
+    the raw per-channel arrays it used to compute that from are no longer
+    locally available after the extraction.
+  - **Square plot**: `CurveEditor.resizeEvent()` pins `setFixedHeight(self.width())`
+    whenever they differ - a standard Qt idiom for a square widget inside
+    a variable-width layout column, guarded against the resize-loop
+    `setFixedHeight` itself would otherwise trigger. `setMinimumHeight`
+    raised 180→200 to match a slightly larger comfortable minimum square
+    size. **A real test-harness trap hit while verifying this**: calling
+    `.resize()` directly on a widget that's actively managed by a real
+    layout (as opposed to a real width change flowing down *from* the
+    layout, e.g. resizing the panel/column that contains it) fights the
+    layout system and doesn't reliably reproduce the real resize path -
+    confirmed the square-lock logic is correct both in total isolation
+    (a bare `CurveEditor` with no parent layout) and through the real
+    panel layout (widening `right_scroll`/the panel column), the more
+    representative simulation of what actually happens when the user
+    resizes the window.
+  - Verified headlessly, with real synthetic per-channel image data (not
+    just mocked shapes, since the histogram invariant is a genuine
+    numerical claim): **the exact 3-part invariant the user specified** -
+    at the default identity curve, the Curves panel's reference histogram
+    and the main Histogram block's output histogram are numerically
+    identical; after editing the curve, the reference histogram is
+    provably unchanged (`np.array_equal` against a pre-edit snapshot)
+    while the main histogram provably changes; and resetting the curve
+    restores the identical-histograms state. All 3 confirmed in both the
+    composite (RGB) and Solo (B&W) preview branches. Also: curve line/
+    histogram fill recolor on channel switch; the square-aspect resize
+    behavior (isolated and through the real layout); and the full
+    pyflakes/i18n-parity/boot sweep. **Not verified here**: the real
+    visual read (does the translucent fill actually look good behind the
+    curve at real size/DPI, does the square plot's new proportions sit
+    well in the side panel) - needs the user's own pass.
+- **Sixth pass, 2026-09-04, same day - the histogram compression scale
+  itself, settled through 2 iterations: log1p → sqrt → linear.** The user
+  found both histogram charts (the main Histogram block and the Curves
+  overlay - both had been using `np.log1p(count)` since the original
+  v0.4.4 histogram redesign, see the entry above) read as "massive, not
+  readable" - a single undifferentiated mass rather than distinguishable
+  peaks. Root cause, worked through conversationally before touching code:
+  `log1p` compresses *very* aggressively (a 1000:1 raw pixel-count ratio
+  between two bins collapses to roughly 4:1 after log1p), so almost every
+  non-empty bin ends up reading as a large fraction of the chart height. A
+  quick **temporary standalone script, `histogram_compression_lab.py`**
+  (project root, deliberately outside the `trichrome/` package and never
+  imported by it or referenced in `trichrome.spec` - not part of the app,
+  kept only for the user's own exploration, to be deleted whenever they're
+  done with it) was built first to let the user compare Linear/Log/Sqrt
+  live against a real loaded photo (reusing the real
+  `imaging.compute_channel_histograms` for a fair comparison) before
+  committing to a change - it also exposed a precise, previously-
+  unestablished fact along the way: the log's *base* is provably
+  irrelevant to the rendered shape (it cancels out under the max-
+  normalization step both charts already do), but a multiplicative factor
+  *inside* the log (`ln(1 + k·x)`) does change the shape, which is what
+  the lab's slider actually varies - background for *why* a log curve
+  reads the way it does, even though the app ended up not using log at all.
+  - **First change: sqrt.** Both `HistogramWidget.paintEvent`
+    (`histogram_widget.py`) and `CurveEditor.paintEvent`'s histogram-fill
+    branch (`curve_editor.py`) changed their one compression line from
+    `np.log1p(counts)` to `np.sqrt(counts)`.
+  - **Then, after trying it for real: plain linear (no compression
+    function at all)** - `scaled_curves`/`scaled_hist` (renamed from
+    `log_curves`/`log_hist` in the sqrt pass, kept as the generic name
+    since a 3rd rename would've been pure churn) now just reference
+    `self._curves[ch]`/`self._histogram` directly, no `np.sqrt`/`np.log1p`
+    call at all - `max_val` still normalizes each render to its own
+    tallest bin, unchanged. **Known, accepted tradeoff, called out
+    directly in the code comment**: a single dominant clipped-bin spike
+    (a large flat black/white region) will still dwarf every other bin
+    under a linear scale - this is deliberate, not a regression the user
+    missed; the histogram's own separate clip-indicator bars (small colored
+    bars at the left/right edge, scaled by clipped-fraction severity - see
+    the "Rethink the histogram" entry above) already exist specifically to
+    surface that exact case regardless of how tall the main curve reads,
+    so linear's main weakness is already covered by an existing mechanism.
+  - Nothing about the underlying histogram *data* changed at any point in
+    this pass (still `imaging.compute_channel_histograms`, still
+    normalized to each render's own tallest bin) - purely the display
+    compression curve, twice.
+  - Verified headlessly at each step: pyflakes clean on both files; a full
+    app boot + `recompute_preview()` with real synthetic image data; both
+    widgets' `paintEvent` actually running (via explicit `.repaint()`
+    calls) without error under each formula in turn; and the Curves tool's
+    own input/output histogram invariant (identical at the default curve)
+    still holding exactly, confirming neither compression-curve swap
+    disturbed the underlying data path it's layered on top of. **Not
+    verified here**: the real subjective readability call - that's exactly
+    what the user was iterating on by trying each in the real app.
 
-Ships as its **own tool window** eventually, reachable via both a keyboard
-shortcut and a button in the top toolbar - i.e. a peer of the Crop/Global
-Correction tool switcher (`settings_toolbar_btn`/`crop_toolbar_btn` in
-`main_window.py`), not a dialog buried in a menu - **not wired in yet**,
-still developed and run standalone per the user's explicit request (it's
-expected to be complex/heavy, so build+test it on its own first, integrate
-once it works in isolation). "Trichromy mode" (mentioned as a planned mode
-before this pass) turned out to mean the existing 3-mode capture selector
-below (B&W/Couleur/Couleur Inversible), not a separate live-3-shot-through-
-filters capture flow - no further open question there.
+## Negative scan tool (v1 capture harness built 2026-09-02; integrated into the main app 2026-09-04)
+
+**Integrated as the "Scan" block 2026-09-04** - see the dated entry at the
+end of this section for the integration itself. Everything below this
+paragraph, up to that entry, is the standalone tool's own development log
+from before integration - kept as history, not rewritten, since it's still
+accurate for `trichrome/scan_tool/`, which the user explicitly asked to
+keep alive and running standalone for separate beta testing ("Don't delete
+the standalone scan tool yet, we'll keep it for later betatesting"). Where
+this history says "not wired in yet" or describes a plan to eventually add
+a toolbar button/tool-switcher entry, that plan changed - it shipped as an
+ordinary block instead, like every other tool in the app (see the block
+system above), not a toolbar-level exclusive tool switcher (that whole
+mechanism was superseded by the block system before integration happened).
+
+"Trichromy mode" (mentioned as a planned mode before this pass) turned out
+to mean the existing 3-mode capture selector below (B&W/Couleur/Couleur
+Inversible), not a separate live-3-shot-through-filters capture flow - no
+further open question there.
 
 **What v1 actually does** (the user's own scope, given directly - "no image
 processing in this tool" and no session-import yet, both deliberate): connect
@@ -2379,6 +2873,1191 @@ image data is touched.
     real no-op; and the full `ScanToolWindow` orchestration (capture →
     manifest/history → automatic process → second history line) works
     end-to-end for both a single shot and a full RGB triplet.
+
+- **Integrated into the main app as the "Scan" block, 2026-09-04.** The
+  user's own framing: "add the scan tool we made externally to the scan
+  tool block. Keep all the functions that we tested, just match the block
+  style with all other tool blocks" - and explicitly keep
+  `trichrome/scan_tool/` itself alive and runnable standalone afterward,
+  not delete it.
+  - **`trichrome/widgets/scan_panel.py` (new) - `ScanPanel(QGroupBox)`**
+    is the block-chrome shell (`start_block_chrome`/`finish_block_chrome`,
+    same as every other block - title, no header action button since
+    nothing here maps to "Reset" the way it does for a tone-control block,
+    then collapse/close). It does **not** reimplement any tested logic -
+    it imports `gphoto_backend`/`manifest`/`naming`/`process`/
+    `CaptureWorker`/`ProcessWorker`/`BacklightWindow`/`MODES`/the light-
+    mode and RGB-sequence constants straight from `trichrome.scan_tool`,
+    and ports `ScanToolWindow`'s `_build_ui` (Device/Mode/Light/Save
+    Location/Capture/History `QGroupBox` sections) into the block's own
+    `body_layout` instead of a standalone `QWidget`'s top-level layout -
+    every handler (`_poll_devices`, `_on_capture_clicked`,
+    `_advance_rgb_sequence`, `_start_processing`, etc.) is the same code,
+    unchanged in behavior, just living on `ScanPanel` instead of
+    `ScanToolWindow`. `history_list` got a new `setMaximumHeight(160)`
+    (matching `AlertDialog`'s own bounded-scrollable-list convention) -
+    the standalone window let it stretch to fill the window, which isn't
+    a sensible default inside a side-panel block.
+  - **Same QSettings domain as the standalone tool, deliberately** -
+    `ScanPanel` reads `scan_window.ORG_NAME`/`scan_window.APP_NAME`
+    (`"TrichromeMaker"`/`"ScanTool"`) as a **module-attribute lookup**
+    (`from ..scan_tool import scan_window`, then `scan_window.ORG_NAME` at
+    the one `QSettings(...)` call site), not a bare `from ... import
+    ORG_NAME` - so roll name/counter/folder/mode state is shared and
+    consistent whichever of the two you actually run, and so a headless
+    test patching `scan_window.ORG_NAME` for isolation actually isolates
+    *both* consumers at once instead of only the standalone tool (a bare
+    import would've created an independent, unpatched copy of the name in
+    `scan_panel.py`'s own namespace - see the QSettings-isolation memory/
+    the "Real bug caught" entry a few sections up for why this distinction
+    matters here specifically).
+  - **`retranslate_ui()` added** - the standalone `ScanToolWindow` never
+    had one (built once, standalone tools aren't usually run through a
+    live language switch), but every block in the main app needs one, so
+    this class gained a proper one: retranslates every static label/
+    button/title, and re-derives the state-dependent ones (mode/light
+    notes, subfolder preview, connection status, ready/capturing status)
+    by calling the same `_sync_*` helpers that already regenerate them
+    from current state, rather than just re-setting cached text - so a
+    language switch mid-connection or mid-capture still reads correctly.
+    Deliberately **not** retranslating already-added history-list entries
+    (their text was captured in whatever language was active at capture
+    time) - consistent with how transient status messages elsewhere in
+    the app aren't retroactively retranslated either.
+  - **`shutdown()` (new)**, called from `MainWindow.closeEvent()` right
+    before `super().closeEvent()` - `ScanPanel` is an embedded block now,
+    never gets its own `closeEvent()`, so what `ScanToolWindow.closeEvent()`
+    used to do (stop the poll timer, close the backlight window, wait for
+    an in-flight process thread) has to be called explicitly by the owner
+    instead.
+  - **A real, unrelated bug caught along the way**: `scan_tool/process.py`'s
+    `_NEUTRAL_GLOBAL` constant was still the old 11-element tuple from
+    before the Curves tool added a 12th (`curves`) element to
+    `imaging.compose_trichrome`'s `global_params` shape (see the Curves
+    tool section above) - calling `process_rgb_triplet` would have raised
+    "not enough values to unpack" on every single call, a total break of
+    the RGB-backlight-triplet processing feature that nothing had
+    exercised since curves were added (the standalone tool's own tests
+    predate that change, and it hadn't been re-run since). Fixed by
+    appending `{}` (identity on every channel) as the 12th element -
+    verified by actually calling `process_rgb_triplet` with 3 real
+    synthetic images end-to-end post-fix, not just re-reading the code.
+  - **Not changed, deliberately**: the "Add to Current Session" button is
+    still a no-op, exactly as it was in the standalone tool - the user's
+    own framing ("keep all the functions that we tested") scoped this
+    pass to porting what already worked, not building real session import
+    (which manifest.json's `channel` field was specifically designed to
+    support later, but is a separate feature with its own design
+    questions - which BatchItem, mapping 3 files sharing an index to 3
+    ChannelLayers by channel identity, etc.).
+  - Verified headlessly, with `gphoto_backend` calls mocked (no camera in
+    this environment) and, critically, the **correct** QSettings isolation
+    pattern throughout (patching `scan_window.ORG_NAME`/`.APP_NAME`,
+    confirmed via reading back both the isolated *and* the real domain to
+    prove the real one was untouched - see the memory note above for why
+    this needed extra care this time): a full app boot with the block
+    registered/wired into `block_widgets`/`block_collapse_buttons`/
+    `block_close_buttons`; device detection populating the status/combo/
+    capture-button-enabled state from a mocked camera; a full single-shot
+    capture end-to-end (history entry, counter increment, button/status
+    reset); a full 3-shot RGB-light sequence (3 history entries sharing
+    one index with R/G/B suffixes, counter advancing by exactly 1, not 3,
+    backlight window returning to white); block collapse/expand and
+    close/reopen via the Tools menu; `shutdown()` running cleanly; French
+    retranslation of every static label; and that the *standalone* tool
+    (`ScanToolWindow`, run directly, not through `MainWindow`) still boots
+    and works completely independently, confirming the integration didn't
+    disturb it. **Not verified here** (needs the user's own real hardware
+    pass, same caveat the standalone tool's own build already carried):
+    an actual tethered capture through the integrated block - only the
+    already-proven `gphoto_backend`/`process` functions were exercised
+    directly or via mocks, the same functions the real hardware pass
+    already confirmed work.
+
+- **Webcam/iPhone testing backend, added 2026-09-04 - explicitly temporary,
+  per the user's own framing** ("à des fins de tests, nous supprimerons
+  cette option par la suite" - for testing purposes, we'll remove this
+  option afterward). Lets Scan-block testing proceed without a real
+  tethered camera connected, using a built-in webcam or an iPhone via
+  macOS Continuity Camera instead. **To fully revert**: delete
+  `trichrome/scan_tool/webcam_backend.py`, the `use_webcam_checkbox` in
+  `scan_panel.py` (device group UI, `retranslate_ui`, `_load_settings`/
+  `_save_settings`), the branches it triggers in
+  `_poll_devices`/`_on_camera_selected`/`_on_capture_clicked`/
+  `_advance_rgb_sequence` in the same file (each marked with a
+  "TEMPORARY" comment), the 2 `scan_use_webcam_*` i18n keys, and the 2
+  `NSCamera*` keys in `trichrome.spec`'s `info_plist`.
+  - **`trichrome/scan_tool/webcam_backend.py`** (new): `WebcamDevice`
+    (thin wrapper over a `QCameraDevice`), `list_cameras()` (`QMediaDevices
+    .videoInputs()` - the built-in webcam and, once connected/trusted, an
+    iPhone via Continuity Camera both show up here like any other camera,
+    confirmed with the user's real iPhone: `"Caméra de « iPhone de
+    Simon »"`), and `WebcamCapture(QObject)` - a one-shot still capture via
+    `QCamera`/`QMediaCaptureSession`/`QImageCapture`, started and waited on
+    until `QCamera.activeChanged` reports true (a webcam - Continuity
+    Camera especially - can take a moment to spin up) before triggering
+    `captureToFile()`. **Must run on the GUI thread**, unlike
+    `gphoto_backend`'s subprocess calls (safe from a worker `QThread`) -
+    `QCamera` drives the platform's native AVFoundation session, not meant
+    to be touched off the main thread, so `ScanPanel` calls it directly
+    rather than through a `QThread` wrapper the way gphoto2 captures are.
+    `captured(path)`/`error(message)` deliberately mirror
+    `CaptureWorker`'s `finished`/`error` signal shapes so `ScanPanel` can
+    feed a webcam capture into the exact same downstream handlers
+    (history logging, RGB-sequence stepping, processing) used for a real
+    tethered capture, without a separate code path there.
+  - **A real risk found while testing, not just a hypothetical**: under
+    `QT_QPA_PLATFORM=offscreen` (no real window for macOS to show its
+    camera-permission prompt against), the camera never reports itself
+    active and neither `captured`/`error` would otherwise ever fire -
+    confirmed by testing this directly, and a real risk in the shipped app
+    too if a user denies camera permission (the same TCC prompt, just with
+    a "no" instead of no prompt at all). Fixed with a defensive
+    `_START_TIMEOUT_MS = 8000` `QTimer` safety net (a `_finished` guard
+    flag shared by `_on_image_saved`/`_on_camera_error`/
+    `_on_capture_error`/`_on_timeout`, all routing through one
+    `_finish_error()` so exactly one of `captured`/`error` ever fires) -
+    verified firing correctly at ~8.3s with a message pointing at System
+    Settings ▸ Privacy & Security ▸ Camera.
+  - **`ScanPanel` wiring** (`widgets/scan_panel.py`): `use_webcam_checkbox`
+    sits in the Device group, right below the status row - checking it
+    re-polls immediately via the existing `_poll_devices()` (now a thin
+    dispatcher to either the original gphoto2 branch or the new
+    `_poll_webcam_devices()`, which lists `webcam_backend.list_cameras()`
+    into the same `camera_combo` and drives the same status
+    dot/label/capture-button-enabled state). `_on_camera_selected()` no-ops
+    in webcam mode (no gphoto2 quality-config concept for a webcam
+    device) - the Format dropdown stays hidden throughout. Capture
+    branches in `_on_capture_clicked()`/`_advance_rgb_sequence()`
+    (`self.use_webcam_checkbox.isChecked()`) into a new
+    `_start_webcam_capture(suffix)`, a close parallel of the existing
+    `_start_capture(port, suffix)` but building the destination path
+    directly as `<roll>_<index>[_<channel>].jpg` (`naming.base_name()` +
+    the same optional channel suffix `build_filename_pattern()` uses -
+    gphoto2's `%C` extension-substitution token has no meaning for a
+    webcam still, which is always a plain JPEG) instead of going through a
+    `QThread`/`CaptureWorker`. `_on_webcam_captured(path)` feeds straight
+    into the same `_on_capture_step_finished([path])` used for a real
+    capture - full reuse of history/RGB-sequence/processing logic;
+    `_on_webcam_capture_error(message)` feeds `_handle_capture_failure()`
+    the same way `_on_capture_error()` already does. `self._webcam_capture`
+    holds the live `WebcamCapture` instance (cleared once it finishes) so
+    it isn't garbage-collected mid-capture; `shutdown()` also
+    `deleteLater()`s it if a capture is still in flight when the window
+    closes. The checkbox's own state persists through the panel's existing
+    `_load_settings`/`_save_settings` (`"use_webcam"` QSettings key, same
+    `scan_window.ORG_NAME`/`.APP_NAME` domain - see the QSettings-isolation
+    memory note for why this file reads them as `scan_window.ORG_NAME`
+    rather than a bare import).
+  - **`trichrome.spec`**: added `NSCameraUsageDescription`/
+    `NSCameraUseContinuityCameraDeviceType` to `info_plist`, needed for a
+    real distributed `.app` (not required running from source, which is
+    the user's typical workflow, but correct/complete to add regardless) -
+    both marked with the same "TEMPORARY" comment for easy removal.
+  - Verified headlessly, isolated QSettings domain confirmed untouched on
+    the real one throughout: device listing finds real hardware (the
+    built-in FaceTime HD camera and the user's iPhone via Continuity
+    Camera, in this actual dev environment); toggling the checkbox on/off
+    re-polls correctly without crashing either direction; a full capture
+    attempt through `ScanPanel._on_capture_clicked()` correctly reaches
+    the timeout safety net (permission unavailable headlessly, same
+    limitation as the backend's own isolated test), fires the alert
+    dialog with the expected message, and correctly resets
+    `_capturing`/re-enables the button rather than hanging; settings
+    round-trip; i18n EN/FR parity; full app boot with the block present.
+    **Not, and can't be, verified here**: an actual successful webcam/
+    iPhone still capture (needs a real window for the camera permission
+    prompt, and the user's own hardware) - this needs the user's own pass
+    in the real running app, same caveat every other hardware-dependent
+    piece of the Scan tool already carries.
+
+- **Integrated block simplified, 2026-09-04 - dropped the processed-JPG
+  option, flattened the 5 QGroupBox sub-sections into hairlines, renamed
+  "Mode"/"B&W", and swapped the Refresh button for a spinning icon.** All
+  in `widgets/scan_panel.py` unless noted; the standalone tool
+  (`scan_tool/scan_window.py`) is untouched except where an i18n string it
+  shares with the block was reworded (see below).
+  - **"Also save a processed JPG preview" removed from the integrated
+    panel only**, per direct user request - `process_checkbox` and every
+    bit of machinery that only existed to serve it (`_start_processing`,
+    `_process_thread`/`_process_worker`, `_clear_process_thread_refs`,
+    `_on_process_finished`/`_on_process_error`, the `ProcessWorker`/
+    `process` imports, `_finish_capture`'s now-pointless `allow_process`
+    parameter, and `shutdown()`'s wait-for-process-thread branch) is gone
+    from this file. **The standalone tool keeps the feature** - `process.py`/
+    `process_worker.py` and `scan_window.py`'s own `process_checkbox` are
+    untouched; only this integrated copy dropped it, since the user's
+    framing was about the block specifically, and the standalone tool is
+    the one deliberately being kept alive at its already-tested behavior
+    for separate beta testing.
+  - **The 5 nested `QGroupBox` sub-sections (Device/Mode/Light/Save
+    Location/History) replaced with a flat layout**: a small muted
+    `QLabel` section header (`_SECTION_LABEL_STYLE` - bold, `#9a9a9a`,
+    11px) plus a 1px hairline (`_make_hairline()` - a fixed-height `QWidget`
+    with a faint `rgba(255,255,255,28)` background, not a native
+    `QFrame.HLine`, for guaranteed rendering regardless of style engine)
+    between sections, all added directly to the block's own `body_layout`
+    instead of each section owning its own bordered/titled box. Per the
+    user's own reasoning: the whole tool already sits inside one block's
+    own bordered chrome, so a border-within-a-border for every sub-section
+    was redundant visual noise - "essaie quelque chose de plus discret,
+    comme des hairlines." `self.device_group`/`mode_group_box`/
+    `light_group_box`/`location_group_box`/`history_group_box` (the old
+    `QGroupBox` instances) are gone, replaced by
+    `device_section_label`/`mode_section_label`/`light_section_label`/
+    `location_section_label`/`history_section_label`, retranslated via
+    `.setText()` instead of `.setTitle()`.
+  - **"Mode" section renamed "Film"** (`scan_mode_group` i18n key, shared
+    with the standalone tool's own `QGroupBox` title - reworded there too
+    as a side effect, which is fine since this is just a text change, not
+    a behavior one) and **the "Black & White" mode button shortened to
+    "B&W"** (`scan_mode_bw`, French "N&B") - the existing
+    `.replace("&", "&&")` escape in `retranslate_ui()` (needed so Qt
+    doesn't treat a lone "&" as a mnemonic marker) already handles the new
+    literal "&" correctly, no change needed there. "Color"/"Color
+    Reversal" (the other 2 modes) were left as-is - not part of the
+    request.
+  - **Refresh button became an icon (`Scan/refresh.svg` via `SvgToolButton`)
+    that spins 360° over 1 second on click**, instead of a plain text
+    `QPushButton`. `_on_refresh_clicked()` still calls `_poll_devices()`
+    immediately (unchanged behavior) and additionally (re)starts
+    `_refresh_spin_timer` - a plain `QTimer` ticking every
+    `_REFRESH_SPIN_INTERVAL_MS` (16ms, this codebase's established 60fps
+    tick precedent - see the Curves tool's drag-recompute throttle) for
+    `_REFRESH_SPIN_DURATION_MS` (1000ms) total, driving
+    `SvgToolButton.set_rotation(degrees)` from 0° to 360° - a manual timer
+    rather than `QPropertyAnimation`, since `set_rotation()` is a plain
+    method, not a Qt `Property`, so it isn't a valid animation target
+    as-is. Clicking Refresh again mid-spin doesn't restart the animation
+    (`if not self._refresh_spin_timer.isActive()`) - it just lets the
+    current spin keep going while still re-polling devices immediately,
+    rather than resetting the rotation and looking like it stalled.
+    `shutdown()` also stops `_refresh_spin_timer`, matching `_poll_timer`.
+  - Verified headlessly: `process_checkbox`/`_start_processing` no longer
+    exist on `ScanPanel`; the 5 old `QGroupBox` attributes are gone,
+    replaced by the 5 new section labels; a full capture-finish flow still
+    works with no processing step; "Film"/"B&W" (and French "Film"/"N&B")
+    render correctly via `retranslate_ui()`; the refresh button is a real
+    `SvgToolButton` and its icon paints without error; the spin timer
+    starts on click, advances rotation correctly tick-by-tick, and stops
+    itself with rotation reset to 0° at the end of the 1-second duration;
+    the standalone tool still boots independently and still has its own
+    `process_checkbox` intact, confirming the removal is scoped to the
+    integrated panel only. **Not verified here**: the real visual feel of
+    the hairline dividers and the spin animation at real size/DPI - needs
+    the user's own pass, same as any visual/interactive change.
+  - **Follow-up, same day: the block still overflowed the side panel's own
+    360px minimum width** (`_SIDE_PANEL_MIN_WIDTH` in `main_window.py`) -
+    same class of bug as the "RGB Channels" width overflow fixed during the
+    original block-system overhaul (see that section above), same fix
+    direction per the user's own framing again this time ("le bloc doit
+    s'adapter en largeur à la taille du panel latéral, quitte à réduire
+    légèrement les boutons"). Two changes, both in `scan_panel.py` unless
+    noted:
+    - **`_COMPACT_MODE_BUTTON_STYLE`** (a small `QPushButton` stylesheet -
+      tighter `padding: 3px 4px` and `font-size: 11px`, down from the
+      style-default native padding) applied to all 6 buttons across the
+      Film row (B&W/Color/Color Reversal) and the Scan Light row
+      (External/White/RGB) - native `QPushButton` padding is generous
+      enough that 3 buttons with real text (worst case "Color Reversal"/
+      "Couleur Inversible") could overflow the panel on their own.
+    - **`scan_use_webcam_checkbox` shortened** (i18n, both languages) from
+      "Use webcam / iPhone instead (test)"/"Utiliser une webcam / iPhone à
+      la place (test)" to a plain "Webcam / iPhone (test)" in both - the
+      full explanation stays available via `scan_use_webcam_tooltip`
+      (unchanged), so nothing is actually lost, just moved off the
+      always-visible label.
+    - Verified headlessly (measuring each affected widget's own
+      `minimumSizeHint()` directly, not the block's aggregate one - the
+      offscreen Qt platform plugin logs "This plugin does not support
+      propagateSizeHints()", so a parent's own aggregate hint can't be
+      trusted here, per the standing caveat about offscreen font-metric
+      measurements elsewhere in this doc): the Film row's summed button
+      width dropped from 263px/291px (EN/FR) to 167px/198px, the Scan
+      Light row from 264px/297px to 224px/280px, and the webcam checkbox
+      from 238px/295px to a flat 167px in both languages - all now
+      comfortably under the ~330-340px of actual content width a 360px
+      panel leaves after its own chrome margins. **Not verified here**:
+      the real rendered width at real macOS font metrics (this
+      environment's offscreen font substitution is known to not match) -
+      needs the user's own pass to confirm the overflow is actually gone,
+      same caveat as every prior width-related fix in this codebase.
+  - **"Add to Current Session" made real (2026-09-04), plus a forced
+    save-folder prompt - both requested together, scoped explicitly to
+    "classic compressed format" (plain JPEG, the camera's own default
+    quality setting) rather than RAW** (RAW capture/import is a separate,
+    not-yet-built direction - see the "Is there a way to add RAW support"
+    exploratory answer earlier in this conversation; nothing about RAW
+    changed here).
+    - **Empty-folder guard**: `_destination_folder()` used to silently
+      fall back to the home directory when `base_folder_edit` was empty -
+      harmless but surprising (scans would quietly land in `~` with no
+      indication). New `_ensure_base_folder()` is called at the very top
+      of `_on_capture_clicked()` (covers both a plain shot and the RGB
+      Light triplet, which both funnel through this one entry point): if
+      the folder field is empty, it opens the folder picker right away
+      (`scan_select_folder_prompt_title`) instead of proceeding: cancelling
+      aborts the capture attempt entirely, picking a folder fills the
+      field and lets capture continue. `_destination_folder()`'s own `~`
+      fallback is left in place as a defensive last resort for any other
+      caller, not removed.
+    - **History rows now carry structured data, not just display text.**
+      `_finish_capture()` builds each row as a real `QListWidgetItem`
+      (was a bare string passed to `addItem`) and attaches
+      `{"path", "channel", "invert", "index", "light_mode"}` via
+      `item.setData(Qt.UserRole, ...)` - `invert` and `light_mode` are
+      snapshotted from `_current_mode()`/`light_mode_group.checkedId()`
+      **at capture time**, not re-read later, so changing Mode/Light
+      afterward can't retroactively misinterpret an already-captured
+      entry. `history_list` gained `QAbstractItemView.ExtendedSelection`
+      so multiple rows can be selected together - necessary for the next
+      point, since an RGB Light triplet's 3 rows (sharing one `index`,
+      suffixed `_R`/`_G`/`_B` in the filename per the original RGB Light
+      design) must all be selected as a set to reconstruct one trichrome
+      photo.
+    - **`_on_add_to_session_clicked()`** groups the selected rows by their
+      shared `index` field, then per group: `light_mode == 2` (RGB Light)
+      requires all 3 of R/G/B present in that group or it's reported as
+      an incomplete triplet (`scan_add_to_session_incomplete_triplet`,
+      listing the skipped index numbers in one alert - the other, valid
+      groups in the same click still go through, same "load what you can,
+      report the rest" convention as `on_carousel_files_dropped`) and
+      skipped; anything else (External/White light) is a plain single-
+      image entry, one per row. Nothing selected at all shows
+      `scan_add_to_session_none_selected` instead of silently doing
+      nothing. Emits **`add_to_session_requested`** (a new `Signal(list)`
+      on `ScanPanel`) with one dict per valid group -
+      `{"kind": "normal", "path", "invert"}` or `{"kind": "trichrome",
+      "paths": {"R","G","B"}, "invert"}` - `ScanPanel` itself never
+      imports `model.py`/`imaging.py`, same "panel emits, MainWindow
+      builds" split `import_panel.py`'s `add_photo_requested`/
+      `load_normal_requested` already established.
+    - **`MainWindow.on_scan_add_to_session_requested(groups)`** (wired to
+      the signal in `_build_ui`, right next to
+      `carousel.files_dropped.connect(...)`) builds one `BatchItem` per
+      group - reuses the existing `_build_normal_batch_item(path)` for a
+      `"normal"` group (then overwrites `.normal_layer.invert` with the
+      group's captured value) and a new **`_build_trichrome_batch_item_from_paths(paths_by_channel,
+      invert)`** for a `"trichrome"` group - same load/layer shape as
+      `import_worker.py`'s `BatchImportWorker._build_item` (loads each
+      file via `imaging.load_grayscale`, `"G"` as the reference channel,
+      matching this app's established default reference-channel
+      convention elsewhere), but **deliberately left at identity
+      alignment, no auto-align run** - same "shell first, let the user
+      run Auto Align from the Trichrome Process block themselves" choice
+      already made for `_add_trichrome_photo`'s empty-item case, not a
+      decision specific to this feature. One bad/unreadable file among
+      several selected groups doesn't block the rest - failures are
+      collected and reported in one `show_alert` (reusing the existing
+      `dialog_load_error_title`/`dialog_drop_photos_failed_text` keys
+      verbatim, same wording already used for the carousel-drop failure
+      case, since the message reads correctly for either context).
+    - **Invert auto-set directly from the Film mode captured with, per
+      the user's explicit spec** ("invert in color and B&W, no invert in
+      reversal") - this was already exactly what `MODES`' own 3rd tuple
+      element encodes and what `_finish_capture` was already snapshotting
+      into each history row's `invert` field, so no new mapping logic was
+      needed here - only wiring that already-captured value onto the
+      newly-built item(s) (`normal_layer.invert` / all 3 `ChannelLayer.invert`)
+      instead of leaving them at the default `False`.
+    - Verified headlessly with real synthetic image files: `_ensure_base_folder()`
+      prompts exactly when the field is empty and not when it already has
+      a value, and correctly aborts on a cancelled prompt; a B&W-mode/
+      External-light capture's history payload carries `invert=True`/
+      `light_mode=0`; a Color-Reversal-mode/RGB-Light triplet's 3 rows all
+      carry `invert=False`/`light_mode=2`/the same shared `index`; adding
+      just the single External-light row produces one Normal-mode
+      `BatchItem` with `normal_layer.invert` correctly `True`; selecting
+      all 3 RGB rows produces one Trichrome-mode `BatchItem` with all 3
+      channels' `invert` correctly `False`, correct R/G/B→path assignment,
+      and G marked as reference; selecting only 2 of the 3 RGB rows
+      triggers the incomplete-triplet alert and adds nothing; selecting
+      nothing triggers the empty-selection alert; QSettings isolation
+      confirmed untouched on both real domains (`TrichromeMaker`/
+      `TrichromeMaker` and `TrichromeMaker`/`ScanTool`) throughout: the
+      real Scan Tool domain's `next_number`/`mode_index` were confirmed
+      unchanged, and its own pre-existing empty `base_folder` value (from
+      the user's own prior real use, never having set one yet) is exactly
+      the scenario the new empty-folder prompt now catches instead of
+      silently defaulting to `~`. Full app boot; pyflakes clean; i18n
+      parity holds. **Not verified here**: the real drag/click feel of
+      multi-selecting history rows and the folder-picker prompt in the
+      running app - needs the user's own pass, same as any interactive
+      change.
+  - **Backlight window not raised on Capture under White light, fixed
+    2026-09-04** - a quick UI bug the user caught directly. The backlight
+    window was only ever `.show()`/`.raise_()`'d from `_sync_backlight_window()`
+    on a **light-mode switch** (`_on_light_mode_changed`) or, for RGB, on
+    every step of `_advance_rgb_sequence()` - under plain White light,
+    nothing re-raised it when Capture was actually clicked, so a window
+    that had lost focus (clicked into another app, buried behind the main
+    window) stayed hidden right when it needed to be visible for framing.
+    Fixed with one added call, `self._sync_backlight_window()` at the top
+    of `_on_capture_clicked()` (right after the folder/camera guards,
+    before branching into the RGB-vs-single-shot path) - a no-op for
+    External (the method's own existing `checkedId() <= 0` guard), and
+    harmless/redundant for RGB since `_advance_rgb_sequence()`'s own raise
+    immediately follows and wins. Verified headlessly (mocking
+    `_sync_backlight_window` and `_start_capture` to isolate the call
+    without touching real gphoto2/window state) that clicking Capture
+    under White light now calls it.
+  - **"Sample Film Base" - a real color-accuracy gap in RGB Light scanning
+    of color film, added 2026-09-04.** Raised by the user directly, after
+    reading that RGB-LED sequential scanning gives better color fidelity
+    than a single "white" CRI backlight (true - narrow-band R/G/B
+    illumination does the color separation itself, rather than relying on
+    the camera's own imperfect Bayer filters under a spectrally-incomplete
+    white source, which is a real, established reason camera-scanning
+    rigs use sequential RGB capture beyond just B&W separations) - then
+    reporting that a white-balance pick alone wasn't correcting a color
+    negative's base color. **The actual reason, worked out and confirmed
+    numerically before writing any code**: `invert` (`1 - x`) is applied
+    **per channel, before** anything else in this app's pipeline -
+    including before white balance. Color negative's orange mask is a
+    *multiplicative* per-channel bias on the raw (pre-invert) transmitted
+    light (e.g. `x' = k·x` for blue, `k < 1`). But `1 - k·x` is not a
+    rescaled version of `1 - x` - the difference, `(1-k)·x`, depends on
+    `x` itself, so the mask's color cast does **not** survive inversion as
+    a uniform tint; it becomes tone-dependent (worst in the shadows, which
+    map to the film's clear/densest-transmission areas). A single
+    post-invert white-balance pick can only neutralize the one tone
+    clicked on - everything at a different brightness still drifts,
+    exactly matching what the user reported. Real negative-scanning tools
+    handle this by sampling the film base/rebate and normalizing each
+    channel **before** inverting - structurally earlier than a white-
+    balance pick, and what this feature adds.
+    - **Scope, per the user's explicit "add this option in the scan tool
+      for now"**: lives entirely in the Scan tool's own capture→import
+      path (RGB Light triplets added via "Add to Current Session" - see
+      the "Add to Current Session" entry above), not as a general,
+      reusable correction exposed anywhere else in the app's editing UI.
+      Session-scoped only (`ScanPanel._film_base`, an in-memory
+      `{"R"/"G"/"B": float}` dict) - **not QSettings-persisted**,
+      deliberately, to keep this first pass simple; resets on relaunch,
+      same as needing to re-focus/re-frame the camera anyway.
+    - **`ScanPanel.sample_base_button`** ("Sample Film Base", RGB-Light-only
+      - hidden otherwise via `_sync_film_base_visibility()`, same
+      hide-unless-relevant convention as `light_note_label`) reuses the
+      **exact same 3-shot RGB sequence machinery** as a real capture
+      (`_advance_rgb_sequence`/`_start_capture`/`_start_webcam_capture`/
+      `_on_capture_step_finished`) - device selection, backlight color
+      cycling, per-channel error handling, all unchanged - rather than a
+      parallel implementation. The only two differences are threaded
+      through via a new `self._sampling_base` flag: (1) a new
+      **`_capture_destination_folder()`** (used by both `_start_capture`/
+      `_start_webcam_capture` in place of `_destination_folder()`) routes
+      the 3 calibration shots to a throwaway `tempfile.mkdtemp()` instead
+      of the user's own save folder - they're pure measurement data, never
+      meant to be kept, and don't need `_ensure_base_folder()`'s prompt at
+      all; (2) **`_finish_capture()`'s first line now branches to a new
+      `_finish_base_sampling(entries)`** instead of its normal
+      history/manifest/counter-advance body when `self._sampling_base` is
+      set - computes each channel's mean via `imaging.load_grayscale(path).mean()`,
+      only overwrites `self._film_base` when **all 3** channels succeeded
+      (a partial sample - e.g. one channel failed mid-sequence - leaves a
+      previous good sample untouched rather than replacing it with a bad
+      one), then deletes the temp dir. `_handle_capture_failure()` also
+      gained a check for `self._sampling_base` (routing to
+      `_finish_base_sampling` even with 0 successful channels) - **a real
+      bug caught while writing this**: without it, a failure with nothing
+      yet captured fell through to the bare `_end_capture_ui()` branch,
+      which would have left `_sampling_base` stuck `True` forever and the
+      temp dir never cleaned up.
+    - **The correction itself lives in `MainWindow._build_trichrome_batch_item_from_paths`**
+      (main_window.py), which gained an optional `film_base` parameter -
+      `full = np.clip(full / base_value, 0.0, 1.0)` applied to each
+      channel's raw density **before** `imaging.make_preview`/before
+      `invert` is later applied downstream, normalizing so the sampled
+      clear-film reference maps to 1.0 uniformly across all 3 channels
+      (removing the mask bias) while real image content still varies
+      below that - `clip` guards a pixel that reads very slightly brighter
+      than the sampled reference (noise, an imperfect sample point) from
+      going negative pre-invert. **This builder now always keeps
+      `image_full` in memory** (previously lazy like `BatchImportWorker`'s
+      own batch-import items) - specifically because the correction only
+      lives in this in-memory array; a later lazy reload straight from
+      disk (`_full_res_image`'s fallback, used at export time for
+      anything without a kept `image_full`) would otherwise silently skip
+      it, producing a mask-corrected preview but an uncorrected export -
+      caught by reasoning through the export path before writing the
+      code, not by a failing test.
+    - **`ScanPanel` remains model.py-import-free, but now imports
+      `imaging.py`** for the one narrow `load_grayscale(...).mean()` call
+      in `_finish_base_sampling` - a deliberate, documented exception to
+      the "panel emits, MainWindow builds" split (see the class docstring):
+      a scalar mean is a lightweight calibration measurement, not image
+      manipulation or `BatchItem` construction, so it stays in the panel
+      that owns the calibration state (`self._film_base`) rather than
+      round-tripping through a signal to MainWindow and back.
+    - **`apply_film_base_checkbox`** (visible only once a base has been
+      sampled) gates whether a sampled base is actually attached to a
+      given "Add to Current Session" request - `_on_add_to_session_clicked`
+      only includes `"film_base"` on a `"trichrome"`-kind request when both
+      `self._film_base is not None` and the checkbox is checked; a
+      `"normal"`-kind request never gets one (the correction is meaningless
+      on an already-composited single-shot color photo). Lets the user
+      capture photos both with and without correction in the same session
+      without re-sampling.
+    - Verified headlessly with real synthetic image data (not just mocked
+      flow control, since the correction is a genuine numerical claim):
+      simulated a mask-biased triplet (per-channel raw = sampled base ×
+      a common neutral-scene transmittance) and confirmed the **corrected**
+      raw channels converge to that same transmittance value within 2%
+      across all 3, while the **uncorrected** ones visibly disagree (>5%
+      spread) - i.e. the fix demonstrably removes a simulated orange-mask-
+      style bias, not just "runs without crashing"; the full RGB sequence
+      → `_finish_base_sampling` flow (temp dir created and cleaned up,
+      both buttons disabled mid-sequence, per-channel means computed
+      correctly); a partial (2-of-3) resample leaving a previous good
+      sample untouched; `_sync_film_base_visibility()` correctly hides/
+      shows the 3 new widgets based on light mode; the checkbox correctly
+      gating whether correction is actually applied through a full
+      `_on_add_to_session_clicked` → `on_scan_add_to_session_requested`
+      round trip; QSettings isolation confirmed untouched on both real
+      domains throughout. **Not verified here**: the real visual/tactile
+      feel of sampling against actual color negative film on a real
+      camera/backlight rig - this is fundamentally a physical-accuracy
+      claim (does it actually neutralize a real orange mask) that only
+      the user's own test against real film can confirm; the numerical
+      verification above only proves the *math* does what it's supposed
+      to on a controlled synthetic input.
+  - **RGB Light colors confirmed pure primaries, same day, in response to
+    a direct question**: `_RGB_CHANNEL_COLORS` (`scan_window.py`) is
+    `{"R": QColor(255, 0, 0), "G": QColor(0, 255, 0), "B": QColor(0, 0, 255)}`
+    - fully saturated, single-channel colors, not some CRI-broadened
+    approximation. No code change, purely a confirmation.
+  - **Follow-up, same day - two more requests together: drop the
+    intermediate "Captured this session" list entirely (auto-add every
+    completed capture straight to the carousel instead), and add an
+    eyedropper alternative for setting the film-base reference from a
+    photo already in the session.**
+    - **Auto-add, replacing the manual history list + "Add to Current
+      Session" button.** The whole `history_list`/`add_to_session_button`/
+      `history_section_label` UI and the `Qt.UserRole`-payload/grouping
+      machinery in `_on_add_to_session_clicked` are gone from the
+      integrated `ScanPanel` - **the standalone tool's own history list is
+      untouched** (`scan_tool/scan_window.py` wasn't touched at all this
+      pass; it keeps its own separate, still-a-no-op "Add to Current
+      Session" button, since it has no `MainWindow` to hand off to).
+      `_finish_capture()` still logs every entry to `manifest.append_entry`
+      unconditionally (unrelated to the UI, per-photo metadata on disk),
+      but now, only inside its `if advance_index and entries:` branch (the
+      one place that already means "this capture is genuinely complete,
+      not a partial/failed RGB triplet" - see the comment there), calls a
+      new **`_auto_add_to_session(entries, light_mode_id, invert)`** -
+      builds exactly the one capture-group request `_on_add_to_session_clicked`
+      used to build from a full selection group, and emits
+      `add_to_session_requested` directly with it. `film_base`/
+      `apply_film_base_checkbox` gating is unchanged, just triggered
+      automatically instead of by a manual click. A partial/failed RGB
+      triplet (reached via `_handle_capture_failure` with
+      `advance_index=False`) still logs whatever channels succeeded to
+      the manifest, same as before, but is never auto-added - correctly
+      falls out of the new code simply by never entering that branch, no
+      separate incomplete-triplet check needed anymore (there's no
+      "selection" to validate against once each capture drives its own
+      single, always-complete-or-nothing add). The now-fully-dead
+      `scan_add_to_session_none_selected`/`scan_add_to_session_incomplete_triplet`
+      i18n keys were removed (verified zero references anywhere first, per
+      this project's established dead-key-removal convention) -
+      `scan_history_group`/`scan_add_to_session_button` were kept, since
+      the standalone tool's own (untouched) history UI still uses them.
+    - **Eyedropper alternative to a dedicated 3-shot Sample Film Base
+      capture**: `ScanPanel.pick_from_photo_button` (a new
+      `SvgCheckableToolButton`, same `Color Correction/eyedropper.svg`
+      icon as the other 2 canvas pick tools), sitting right next to
+      `sample_base_button` in the same row, same RGB-Light-only visibility
+      gating (`_sync_film_base_visibility`). Toggling it emits a new
+      `pick_film_base_from_photo_toggled` signal - **this is the one part
+      of the whole film-base feature that couldn't stay inside `ScanPanel`
+      the way `_finish_base_sampling`'s narrow `imaging.load_grayscale`
+      exception did**: reading a specific point from a specific
+      `BatchItem`'s 3 warped channels needs `model.py`/full compose-pipeline
+      access, which is MainWindow's job, not this panel's - so unlike the
+      dedicated capture path, this one lives mostly in
+      `MainWindow.on_pick_film_base_from_photo_toggled`/
+      `on_film_base_pick_requested`.
+      - **A third canvas eyedropper mode**, added to `canvas_widget.py`
+        following the exact existing `wb_pick_enabled`/`histogram_pick_enabled`
+        pattern: `_ImageLabel` gained `film_base_pick_enabled` +
+        `film_base_pick_requested = Signal(float, float)`,
+        `set_film_base_pick_enabled()`, a branch in `mousePressEvent`
+        (single-click, like white balance - not a live hover like the
+        histogram pick), and `_refresh_cursor()` extended to check all 3
+        flags for the shared eyedropper cursor. `CanvasWidget` re-exposes
+        `film_base_pick_requested` and `set_film_base_pick_enabled()` the
+        same delegating way `white_balance_pick_requested`/
+        `set_wb_pick_enabled()` already are. **Deliberately not made
+        mutually exclusive with the white balance/histogram pick tools**
+        (confirmed by reading `on_pick_white_balance_toggled` first -
+        neither existing pick tool disarms the other either; only Crop
+        activation disarms picking, an established exception) - kept
+        consistent with that precedent rather than inventing a new rule.
+      - **Validated at arm time, not just on click**:
+        `on_pick_film_base_from_photo_toggled(checked)` checks the *active*
+        `BatchItem` is Trichrome mode with all 3 channels loaded before
+        actually arming - if not, it force-unchecks the button
+        (`set_pick_from_photo_active(False)`) and shows
+        `scan_pick_film_base_requires_trichrome` immediately, rather than
+        arming a tool that could only fail once clicked.
+      - **`on_film_base_pick_requested(u, v)`** is structurally the
+        `white_balance`-eyedropper's sibling, but samples **3 separate raw
+        channel arrays instead of 1 composed array**, and - the one
+        genuine correctness subtlety here - **warps each channel to canvas
+        space first** (`imaging.build_similarity_matrix`/`warp_to_canvas`,
+        the exact per-channel math `recompute_preview`'s own composite
+        path already uses) before sampling. This matters whenever the
+        photo has real per-channel alignment (e.g. after running Auto
+        Align on it): the same clicked `(u, v)` canvas position then maps
+        to a *different* raw pixel in each channel's own, differently-
+        warped array - sampling `image_preview` directly at the same
+        `(u, v)` without warping first would silently sample the wrong,
+        misaligned point in 2 of the 3 channels whenever alignment isn't
+        still identity. Straighten/mirror/crop are applied the same way
+        `on_white_balance_picked` already does. Reads **raw density**
+        (no invert/tone-curve), the same kind of quantity
+        `_finish_base_sampling`'s own mean already stores, so the two
+        paths produce directly comparable references. Single-shot -
+        disarms itself (button + canvas flag) as its very first action,
+        before validating, mirroring `on_white_balance_picked`'s own
+        ordering.
+      - **Disarms on the same 2 triggers the white balance eyedropper
+        already does** - `activate_batch_item` (photo switch) and
+        `_set_crop_active(True)` (Crop dragging is a real conflicting
+        canvas-click mode) - both gained a
+        `scan_panel.set_pick_from_photo_active(False)` +
+        `canvas.set_film_base_pick_enabled(False)` pair right next to the
+        existing white-balance equivalent.
+      - `set_film_base_from_pick(base)` on `ScanPanel` just sets
+        `self._film_base` and re-syncs the status label/visibility - from
+        that point on it's indistinguishable from a dedicated sample, so
+        every downstream consumer (`apply_film_base_checkbox`'s own
+        gating, `_auto_add_to_session`) needed zero changes.
+    - Verified headlessly with real synthetic image data: a single normal
+      (External-light) capture and a complete RGB Light triplet both now
+      land in the carousel automatically with the correct mode/invert, a
+      partial/failed triplet does not; the integrated panel has no
+      `history_list`/`add_to_session_button`/`history_section_label`
+      attributes at all anymore; arming the eyedropper on a Normal-mode
+      active photo is refused with an alert and the button stays
+      unchecked, arming on a Trichrome photo with all 3 channels succeeds;
+      a simulated click samples all 3 channels into `[0, 1]` and disarms
+      itself immediately; switching photos and activating Crop both
+      correctly disarm it if left armed; both real QSettings domains
+      confirmed to hold no test-originated data (checked the real
+      `base_folder` value specifically for a leaked scratch-test path, not
+      just a changed counter, since a `next_number` value can legitimately
+      change from the user's own real, independent use of the app between
+      checks); full app boot; pyflakes clean; i18n parity holds; dead-key
+      removal confirmed via grep before deleting. **Not verified here**:
+      the real visual/tactile feel of clicking a point on a real photo in
+      the running app, and whether warping-before-sampling actually reads
+      correctly against a real Auto-Aligned photo with non-trivial
+      per-channel offsets - needs the user's own pass, same as any
+      interactive/visual change.
+  - **Per-session scan settings, added 2026-09-04** ("garde en mémoire les
+    derniers réglages du mode scan au sein du fichier d'une session" - keep
+    the Scan tool's latest settings within a session file). Until this
+    pass, every field `ScanPanel._save_settings()`/`_load_settings()`
+    persists (base folder, subfolder, roll name, next number, use-roll-
+    as-subfolder, use-webcam, Film mode index, Light mode index) lived
+    **only** in the Scan tool's own separate, cross-session QSettings
+    domain (`scan_window.ORG_NAME`/`.APP_NAME`, `"TrichromeMaker"`/
+    `"ScanTool"`) - global and always "whatever was last used anywhere,"
+    completely independent of which `.trirgb` session happened to be open.
+    Opening a different session file never changed the Scan tool's
+    configuration at all.
+    - **Deliberately `.trirgb`-only, not also threaded through the app's
+      own QSettings-autosave fallback** (`_save_session_state`/
+      `_legacy_restore_session`) - a real scoping decision, not an
+      oversight, worth explaining since every other piece of window-level
+      state in this file (`tool_side`, `block_visible`, panel visibility,
+      Harris Shutter before it went per-channel...) *is* threaded through
+      both mechanisms. The Scan tool's settings already have their own
+      always-on persistence (the separate `ScanTool` domain above) - if
+      that were *also* mirrored into the main app's own QSettings-autosave
+      domain, there'd be two competing sources of truth for "what were the
+      scan settings last time" with no clear precedence rule, whereas the
+      `.trirgb` file is the one case where "restore exactly what was saved
+      **for this specific session**" is unambiguous and matches the user's
+      literal ask ("au sein du fichier d'une session" - within a session's
+      *file*). When there's no `.trirgb` to open (a fresh session, or the
+      legacy-restore fallback), the Scan tool simply keeps behaving exactly
+      as it already did - falling back to its own separate domain's "last
+      used anywhere" value, same as before this feature existed.
+    - **`ScanPanel.settings_snapshot()`** (returns the same field set as
+      `_save_settings()`, as a plain dict) and **`apply_settings_snapshot(data)`**
+      (its inverse - same `blockSignals` discipline as `_load_settings()`,
+      for the identical field-clobbering reason documented there; missing
+      keys leave the tool's current configuration untouched rather than
+      resetting to a hardcoded default, so an old `.trirgb` saved before
+      this feature existed - or a bare `{}` - is a correct no-op, not a
+      reset). `apply_settings_snapshot` ends by calling `_save_settings()`
+      itself, so the restored values also become the new baseline in the
+      Scan tool's own separate domain (both for a brand-new capture inside
+      *this* session without touching any field first, and as the "last
+      used anywhere" default carried forward into whatever session opens
+      next) - and by calling `_poll_devices()` explicitly, since restoring
+      `use_webcam` with signals blocked means `_on_use_webcam_toggled`'s
+      own device-repoll never fired on its own.
+    - **`MainWindow._collect_session_data()`** gained a top-level
+      `"scan_settings": self.scan_panel.settings_snapshot()` key (a
+      window-level field, spread in alongside `_capture_layout_state()`'s
+      own dict rather than *merged into* it - scan settings aren't
+      "layout," and folding them in there would have made them show up in
+      Layout Presets too, which isn't wanted). **`load_session_from_path()`**
+      gained one line, `self.scan_panel.apply_settings_snapshot(data.get("scan_settings",
+      {}))`, right after the existing `_apply_layout_state(data)` call -
+      this single call site covers both explicit File ▸ Open Session *and*
+      the automatic launch-time restore of a remembered `.trirgb`
+      (`_restore_session` calls `load_session_from_path` for that exact
+      case - see the session-persistence architecture note up top), so no
+      second call site was needed.
+    - Verified headlessly: saving a session with distinctive scan settings
+      (custom roll name, next-number, subfolder, Film/Light mode indices),
+      changing all of them afterward, then reloading that same file
+      correctly restores every original value (not just leaves them
+      unchanged - the pre-reload state was deliberately set to different
+      values first, so this proves real restoration, not a no-op); the
+      restored values are also confirmed written back into the Scan tool's
+      own separate QSettings domain; an old-format `.trirgb` with the
+      `"scan_settings"` key stripped out loads without crashing and leaves
+      the tool's current configuration untouched (not reset); QSettings
+      isolation confirmed untouched on the real `ScanTool` domain
+      (checked for the specific test roll name, not just a changed value,
+      per the standing testing convention); pyflakes clean; full app boot.
+      No new i18n strings were needed for this pass.
+
+## Normal / Trichrome mode (added 2026-09-04)
+
+The app's first step beyond pure trichromy: a **Files block toggle**
+(`import_panel.py`) between **Trichrome** (the app's original behavior - 3
+R/G/B shots recomposed) and **Normal** (a single already-color photo, loaded
+straight through with no warp/alignment/recompose step). Light/Color/Crop/
+Curves still apply on top either way; only the RGB Channels tool (which only
+makes sense for the 3-channel case) becomes unavailable in Normal mode. The
+user's own framing: "maintenant que nous avons un logiciel de retouche photo
+complet, il ne doit plus être limité qu'à la trichromie" - explicitly a
+first pass, with the Files/import UI itself flagged for a proper rework
+later ("Nous reviendrons plus précisément à la fenêtre d'import plus tard").
+
+- **`BatchItem.mode: str = "trichrome"`** (model.py) - `"trichrome"` or
+  `"normal"`, default preserves every existing session/behavior untouched.
+  **`BatchItem.layers` (the 3 `ChannelLayer`s) still always exists even in
+  Normal mode** - deliberately never repurposed, resized, or left `None`.
+  This was the key simplifying decision: the ~15 existing call sites across
+  this codebase that unconditionally read `item.layers[i]` (undo/redo,
+  copy/paste, Reset All, session persistence, the per-channel UI sync
+  loops, ...) needed **zero changes**, since an inert/empty default triplet
+  is harmless to read from; only the places that actually compose/display/
+  export the image, or gate the RGB Channels tool, needed to know about
+  `mode` at all.
+- **`BatchItem.normal_layer: ChannelLayer`** - a second, independent
+  `ChannelLayer` instance (not one of the 3 trichrome channels, never
+  passed into `compose_trichrome`/`compose_rgb_from_channels`) reused
+  purely as a convenient single-image holder - gets `has_image()`/
+  `is_missing()`/lazy full-res reload for free. Its own alignment/tone/
+  harris_shutter fields are simply unused (no UI exposes them in this
+  pass - Normal mode's only "editing surface" is Light/Color/Crop/Curves,
+  which already operate on `item.global_corr`/`item.crop`, themselves
+  completely mode-agnostic and shared unchanged between both modes).
+  `invert`/`quarter_turns` on `normal_layer` are likewise present (free,
+  it's a `ChannelLayer`) but not yet wired to any control - a natural
+  follow-up, not built here since the user's spec didn't ask for it.
+- **`imaging.compose_normal(image, global_params)`** - the Normal-mode
+  counterpart of `compose_trichrome`, same `global_params` tuple shape:
+  no warp/recompose stage, just `apply_global_correction` directly on the
+  already-loaded color image.
+- **`MainWindow.normal_layer`** is aliased to the active item's own
+  `normal_layer` exactly the way `self.layers`/`self.global_corr`/
+  `self.crop` already alias the active item's own objects - set in
+  `activate_batch_item`/`_restore_state`/`_apply_restored_items` (undo/redo
+  and both session-restore paths), the same 3 places those other 3
+  aliases are already assigned.
+- **`MainWindow._reference_layer()` gained one branch**: returns
+  `self.normal_layer` while the active item is in Normal mode, instead of
+  walking `self.layers` for the `is_reference` one. This single change is
+  what makes `_current_crop_ratio_value`/`_composed_image_ratio`/
+  `_current_export_base_name`/`_export_current` (export_dialog.py) all
+  correct for Normal mode automatically, without each needing its own
+  mode check - they only ever wanted "the composed image's own size/path,
+  whatever it is." `on_auto_align_all` gets an explicit early-return guard
+  instead (not reachable via the UI in Normal mode anyway, since Auto
+  Align lives in ImportPanel's trichrome-only container - the guard is
+  defense-in-depth, since `_reference_layer()` returning `normal_layer`
+  there would have no `is_reference`-based "other channels" concept to
+  align against). `on_white_balance_picked` branches explicitly (Normal
+  mode's "pre-white-balance" array is just `apply_tone_curve` on
+  `normal_layer.image_preview` directly, skipping the trichrome
+  recompose `compose_pre_white_balance_rgb` needs).
+- **`recompute_preview()`** branches at the very top (once the mode-
+  agnostic Light/Color/Crop/Curves reset-button states are set) into a new
+  **`_recompute_preview_normal()`** - straighten/mirror/crop +
+  `apply_global_correction_before_curves`/`apply_curves` on
+  `normal_layer.image_preview` directly, no warp/coverage-mask/Solo-
+  preview concepts at all (Solo has no meaning without separate R/G/B
+  channels - the RGB Channels panel where Solo checkboxes live is
+  disabled anyway). Deliberately a **separate function with some
+  duplication** against the trichrome branch's straighten/crop/curves-
+  reference-histogram tail, rather than a deeper shared-tail refactor -
+  safer given how complex the existing trichrome path already is.
+- **`ImportPanel` (import_panel.py) restructured**: a new mode-toggle row
+  (2 exclusive `QPushButton`s, `mode_change_requested(str)` signal - the
+  panel itself never decides whether a switch is safe, it only asks;
+  `set_mode(mode)` is the programmatic sync call, blockSignals-safe) sits
+  above two swappable containers - `trichrome_container` (the pre-existing
+  3 R/G/B rows + Auto Align + lock row, unchanged, just re-parented) and a
+  new `normal_container` (a single filename label + "Load Image" button,
+  `load_normal_requested` signal). Only one container is visible at a
+  time, following the mode.
+- **`MainWindow.on_import_mode_change_requested(mode)`** is the single
+  entry point for every mode switch (the toggle click, ultimately). Normal
+  → Trichrome is always unconditional (nothing is lost - `normal_layer`
+  simply stops being read from while inactive, fully reversible later).
+  Trichrome → Normal branches on how many of the 3 channels currently
+  have an image: **0** is a trivial flip (nothing to carry over); **1**
+  auto-picks that one channel; **2 or 3** shows the new
+  **`ModeSwitchDialog`** (`widgets/mode_switch_dialog.py`, same
+  custom-QDialog convention as `UnsavedChangesDialog` - tinted
+  `warning.svg`, plain `QPushButton`s, no native chrome) listing only the
+  channels that actually have an image loaded, per the user's literal
+  spec ("Photo Trichrome, êtes vous sûr de repasser en mode normal ? ...
+  Red Layer / Green Layer / Blue Layer") - cancelling reverts the toggle
+  button via `set_mode("trichrome")` without touching any state.
+  **`_switch_to_normal_mode(item, source_layer)`** always **reloads the
+  chosen channel's own file fresh via `imaging.load_color()`** (not a
+  reinterpretation of its already-loaded grayscale pixel array, which
+  would be wrong - `load_grayscale`'s output is single-channel by
+  construction, real color data from the original file is what Normal
+  mode needs) - the 3 original channels are never mutated, so switching
+  back to Trichrome later restores them exactly as they were. Also
+  reachable defensively from `_load_normal_image_from_path` itself (a
+  Normal-mode Load always forces `item.mode = "normal"` even if somehow
+  called while it wasn't already, rather than only relying on the Load
+  button being unreachable outside `normal_container`).
+- **RGB Channels greying** - `MainWindow._sync_channels_panel_availability(mode)`
+  disables the 3 `ChannelPanel`s + the Harris Shutter checkbox/info button
+  individually (not the whole block body, so collapse/close stay
+  functional) and shows/hides a new `channels_disabled_label`
+  (`channels_disabled_normal_mode` i18n key, "Available only in Trichrome
+  mode"/"Disponible uniquement en mode Trichrome") added at the top of the
+  block's body. A shared **`_sync_import_and_channels_ui()`** tail (mode
+  toggle sync + normal filename + channels availability) is called from
+  every place the active item's mode could have just changed -
+  `activate_batch_item`, `_restore_state`, `_apply_restored_items`, and
+  the mode-switch handlers themselves.
+- **Threaded through both session-persistence mechanisms** (per this
+  codebase's usual convention - see the session-persistence architecture
+  note in Key Patterns above): `.trirgb` JSON gained a per-item `"mode"`
+  key and a `"normal": {"path", "quarter_turns"}` dict
+  (`_collect_session_data`/`_build_restored_items_from_data`); QSettings
+  autosave gained per-item `mode`/`normal_path`/`normal_mtime`/
+  `normal_quarter_turns` keys, `normal_mtime` following the exact same
+  staleness-check convention the 3 trichrome channels already use
+  (`_save_session_state`/`_legacy_restore_session`). **A real bug caught
+  while wiring this up**: the existing "drop a genuinely empty item on
+  restore" filter (`if not any_loaded and not any(l.path for l in
+  layers): continue`) would have silently dropped every restored
+  Normal-mode item, since a Normal-mode item's 3 trichrome `layers` never
+  have a path by construction - fixed by also checking
+  `normal_path`/`normal_layer.path` in that condition, in both restore
+  paths. `_snapshot_state`/`_restore_state` (undo/redo) and
+  `duplicate_batch_item` also thread `mode`/`copy.copy(normal_layer)`
+  through their explicit `BatchItem(...)` reconstruction calls, per the
+  documented "any new BatchItem field must be threaded through
+  `_snapshot_state`'s `BatchItem(...)` call or it silently resets on
+  undo" rule.
+- **Export** (`export_worker.py`/`widgets/export_dialog.py`) - a new
+  `MainWindow._full_res_color_image(layer)` (the Normal-mode counterpart
+  of `_full_res_image`, loading via `imaging.load_color` so it never
+  collapses to grayscale) plus a per-item `mode` branch in both the
+  single-item (`_export_current`) and batch (`BatchExportWorker.run`,
+  which now takes an optional `full_res_color_loader` callback) export
+  paths - a batch export can freely mix Trichrome and Normal-mode items
+  in one run, each composed through its own pipeline
+  (`compose_trichrome`/`compose_normal`) before the shared
+  straighten/mirror/crop + save step.
+- **Not built in this pass, deliberately** (scope matches the user's own
+  "we'll rework the import window later" framing): no changes to the
+  standalone batch-import window/worker (`batch_window.py`/
+  `import_worker.py`/`filters.py`) - a batch-imported item is always
+  `mode="trichrome"` still, matching prior behavior exactly; no rotate/
+  invert controls for `normal_layer` (the fields exist, nothing exposes
+  them yet); no attempt to make Reset All / copy-paste settings mode-aware
+  beyond what already works unchanged (mode itself is never copied by
+  Paste, matching how alignment/harris_shutter/invert already aren't -
+  it's identity, not a "color setting").
+- Verified headlessly end-to-end with a real synthetic color JPEG (Normal
+  mode) and 3 real synthetic grayscale PNGs (Trichrome mode): the mode
+  toggle correctly swaps `trichrome_container`/`normal_container`
+  visibility and enables/disables the 3 `ChannelPanel`s; a trivial
+  0-channels-loaded switch; the `ModeSwitchDialog` channel-picker path
+  (mocked, since a real `QDialog.exec()` can't run headlessly) correctly
+  reloads the chosen channel as color, leaves the original 3 channels
+  untouched, and updates the live preview/histogram; undo restores
+  Trichrome mode and re-enables the RGB Channels panel, redo restores
+  Normal mode again; both session-persistence mechanisms round-trip
+  `mode`/`normal_layer` correctly (including the empty-item-filter fix,
+  confirmed by the item surviving restore); `duplicate_batch_item` copies
+  `mode` and a genuinely distinct `normal_layer` object; French
+  retranslation of every new string; single-item export and a mixed-mode
+  `BatchExportWorker` batch run both produce correct-shaped output files.
+  **Not verified here**: the real drag/click feel of the mode toggle and
+  `ModeSwitchDialog` in the actual running app (needs the user's own
+  pass, same as any interactive/visual change), and real-world photo
+  files rather than synthetic test images.
+- **Renamed to "Trichrome Process" and gained Auto Align/Lock Layer
+  Position, 2026-09-04.** "RGB Channels" → **"Trichrome Process"**
+  (`independent_channels_group_title` i18n key, French "Traitement
+  Trichrome") - just the 4 places that string appeared (the block title
+  itself, and the 2-language `dialog_locate_failed_text` mentioning it by
+  name); `menu_tools_channels`-style Tools-menu entries and everything
+  else already derive from the same key, no separate change needed. Auto
+  Align and Lock Layer Position **moved from the Files block into this
+  block's own body** (above the RGB-Channels-disabled message/the 3
+  `ChannelPanel`s), per the user's own reasoning that both only ever
+  applied to the 3 trichrome channels this block controls, not to Files'
+  own load-image concerns. `ImportPanel` (`widgets/import_panel.py`) lost
+  `auto_align_button`/the whole lock row and their `auto_align_requested`/
+  `lock_requested` signals/`set_locked_channel()` entirely - the widgets
+  are now built directly in `MainWindow._build_ui` (needed
+  `SvgLetterToggleButton`/`CHANNEL_COLORS`/`CHANNEL_KEY` imports there)
+  and wired straight to `on_auto_align_all`/`on_reference_toggled`, no
+  proxy signal hop through ImportPanel anymore. `_refresh_reference_ui()`
+  now sets `self.lock_buttons[i].setChecked(...)` directly instead of
+  calling `import_panel.set_locked_channel(i)`. Both widgets are also now
+  disabled by `_sync_channels_panel_availability()` alongside the channel
+  panels/Harris Shutter checkbox while the active photo is in Normal mode
+  (they weren't reachable from Normal mode's UI before either, but now
+  that they live inside the same block that already greys out for Normal
+  mode, greying them too keeps the block internally consistent - a photo
+  with nothing to align/lock shouldn't show live controls for it).
+  Verified headlessly: the block title reads "Trichrome Process"/
+  "Traitement Trichrome" in both languages; `import_panel` no longer has
+  `auto_align_button`/`lock_buttons`; clicking a lock button on
+  `MainWindow` correctly sets the right channel's `is_reference` and
+  updates every button's checked state; both widgets grey out in Normal
+  mode and re-enable back in Trichrome mode; full app boot.
+- **Follow-up, same day: Lock Layer Position moved above Auto Align**
+  (was the other way around) - which channel is locked is what Auto
+  Align aligns the other two against, so picking the lock target first
+  reads more naturally as "step 1, then step 2." Pure widget-order swap
+  in `_build_ui`, no logic changed.
+- **"Add Photo" header button, same day** - a new `SvgToolButton`
+  (`Scan/camera-plus.svg`, `HEADER_COMPANION_BTN_SIZE`, same trailing-
+  edge header-action-button convention as every other block's Reset)
+  added to the Files block's own header (`ImportPanel`, not this block -
+  it adds a *new* photo to the carousel, which is a Files-level concern
+  regardless of the active photo's own mode). `ImportPanel.add_photo_requested`
+  is a bare signal - the panel has no opinion on what adding a photo
+  should actually do, that's `MainWindow.on_add_photo_clicked()`'s job,
+  branching on the *active* item's mode (mirrors every other mode-check
+  in this codebase: `0 <= batch_current_index < len(batch_items) and
+  batch_items[...].mode == "normal"`).
+  - **Normal mode (built)**: `_add_normal_photo()` opens a plain file
+    picker, loads the chosen file via `imaging.load_color` into a fresh
+    `ChannelLayer`, and appends a brand-new `BatchItem` (mode="normal",
+    default empty `layers`/`GlobalCorrection`, same as every other
+    freshly-created item) to `batch_items` - then selects only the new
+    item, refreshes the carousel, activates it, and force-shows the
+    carousel (`_update_carousel_visibility(force_show=True)`, same call
+    `duplicate_batch_item` already uses for "a second photo just
+    appeared, the filmstrip should become visible even if it was hidden
+    with only 1 photo before"). This is a genuinely new *item* being
+    added, unlike `load_normal_image`/`_load_normal_image_from_path`
+    (Files' own Normal-mode Load button), which loads into the **already
+    active** item instead.
+  - **Trichrome mode (built, after asking)**: the user's own message
+    describing this branch was cut off mid-sentence ("Si le Mode
+    trichrome est selectio...") - asked directly, answer: "Créer une
+    nouvelle photo trichrome vide" (create a new empty trichrome photo).
+    `_add_trichrome_photo()` appends a plain empty `BatchItem`
+    (mode="trichrome", `new_project_layers()` - no files loaded, same
+    shape as a brand-new session's own initial item) and activates it,
+    ready for its 3 R/G/B channels to be loaded the normal way via the
+    Files block. No file picker involved, unlike Normal mode's branch.
+  - **`_append_new_batch_item(item)`** factors out the shared tail both
+    branches need (append, select only the new item, refresh the
+    carousel, activate, force-show the filmstrip, status message) -
+    `_add_normal_photo()`/`_add_trichrome_photo()` each just build their
+    own `BatchItem` and hand it off, rather than duplicating that
+    sequence twice.
+  - Verified headlessly: `add_photo_button` exists on `ImportPanel`;
+    clicking it in Normal mode (mocking `QFileDialog.getOpenFileName`,
+    since a real file picker can't run headlessly) correctly appends a
+    second `BatchItem`, sets its mode/normal_layer/path, activates and
+    selects only it, and updates the carousel's item count; clicking it
+    in Trichrome mode appends a second empty trichrome item (3 unloaded
+    channels), activates it, and shows the Trichrome UI correctly; undo
+    removes the newly-added item in both cases.
+- **Drag-and-drop photos from Finder onto the thumbnail strip, same day** -
+  per the user's own spec: dropped files land at the end of the filmstrip,
+  each as its own new **Normal**-mode photo (regardless of the active
+  item's own current mode - a drop is always additive, never a mode
+  switch on anything already there).
+  - **`widgets/carousel_widget.py`**: `_CarouselStrip` (already the drop
+    target for internal card-reorder drags, `_REORDER_MIME`) now also
+    accepts `QMimeData.hasUrls()` - `_local_image_paths(mime_data)` (new
+    module-level helper) filters to local files with a known image
+    extension (`_IMAGE_EXTENSIONS` - the same 6 extensions `load_image`'s
+    own file-picker filter already accepts), so dropping a folder, a PDF,
+    or anything else non-image is simply ignored (not accepted, not
+    reported). `dragEnterEvent`/`dragMoveEvent` accept if *either* the
+    reorder mime *or* at least one valid image URL is present;
+    `dropEvent` branches on which one actually arrived and only ever
+    handles one kind per drop. A new `files_dropped(list)` signal (local
+    paths) is relayed straight through `CarouselWidget` itself, parallel
+    to the existing `card_dropped`/`reordered` signal shape.
+  - **`MainWindow.on_carousel_files_dropped(paths)`**: builds one
+    `BatchItem` per path via a new shared `_build_normal_batch_item(path)`
+    (loads via `imaging.load_color`, wraps into a fresh Normal-mode
+    `BatchItem` - factored out of `_add_normal_photo`'s own body, which
+    now just calls it once for its file-picker result), skipping (and
+    collecting into one combined `show_alert`, not one alert per file)
+    any path that fails to load rather than aborting the whole drop - a
+    multi-file Finder drag with one corrupt file among several still adds
+    the rest.
+  - **`_append_new_batch_item` generalized to `_append_new_batch_items(items:
+    list)`** - both "Add Photo" call sites now pass a single-item list;
+    the drop handler passes however many loaded successfully. Selects
+    *only* the newly-added items (by `id()`, since `BatchItem` isn't
+    hashable/comparable), activates the *last* one, and picks a singular
+    vs. plural status message (`status_photo_added` vs.
+    `status_photos_added` with `{n}`) based on the count.
+  - One `push_undo()` covers the whole drop (however many files),
+    matching the established "one undo entry per user action" convention
+    elsewhere (`paste_settings_to`, `on_locate_missing_files`, ...) - not
+    one per file.
+  - Verified headlessly: `_local_image_paths()` correctly filters a
+    `QMimeData` with a mix of image/non-image URLs and returns `[]` for
+    an empty one; `on_carousel_files_dropped()` end-to-end with 2 real
+    synthetic images (both appended as Normal-mode items with real pixel
+    data, only they end up selected, the last one active, filmstrip
+    force-shown); a mixed valid+corrupt-file drop appends only the valid
+    one and surfaces one alert naming the failed file (mocking
+    `show_alert`, since its real `.exec()` is modal and hangs headlessly -
+    a known trap documented elsewhere in this file); undo removes the
+    whole drop's worth of additions in one step. **Not, and can't be,
+    verified here**: an actual native Finder-to-app drag gesture - same
+    caveat as every other drag-and-drop feature in this codebase, needs
+    the user's own pass in the real app.
+- **Two icon swaps, same day, per direct user request**: the Compare
+  toggle (`widgets/compare_button.py`) now uses `Preview/a-b.svg` (was
+  `Preview/compare.svg`) and the Light panel's Negative/invert button
+  (`widgets/global_panel.py`) now uses `Preview/invert.svg` (was `Color
+  Correction/invert_colors.svg`) - both existing icon assets already in
+  `resources/icons/`, no new files added. Verified both repaint without
+  error.
+- **Real bug, fixed 2026-09-04: Negative/invert and Rotate silently did
+  nothing in Normal mode**, flagged by the user directly ("certaines
+  fonctions ne fonctionnent plus, par exemple le 'invert' mode et la
+  possibilité de Rotate les images"). Root cause: `BatchItem.normal_layer`
+  (a real `ChannelLayer`) always carries its own `invert`/`quarter_turns`
+  fields per the design above, but nothing actually read or wrote them for
+  Normal mode - every consumer of `invert`/rotate had only ever been
+  built against the 3 trichrome `self.layers`, from before Normal mode
+  existed. Fixed across every place both fields must flow, mirroring the
+  existing trichrome-channel conventions exactly:
+  - **`_recompute_preview_normal`** now applies `imaging.apply_invert(layer.image_preview,
+    layer.invert)` before global correction - previously `invert` was
+    read from disk-load state at import time (harmless, since Normal mode
+    has no "reload under a different interpretation" step like Harris
+    Shutter) but never actually applied to the composed pixel data at all.
+    Applied unconditionally, even under `_compare_active` - matching the
+    trichrome path's own `tone_params = [(*_NEUTRAL_TONE, l.invert) ...]`,
+    since invert is source-polarity, not a "correction" Compare should
+    bypass (same reasoning already documented for Harris Shutter/invert
+    under "Not touched" in the Harris Shutter section below).
+  - **`on_white_balance_picked`**'s Normal-mode branch (the pre-white-
+    balance pixel reconstruction) now also applies `imaging.apply_invert`
+    first, so the eyedropper solves against the correctly-inverted pixel
+    instead of the raw un-inverted source.
+  - **`_refresh_carousel_thumbnail_for_item`** gained a `mode == "normal"`
+    branch (it previously unconditionally read `item.layers`/
+    `compose_trichrome`, so calling it for any Normal-mode item was a
+    silent no-op - `ref.has_image()` was always False since `item.layers`
+    are never populated in Normal mode) - now applies invert +
+    `compose_normal` on `item.normal_layer`, matching
+    `_recompute_preview_normal`'s own math so a non-active Normal-mode
+    photo's thumbnail actually updates when Negative is toggled on it.
+  - **A new `_active_invert_state()` helper** replaces every one of the 6
+    `self.light_panel.set_invert(self.layers[0].invert)` call sites
+    (`activate_batch_item`, `paste_settings_to`, `reset_batch_items`,
+    `_restore_state`, `_apply_restored_items`, `on_invert_toggled`) -
+    returns `self.normal_layer.invert` while the active item is in Normal
+    mode (the only value `_recompute_preview_normal` actually reads),
+    `self.layers[0].invert` otherwise. Before this fix the Light panel's
+    Negative button always displayed the trichrome layers' own (unrelated,
+    always-stale-in-Normal-mode) invert state while a Normal-mode photo
+    was active, regardless of what `normal_layer.invert` actually held.
+  - **`on_invert_toggled`** now writes `checked` onto both `item.layers`
+    *and* `item.normal_layer` for every targeted photo, unconditionally
+    (mirrors the existing "BatchItem.layers/normal_layer both always
+    exist regardless of mode, harmless to write to the unused one"
+    principle above) - so toggling Negative with a Normal-mode photo
+    selected (alone or mixed into a multi-select with trichrome photos)
+    now actually reaches `normal_layer.invert`.
+  - **`reset_batch_items`** ("Reset All") now also resets
+    `item.normal_layer.invert = False`, alongside the existing per-channel
+    reset - previously Reset All had no effect on a Normal-mode photo's
+    invert state at all.
+  - **`paste_settings_to`** now also writes the copied invert value onto
+    `item.normal_layer.invert` (reusing `clipboard["layers"][0]["invert"]` -
+    representative of the whole source photo either way, since invert is
+    always kept identical across all 3 trichrome channels) - so pasting
+    color settings onto a Normal-mode photo now carries invert over too,
+    not just onto channels that photo doesn't use.
+  - **`_switch_to_normal_mode`** now carries `source_layer.invert` onto
+    `item.normal_layer.invert` (alongside the `quarter_turns` copy that
+    already existed) - switching a negative-film trichrome photo into
+    Normal mode no longer silently drops back to non-inverted.
+  - **Rotate**: `_rotate_all_channels` (the shared body behind
+    `on_rotate_left`/`on_rotate_right`, both single global toolbar
+    buttons/shortcuts, not per-channel controls) gained a Normal-mode
+    branch that calls `self.normal_layer.rotate_quarter(clockwise)`
+    directly (the same `ChannelLayer` method the 3 trichrome channels
+    already use - rotates `image_full`/`image_preview` in place and bumps
+    `quarter_turns`; its `dx`/`dy` rotation math is a harmless no-op on
+    `normal_layer`, which never has real alignment offsets) instead of
+    the old unconditional `if not any(l.has_image() for l in self.layers):
+    return`, which always exited immediately in Normal mode since
+    `self.layers` is never populated there - Rotate silently did nothing
+    at all previously, not even flipping `quarter_turns`.
+  - **Export** (`export_worker.py`'s `BatchExportWorker.run`,
+    `widgets/export_dialog.py`'s `_export_current`) both gained
+    `imaging.apply_invert(..., nl.invert)` on the loaded full-resolution
+    Normal-mode image before `compose_normal` - previously a Normal-mode
+    export completely ignored invert regardless of what the preview
+    showed (rotation was already correct at export time, since
+    `_full_res_color_image`/`_full_res_image` both already apply
+    `quarter_turns` on full-res reload - only invert was missing there).
+  - **Session persistence** - `normal_layer.invert` was threaded through
+    both mechanisms for the first time (it already had `quarter_turns`
+    from the original Normal mode work, but never `invert`): QSettings
+    key `normal_invert` (`_save_session_state`/`_legacy_restore_session`,
+    same per-item array-index scoping as `normal_path`/`normal_quarter_turns`
+    next to it) and `.trirgb` JSON's `"normal"` dict gained an `"invert"`
+    key (`_collect_session_data`/`_build_restored_items_from_data`, both
+    defaulting to `False` for an old file/session saved before this fix).
+    `_snapshot_state`/`_restore_state` (undo/redo) needed **no changes** -
+    `copy.copy(it.normal_layer)` already picks up any scalar field on the
+    dataclass automatically, same reason the Exposure slider and Curves
+    tool needed none either.
+  - Verified headlessly with a real synthetic color image: toggling
+    Negative on a Normal-mode photo measurably darkens/brightens the
+    actual composed preview (not just a flag), correctly reflects on that
+    photo's own carousel thumbnail, and un-inverts back correctly;
+    Rotate Right/Left actually swaps `image_preview`'s dimensions and
+    updates `quarter_turns` (previously a complete no-op); undo restores
+    both invert and quarter_turns together; both session-persistence
+    mechanisms round-trip `normal_layer.invert` correctly (QSettings
+    isolation confirmed untouched on the real domain per the standing
+    testing convention); full app boot; pyflakes clean across every
+    touched file. **Not verified here**: the real visual read in the
+    running app (needs the user's own pass, same as any visual change) -
+    but unlike the prior state, both toggling Negative and pressing
+    Rotate now provably change real pixel data and persisted state in
+    Normal mode, which they previously did not at all.
 
 ## v0.6.0 wishlist (added 2026-09-02)
 

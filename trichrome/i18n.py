@@ -15,6 +15,7 @@ EN = {
 
     "panel_title": "{channel} Layer",
     "load_image_button": "Load an image…",
+    "change_image_button": "Change Image",
     "no_image_loaded": "No image loaded",
     "active_checkbox": "Active (edit on canvas)",
     "active_layer_info": "The active channel is the one that reacts to dragging and "
@@ -65,6 +66,8 @@ EN = {
     "crop_apply_hint": "Press Enter to apply the crop",
     "crop_reset_tooltip": "Reset crop",
     "crop_activate_tooltip": "Activate Crop mode",
+    "curves_group_title": "Curves",
+    "curves_reset_tooltip": "Reset curve",
     "saturation_label": "Saturation",
     "temperature_label": "Temperature",
     "tint_label": "Tint",
@@ -104,7 +107,6 @@ EN = {
     "scan_toolbar_tooltip": "Scan (S)",
     "right_panel_toggle_tooltip": "Show/hide right panel",
     "help_toolbar_tooltip": "Help (F1)",
-    "scan_panel_placeholder": "Scan tool integration is coming soon.",
     "canvas_placeholder": "Load the 3 images (R, G, B) to see the preview",
     "missing_files_banner_text": "The original source file(s) for this photo could not be found:",
     "missing_files_locate_button": "Locate…",
@@ -119,12 +121,12 @@ EN = {
         "photo(s)/channel(s) listed below.\n\n"
         "Try again and pick a different folder - or, if these files were "
         "renamed rather than just moved, reimport them one by one for the "
-        "affected photo(s) using the RGB Channels panel on the left."
+        "affected photo(s) using the Trichrome Process panel on the left."
     ),
     "dialog_locate_failed_column_photo": "Photo",
     "dialog_locate_failed_column_channel": "Channel",
 
-    "pick_white_balance_tooltip": "Pick White Balance - click a point in the preview that should be neutral gray",
+    "pick_white_balance_tooltip": "Pick White Balance (W) - click a point in the preview that should be neutral gray",
     "reset_white_balance_tooltip": "Reset Color (Temperature, Tint, Saturation)",
     "reset_light_tooltip": "Reset Light (Brightness, Contrast, Highlights, Shadows, Whites, Blacks, Gamma)",
     "white_balance_picked": "White balance set from the picked point",
@@ -175,8 +177,24 @@ EN = {
     "menu_batch": "Import Images…",
     "double_click_reset_hint": "Double-click to reset",
 
-    "independent_channels_group_title": "RGB Channels",
+    "independent_channels_group_title": "Trichrome Process",
     "import_panel_title": "Files",
+    "import_mode_normal_button": "Normal",
+    "import_mode_trichrome_button": "Trichrome",
+    "load_normal_dialog_title": "Load Image",
+    "add_photo_tooltip": "Add Photo",
+    "status_photo_added": "Photo added",
+    "status_photos_added": "{n} photo(s) added",
+    "dialog_drop_photos_failed_text": "Could not load the following file(s):\n{files}",
+    "normal_photo_label": "Photo",
+    "channels_disabled_normal_mode": "Available only in Trichrome mode",
+    "mode_switch_dialog_title": "Trichrome Photo",
+    "mode_switch_dialog_text": (
+        "Are you sure you want to switch back to Normal mode? Choose which "
+        "layer you want to continue editing:"
+    ),
+    "mode_switch_channel_button": "{channel} Layer",
+    "mode_switch_cancel_button": "Cancel",
     "block_collapse_tooltip": "Collapse/Expand",
     "block_close_tooltip": "Remove from view",
     "menu_tools_histogram": "Histogram",
@@ -427,6 +445,7 @@ directly on the preview.</p>
 <li><b>Two-finger scroll</b> on the trackpad — pans the preview once zoomed in</li>
 <li><b>F</b> / <b>Z</b> — jump to Fit / 100% zoom (or use the toolbar buttons)</li>
 <li><b>:</b> — toggle Compare, showing the unedited original</li>
+<li><b>W</b> — toggle the White Balance eyedropper</li>
 </ul>
 <h3>Sliders</h3>
 <ul>
@@ -440,8 +459,14 @@ directly on the preview.</p>
     "scan_device_not_connected": "Not connected",
     "scan_device_connected": "Connected: {model}",
     "scan_device_refresh": "Refresh",
-    "scan_mode_group": "Mode",
-    "scan_mode_bw": "Black & White",
+    "scan_use_webcam_checkbox": "Webcam / iPhone (test)",
+    "scan_use_webcam_tooltip": (
+        "Temporary testing option: capture from a built-in webcam or an "
+        "iPhone connected via Continuity Camera instead of a real tethered "
+        "camera. Will be removed later."
+    ),
+    "scan_mode_group": "Film",
+    "scan_mode_bw": "B&W",
     "scan_mode_color": "Color",
     "scan_mode_color_reversal": "Color Reversal",
     "scan_mode_invert_note": "Invert will be applied automatically on import for this mode.",
@@ -452,6 +477,26 @@ directly on the preview.</p>
     "scan_light_rgb": "RGB Light",
     "scan_light_rgb_note": "Capture will automatically take 3 shots in sequence - red, green, then blue light - and return to white light afterward. All 3 share the same number, suffixed _R/_G/_B.",
     "scan_light_window_title": "Scan Backlight",
+    "scan_sample_base_button": "Sample Film Base",
+    "scan_sample_base_tooltip": (
+        "Place the film's clear, unexposed base (the rebate/leader) under "
+        "the light, then click - captures a quick 3-shot RGB reference used "
+        "to correct the base/mask color (e.g. color negative's orange mask) "
+        "on later RGB Light imports."
+    ),
+    "scan_sample_base_requires_rgb_light": (
+        "Select RGB Light first, then place the film's clear/unexposed base "
+        "under the light and click again."
+    ),
+    "scan_film_base_status_not_set": "Film base: not sampled yet",
+    "scan_film_base_status_set": "Film base sampled — R {r} · G {g} · B {b}",
+    "scan_apply_film_base_checkbox": "Correct for film base color on import",
+    "scan_apply_film_base_tooltip": (
+        "Removes the sampled film base's color bias (e.g. the orange mask "
+        "on color negative film) from each RGB Light channel before "
+        "inverting, using the sampled reference above. Applied to every "
+        "RGB Light photo added to the session while checked."
+    ),
     "scan_capturing_channel_status": "Capturing {channel}…",
     "scan_process_checkbox": "Also save a processed JPG preview",
     "scan_process_tooltip": "Saves an extra JPG copy in a \"processed\" subfolder: grayscale + inverted for Black & White, inverted for Color, as-is for Color Reversal. For an RGB Light triplet, recomposes the 3 shots into one trichrome image using the app's own auto-align + compose algorithm.",
@@ -474,6 +519,17 @@ directly on the preview.</p>
     "scan_add_to_session_button": "Add to Current Session",
     "scan_error_title": "Scan Error",
     "scan_no_camera_error": "No camera selected or connected.",
+    "scan_select_folder_prompt_title": "Select a folder to save your scans",
+    "scan_pick_film_base_tooltip": (
+        "Alternative to Sample Film Base: click here, then click a clear/"
+        "unexposed point on a Trichrome photo already in the session "
+        "(instead of taking 3 new calibration shots). Applies to the next "
+        "capture, same as a dedicated sample."
+    ),
+    "scan_pick_film_base_requires_trichrome": (
+        "Select a Trichrome photo with all 3 R/G/B channels loaded first."
+    ),
+    "status_film_base_picked": "Film base sampled from photo.",
 }
 
 FR = {
@@ -483,6 +539,7 @@ FR = {
 
     "panel_title": "Calque {channel}",
     "load_image_button": "Charger une image…",
+    "change_image_button": "Changer l'image",
     "no_image_loaded": "Aucune image chargée",
     "active_checkbox": "Actif (édition sur le canevas)",
     "active_layer_info": "Le calque actif est celui qui réagit quand on glisse ou "
@@ -535,6 +592,8 @@ FR = {
     "crop_apply_hint": "Appuyez sur Entrée pour appliquer le recadrage",
     "crop_reset_tooltip": "Réinitialiser le recadrage",
     "crop_activate_tooltip": "Activer le mode Recadrage",
+    "curves_group_title": "Courbes",
+    "curves_reset_tooltip": "Réinitialiser la courbe",
     "saturation_label": "Saturation",
     "temperature_label": "Température",
     "tint_label": "Teinte (magenta/vert)",
@@ -574,7 +633,6 @@ FR = {
     "scan_toolbar_tooltip": "Scan (S)",
     "right_panel_toggle_tooltip": "Afficher/masquer le panneau de droite",
     "help_toolbar_tooltip": "Aide (F1)",
-    "scan_panel_placeholder": "L'intégration de l'outil de scan arrive bientôt.",
     "canvas_placeholder": "Chargez les 3 images (R, V, B) pour voir l'aperçu",
     "missing_files_banner_text": "Le(s) fichier(s) source d'origine de cette photo sont introuvables :",
     "missing_files_locate_button": "Localiser…",
@@ -589,13 +647,13 @@ FR = {
         "pour la ou les photos/canaux listés ci-dessous.\n\n"
         "Réessayez en choisissant un autre dossier - ou, si ces fichiers ont "
         "été renommés (et pas seulement déplacés), réimportez-les un par un "
-        "pour la ou les photos concernées, depuis le panneau Canaux RVB "
-        "à gauche."
+        "pour la ou les photos concernées, depuis le panneau Traitement "
+        "Trichrome à gauche."
     ),
     "dialog_locate_failed_column_photo": "Photo",
     "dialog_locate_failed_column_channel": "Canal",
 
-    "pick_white_balance_tooltip": "Balance des blancs à la pipette - cliquez un point de l'aperçu qui devrait être gris neutre",
+    "pick_white_balance_tooltip": "Balance des blancs à la pipette (W) - cliquez un point de l'aperçu qui devrait être gris neutre",
     "reset_white_balance_tooltip": "Réinitialiser la couleur (Température, Teinte, Saturation)",
     "reset_light_tooltip": "Réinitialiser la lumière (Luminosité, Contraste, Hautes lumières, Ombres, Blancs, Noirs, Gamma)",
     "white_balance_picked": "Balance des blancs réglée à partir du point sélectionné",
@@ -646,8 +704,24 @@ FR = {
     "menu_batch": "Importer des images…",
     "double_click_reset_hint": "Double-cliquez pour réinitialiser",
 
-    "independent_channels_group_title": "Canaux RVB",
+    "independent_channels_group_title": "Traitement Trichrome",
     "import_panel_title": "Fichiers",
+    "import_mode_normal_button": "Normal",
+    "import_mode_trichrome_button": "Trichrome",
+    "load_normal_dialog_title": "Charger l'image",
+    "add_photo_tooltip": "Ajouter une photo",
+    "status_photo_added": "Photo ajoutée",
+    "status_photos_added": "{n} photo(s) ajoutée(s)",
+    "dialog_drop_photos_failed_text": "Impossible de charger le(s) fichier(s) suivant(s) :\n{files}",
+    "normal_photo_label": "Photo",
+    "channels_disabled_normal_mode": "Disponible uniquement en mode Trichrome",
+    "mode_switch_dialog_title": "Photo Trichrome",
+    "mode_switch_dialog_text": (
+        "Êtes-vous sûr de vouloir repasser en mode Normal ? Choisissez le "
+        "calque que vous souhaitez continuer d'éditer :"
+    ),
+    "mode_switch_channel_button": "Calque {channel}",
+    "mode_switch_cancel_button": "Annuler",
     "block_collapse_tooltip": "Réduire/Développer",
     "block_close_tooltip": "Retirer de l'affichage",
     "menu_tools_histogram": "Histogramme",
@@ -913,6 +987,7 @@ molette directement sur l'aperçu.</p>
 <li><b>F</b> / <b>Z</b> — passe directement au zoom Ajuster / 100% (ou utilisez les
 boutons de la barre d'outils)</li>
 <li><b>:</b> — bascule Comparer, affiche l'original non modifié</li>
+<li><b>W</b> — bascule la pipette de balance des blancs</li>
 </ul>
 <h3>Curseurs</h3>
 <ul>
@@ -926,8 +1001,14 @@ boutons de la barre d'outils)</li>
     "scan_device_not_connected": "Non connecté",
     "scan_device_connected": "Connecté : {model}",
     "scan_device_refresh": "Actualiser",
-    "scan_mode_group": "Mode",
-    "scan_mode_bw": "Noir et Blanc",
+    "scan_use_webcam_checkbox": "Webcam / iPhone (test)",
+    "scan_use_webcam_tooltip": (
+        "Option de test temporaire : capturer depuis une webcam intégrée ou "
+        "un iPhone connecté via Continuity Camera, à la place d'un véritable "
+        "appareil relié. Sera retirée plus tard."
+    ),
+    "scan_mode_group": "Film",
+    "scan_mode_bw": "N&B",
     "scan_mode_color": "Couleur",
     "scan_mode_color_reversal": "Couleur Inversible",
     "scan_mode_invert_note": "L'inversion sera appliquée automatiquement à l'import pour ce mode.",
@@ -938,6 +1019,28 @@ boutons de la barre d'outils)</li>
     "scan_light_rgb": "Lumière RVB",
     "scan_light_rgb_note": "La capture prendra automatiquement 3 photos en séquence - lumière rouge, verte, puis bleue - et reviendra à la lumière blanche ensuite. Les 3 partagent le même numéro, avec le suffixe _R/_G/_B.",
     "scan_light_window_title": "Rétroéclairage de scan",
+    "scan_sample_base_button": "Échantillonner la base du film",
+    "scan_sample_base_tooltip": (
+        "Placez la base transparente et non exposée du film (l'amorce) sous "
+        "la lumière, puis cliquez - capture 3 photos de référence RVB "
+        "utilisées pour corriger la couleur de la base/du masque (par "
+        "exemple le masque orange des négatifs couleur) sur les prochains "
+        "imports RGB Light."
+    ),
+    "scan_sample_base_requires_rgb_light": (
+        "Sélectionnez d'abord RGB Light, puis placez la base transparente/"
+        "non exposée du film sous la lumière avant de cliquer à nouveau."
+    ),
+    "scan_film_base_status_not_set": "Base du film : non échantillonnée",
+    "scan_film_base_status_set": "Base du film échantillonnée — R {r} · G {g} · B {b}",
+    "scan_apply_film_base_checkbox": "Corriger la couleur de base du film à l'import",
+    "scan_apply_film_base_tooltip": (
+        "Retire le biais de couleur de la base du film échantillonnée (par "
+        "exemple le masque orange des négatifs couleur) de chaque canal RGB "
+        "Light avant l'inversion, en utilisant la référence échantillonnée "
+        "ci-dessus. Appliqué à chaque photo RGB Light ajoutée à la session "
+        "tant que la case est cochée."
+    ),
     "scan_capturing_channel_status": "Prise de vue {channel}…",
     "scan_process_checkbox": "Enregistrer aussi un aperçu JPG traité",
     "scan_process_tooltip": "Enregistre une copie JPG supplémentaire dans un sous-dossier « processed » : noir et blanc + inversé pour Noir et Blanc, inversé pour Couleur, tel quel pour Couleur Inversible. Pour un triplet en Lumière RVB, recompose les 3 photos en une seule image trichrome avec l'algorithme d'auto-alignement et de composition de l'application.",
@@ -960,6 +1063,18 @@ boutons de la barre d'outils)</li>
     "scan_add_to_session_button": "Ajouter à la session actuelle",
     "scan_error_title": "Erreur de scan",
     "scan_no_camera_error": "Aucun appareil sélectionné ou connecté.",
+    "scan_select_folder_prompt_title": "Sélectionnez un dossier pour enregistrer vos scans",
+    "scan_pick_film_base_tooltip": (
+        "Alternative à Échantillonner la base du film : cliquez ici, puis "
+        "cliquez un point transparent/non exposé sur une photo Trichrome "
+        "déjà présente dans la session (plutôt que de prendre 3 nouvelles "
+        "photos de calibration). S'applique à la prochaine prise de vue, "
+        "comme un échantillonnage dédié."
+    ),
+    "scan_pick_film_base_requires_trichrome": (
+        "Sélectionnez d'abord une photo Trichrome avec les 3 canaux R/V/B chargés."
+    ),
+    "status_film_base_picked": "Base du film échantillonnée depuis la photo.",
 }
 
 STRINGS = {"en": EN, "fr": FR}

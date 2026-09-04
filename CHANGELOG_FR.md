@@ -21,11 +21,41 @@ pas seulement d'historique.
 
 ## Non publié
 
+### Ajouté
+- **Courbes** : un nouveau bloc outil pour retoucher directement le ton de
+  l'image via une courbe, avec des courbes Y (globale), R, G et B
+  indépendantes - cliquez sur la ligne diagonale pour ajouter un point,
+  glissez-le pour redessiner la courbe (y compris les deux extrémités,
+  pour définir un point noir/blanc), double-cliquez sur un point pour le
+  supprimer. Masqué par défaut ; affichez-le depuis le menu Outils ou en
+  le glissant dans un panneau comme n'importe quel autre bloc. La ligne de
+  la courbe ainsi qu'un histogramme en transparence affiché derrière elle
+  correspondent tous deux au canal en cours d'édition ; cet histogramme
+  montre toujours l'image *avant* vos modifications de courbe, pour que
+  vous voyiez exactement votre point de départ - le panneau Histogramme
+  principal continue d'afficher le résultat final, corrigé.
+- **Scan** : un nouveau bloc outil pour la capture avec un appareil photo
+  relié par câble - statut de connexion en direct, 3 modes de capture
+  (Noir et Blanc / Couleur / Couleur Inversible), un rétroéclairage à
+  l'écran en option (avec une séquence automatique de 3 prises rouge/vert/
+  bleu pour scanner directement un triplet trichrome), un emplacement
+  d'enregistrement et une numérotation de bobine configurables, et un
+  aperçu JPG traité en option pour chaque capture. Masqué par défaut,
+  comme tous les autres blocs. L'import direct des photos capturées dans
+  la session en cours n'est pas encore implémenté - les captures sont
+  enregistrées sur le disque et journalisées dans l'historique du bloc
+  pour l'instant.
+
+### Modifié
+- Les deux graphiques d'histogramme (le panneau Histogramme et l'aperçu
+  de l'outil Courbes) affichent désormais la hauteur des barres sur une
+  échelle linéaire plutôt que compressée - les pics hauts et bas
+  reflètent leurs tailles relatives réelles. Un pic très dominant (par
+  exemple une grande zone en noir ou blanc pur) peut toujours écraser le
+  reste du graphique - les petites barres d'avertissement d'écrêtage sur
+  les bords du graphique sont justement là pour signaler ce cas.
+
 ### Tâches restantes pour les prochaines versions
-- **v0.5.0** (prochaine version) : un **outil de courbes**, ainsi que
-  l'intégration de l'**outil de scan de négatifs** autonome (capture via
-  câble déjà testée sur un boîtier réel) dans la barre d'outils de
-  l'application principale.
 - **v0.6.0** : un **panneau de métadonnées** - pas encore spécifié.
 - Quelques anciennes fenêtres d'erreur (erreur de chargement d'image,
   échec de l'alignement automatique, erreurs de chargement de session)
