@@ -143,6 +143,53 @@ def finish_block_chrome(outer: QVBoxLayout, header_row: QHBoxLayout):
     return body, body_layout, collapse_button, close_button
 
 
+# Same yellow as the canvas's own "Displaying original" Compare indicator
+# (main_window.py's compare_indicator) - reused here so every "this tool
+# doesn't apply right now" message in the app reads as the same signal
+# (2026-09-07: "le même jaune que le 'Displaying Original'").
+DISABLED_MESSAGE_STYLE = "color: #f2c40c; font-weight: 600; font-size: 11px;"
+
+
+def make_disabled_message_label() -> QLabel:
+    """A yellow "why this tool is unavailable" label - callers add it as
+    the very first widget in their own body_layout (right after
+    finish_block_chrome, before any real content), then drive it via
+    set_block_disabled(). Hidden by default. Its explicit stylesheet color
+    still renders correctly even once its ancestor `body` is disabled
+    (confirmed empirically - QSS color declarations aren't overridden by
+    Qt's disabled-palette dimming the way a plain, unstyled QLabel's text
+    would be)."""
+    label = QLabel()
+    label.setWordWrap(True)
+    label.setStyleSheet(DISABLED_MESSAGE_STYLE)
+    label.hide()
+    return label
+
+
+def set_block_disabled(
+    body: QWidget, message_label: QLabel, message: str | None,
+    extra_widgets: tuple[QWidget, ...] = (),
+) -> None:
+    """Grays out and disables an entire tool block, added 2026-09-07 (user
+    request: "grise complètement la case outil et rend impossible de
+    cliquer sur les boutons, en dehors de ceux pour cacher / fermer le
+    bloc outil") - `body` (every real control a block has, since callers
+    add their whole body's content to body_layout) plus whatever header-row
+    widgets the caller passes as `extra_widgets` (title, "?" info buttons,
+    Reset/eyedropper/etc. action buttons - anything in the header besides
+    the block's own collapse/close, which must stay clickable so a
+    disabled block can still be hidden/closed - the one thing this
+    deliberately never touches). Shows `message` in `message_label` (see
+    make_disabled_message_label) in its place. Pass message=None to
+    re-enable everything and hide the label."""
+    active = bool(message)
+    message_label.setText(message or "")
+    message_label.setVisible(active)
+    body.setEnabled(not active)
+    for w in extra_widgets:
+        w.setEnabled(not active)
+
+
 def set_block_collapsed(body: QWidget, collapse_button: SvgToolButton, collapsed: bool) -> None:
     """Hides/shows a block's body, and rotates its collapse chevron to
     point right (collapsed) instead of down (expanded) - a real 2-state

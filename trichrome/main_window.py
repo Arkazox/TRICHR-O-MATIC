@@ -12,7 +12,7 @@ import numpy as np
 from PySide6.QtCore import QEvent, QSettings, Qt, QThread, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPalette, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QApplication, QButtonGroup, QCheckBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout,
+    QAbstractSpinBox, QApplication, QButtonGroup, QDialog, QFileDialog, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit,
     QMainWindow, QMenu, QMessageBox, QPushButton, QSizePolicy, QSplitter, QStatusBar,
     QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
@@ -26,7 +26,8 @@ from .model import (
     new_project_layers,
 )
 from .widgets.block_header_bar import (
-    BlockReorderZone, finish_block_chrome, set_block_collapsed, start_block_chrome,
+    BlockReorderZone, finish_block_chrome, make_disabled_message_label, set_block_collapsed,
+    set_block_disabled, start_block_chrome,
 )
 from .widgets.canvas_widget import CanvasWidget
 from .widgets.carousel_widget import CarouselWidget
@@ -371,7 +372,7 @@ class MainWindow(QMainWindow):
 
         self.import_panel.retranslate_ui()
         self.independent_channels_title_label.setText(i18n.tr("independent_channels_group_title"))
-        if self.channels_disabled_label.isVisible():
+        if not self.channels_disabled_label.isHidden():
             self.channels_disabled_label.setText(i18n.tr("channels_disabled_normal_mode"))
         self.auto_align_button.setText(i18n.tr("auto_align_button"))
         self.lock_label.setText(i18n.tr("lock_layer_position_label"))
@@ -379,12 +380,12 @@ class MainWindow(QMainWindow):
             self.lock_buttons[i].setToolTip(i18n.tr(CHANNEL_KEY[label]))
         self.reset_all_alignment_button.setToolTip(i18n.tr("reset_all_alignment_tooltip"))
         self.reset_all_color_button.setToolTip(i18n.tr("reset_all_color_tooltip"))
-        self.harris_shutter_checkbox.setText(i18n.tr("harris_shutter_checkbox"))
-        self.harris_shutter_checkbox.setToolTip(i18n.tr("harris_shutter_info"))
         for panel in self.channel_panels:
             panel.retranslate_ui()
         self.light_panel.retranslate_ui()
         self.color_panel.retranslate_ui()
+        if not self.color_panel.color_disabled_label.isHidden():
+            self.color_panel.set_disabled_message(i18n.tr("color_disabled_bw_film"))
         self.crop_panel.retranslate_ui()
         self.curves_panel.retranslate_ui()
         self.histogram_title_label.setText(i18n.tr("menu_tools_histogram"))
@@ -668,6 +669,8 @@ class MainWindow(QMainWindow):
         self.import_panel.mode_change_requested.connect(self.on_import_mode_change_requested)
         self.import_panel.load_normal_requested.connect(self.load_normal_image)
         self.import_panel.add_photo_requested.connect(self.on_add_photo_clicked)
+        self.import_panel.invert_toggled.connect(self.on_invert_toggled)
+        self.import_panel.harris_shutter_toggled.connect(self.on_harris_shutter_toggled)
 
         self.channel_panels = [ChannelPanel(layer.label) for layer in self.layers]
         self.independent_channels_group = QGroupBox()
@@ -700,6 +703,12 @@ class MainWindow(QMainWindow):
         # - the class-based panels (ImportPanel/LightPanel/etc.) set this on
         # themselves; these 3 inline-built blocks need it set explicitly.
         self.independent_channels_group.body = self.independent_channels_body
+
+        # Shown at the very top of the block, in place of everything below
+        # it, while the active photo is in Normal mode - see
+        # _sync_channels_panel_availability/set_block_disabled.
+        self.channels_disabled_label = make_disabled_message_label()
+        independent_channels_layout.addWidget(self.channels_disabled_label)
 
         # Lock Layer Position + Auto Align (moved here from the Files block,
         # 2026-09-04, per the user's explicit request - they only ever
@@ -735,30 +744,8 @@ class MainWindow(QMainWindow):
         self.auto_align_button.clicked.connect(self.on_auto_align_all)
         independent_channels_layout.addWidget(self.auto_align_button)
 
-        # Shown instead-of/alongside the (disabled) channel panels while the
-        # active photo is in Normal mode - see _sync_channels_panel_availability.
-        self.channels_disabled_label = QLabel()
-        self.channels_disabled_label.setWordWrap(True)
-        self.channels_disabled_label.setStyleSheet("color: #888; font-size: 11px; font-style: italic;")
-        self.channels_disabled_label.hide()
-        independent_channels_layout.addWidget(self.channels_disabled_label)
-
         for panel in self.channel_panels:
             independent_channels_layout.addWidget(panel)
-
-        harris_shutter_row = QHBoxLayout()
-        self.harris_shutter_checkbox = QCheckBox()
-        self.harris_shutter_checkbox.toggled.connect(self.on_harris_shutter_toggled)
-        harris_shutter_row.addWidget(self.harris_shutter_checkbox)
-        harris_shutter_row.addStretch(1)
-        self.harris_shutter_info_button = QToolButton()
-        self.harris_shutter_info_button.setText("?")
-        self.harris_shutter_info_button.setFixedSize(18, 18)
-        self.harris_shutter_info_button.setStyleSheet("QToolButton { border-radius: 9px; }")
-        self.harris_shutter_info_button.clicked.connect(
-            lambda: show_info_bubble(i18n.tr("harris_shutter_info"), self.harris_shutter_info_button))
-        harris_shutter_row.addWidget(self.harris_shutter_info_button)
-        independent_channels_layout.addLayout(harris_shutter_row)
 
         # Scan is a first-class block like every other one (grip/collapse/
         # close/title) - 2026-09-04, the placeholder body that used to sit
@@ -1477,7 +1464,6 @@ class MainWindow(QMainWindow):
 
         self.light_panel.changed.connect(self.on_global_changed)
         self.light_panel.reset_requested.connect(self.on_reset_light)
-        self.light_panel.invert_toggled.connect(self.on_invert_toggled)
         self.color_panel.changed.connect(self.on_global_changed)
         self.color_panel.reset_requested.connect(self.on_reset_white_balance)
         self.color_panel.pick_white_balance_toggled.connect(self.on_pick_white_balance_toggled)
@@ -1727,7 +1713,7 @@ class MainWindow(QMainWindow):
             triplets=triplets,
             ref_letter=ref_letter,
             auto_align=auto_align,
-            harris_shutter=self.harris_shutter_checkbox.isChecked(),
+            harris_shutter=self.import_panel.is_harris_shutter_active(),
         )
         self._import_worker.moveToThread(self._import_thread)
         self._import_thread.started.connect(self._import_worker.run)
@@ -1903,29 +1889,72 @@ class MainWindow(QMainWindow):
     # recompute_preview's mode branch), only the RGB Channels tool (which
     # only makes sense for the 3-channel case) becomes unavailable.
     # ------------------------------------------------------------------
+    def _solo_bw_active(self) -> bool:
+        """True while the active photo is Solo mode with the B&W film type
+        selected (normal_layer.harris_shutter False) - the one state that
+        disables the whole Color block (see set_disabled_message below).
+        Shared between _sync_channels_panel_availability (drives the
+        disable itself) and recompute_preview (must not let its own
+        has_color_correction()-driven reset_button sync re-enable it - a
+        real bug caught 2026-09-07: editing Light triggered a
+        recompute_preview that unconditionally overwrote
+        color_panel.reset_button.setEnabled(...), silently reactivating it
+        while Color was still supposed to be fully disabled)."""
+        if not (0 <= self.batch_current_index < len(self.batch_items)):
+            return False
+        return (self.batch_items[self.batch_current_index].mode == "normal"
+                and not self.normal_layer.harris_shutter)
+
     def _sync_channels_panel_availability(self, mode: str) -> None:
         is_normal = mode == "normal"
+        # Grays out and disables the whole block (channel_panels/lock row/
+        # Auto Align all live inside independent_channels_body, so
+        # disabling the body alone already covers them - only the header's
+        # own title/"?"/Reset-all buttons need listing explicitly).
+        set_block_disabled(
+            self.independent_channels_body, self.channels_disabled_label,
+            i18n.tr("channels_disabled_normal_mode") if is_normal else None,
+            extra_widgets=(
+                self.independent_channels_title_label, self.channels_scope_info_button,
+                self.reset_all_alignment_button, self.reset_all_color_button))
+        # setEnabled(False) alone doesn't dim each channel panel's own
+        # explicitly-colored R/G/B border/title (or its 2 nested
+        # CollapsibleSection borders) - QSS colors don't automatically
+        # follow the disabled palette the way an unstyled border would -
+        # so ChannelPanel.set_frame_disabled grays them explicitly.
         for panel in self.channel_panels:
-            panel.setEnabled(not is_normal)
-        self.harris_shutter_checkbox.setEnabled(not is_normal)
-        self.harris_shutter_info_button.setEnabled(not is_normal)
-        self.auto_align_button.setEnabled(not is_normal)
-        self.lock_label.setEnabled(not is_normal)
-        for btn in self.lock_buttons:
-            btn.setEnabled(not is_normal)
-        self.lock_info_button.setEnabled(not is_normal)
-        self.channels_disabled_label.setText(i18n.tr("channels_disabled_normal_mode") if is_normal else "")
-        self.channels_disabled_label.setVisible(is_normal)
+            panel.set_frame_disabled(is_normal)
+        # "Solo N&B" (Solo mode, B&W film selected - normal_layer.harris_shutter
+        # False) disables the Color block's own tools, with an explanatory
+        # message in place of the sliders - see the "Film type" section in
+        # CLAUDE.md for the full mode x film-type behavior matrix this is
+        # one cell of. Every other combination (Solo Couleur, either
+        # Trichrome variant) leaves Color fully active.
+        solo_bw = self._solo_bw_active()
+        self.color_panel.set_disabled_message(i18n.tr("color_disabled_bw_film") if solo_bw else None)
 
     def _sync_import_and_channels_ui(self) -> None:
-        """Shared tail, called any time the active item's mode or Normal-mode
-        photo might have changed - activate_batch_item, undo/redo, session
-        restore, and the mode-switch handlers below."""
+        """Shared tail, called any time the active item's mode, its Harris
+        Shutter state (Trichrome variant *or* Solo film type - two
+        independent per-item flags, see on_harris_shutter_toggled), or its
+        Normal-mode photo might have changed - activate_batch_item, undo/
+        redo, session restore, paste/reset, the mode-switch handlers, and
+        on_harris_shutter_toggled. Also what the Mode combo/film buttons'
+        own set_mode_selection() call reads its harris_shutter argument
+        from - self.layers/self.normal_layer are already the active item's
+        own objects by every call site here (set right when
+        batch_current_index changes), so reading them directly is always
+        correct at this point. The mode-appropriate flag is picked here
+        (self.normal_layer.harris_shutter in Solo, self.layers[0].harris_shutter
+        otherwise) since ImportPanel has no visibility into which BatchItem
+        field backs which mode."""
         if 0 <= self.batch_current_index < len(self.batch_items):
             mode = self.batch_items[self.batch_current_index].mode
         else:
             mode = "trichrome"
-        self.import_panel.set_mode(mode)
+        active_harris_shutter = (
+            self.normal_layer.harris_shutter if mode == "normal" else self.layers[0].harris_shutter)
+        self.import_panel.set_mode_selection(mode, active_harris_shutter)
         self.import_panel.set_normal_filename(
             os.path.basename(self.normal_layer.path) if self.normal_layer.path else "")
         self._sync_channels_panel_availability(mode)
@@ -1951,7 +1980,7 @@ class MainWindow(QMainWindow):
             dialog = ModeSwitchDialog(available, self)
             dialog.exec()
             if dialog.chosen_index is None:
-                self.import_panel.set_mode("trichrome")  # revert the toggle, nothing changed
+                self._sync_import_and_channels_ui()  # revert the combo, nothing changed
                 return
             self._switch_to_normal_mode(item, item.layers[dialog.chosen_index])
         elif loaded_count == 1:
@@ -1975,7 +2004,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, i18n.tr("dialog_load_error_title"),
                                   i18n.tr("dialog_load_error_text", error=exc))
-            self.import_panel.set_mode("trichrome")
+            self._sync_import_and_channels_ui()
             return
         if source_layer.quarter_turns:
             full = np.ascontiguousarray(np.rot90(full, source_layer.quarter_turns))
@@ -1989,6 +2018,12 @@ class MainWindow(QMainWindow):
         item.normal_layer.preview_scale = preview_scale
         item.normal_layer.quarter_turns = source_layer.quarter_turns
         item.normal_layer.invert = source_layer.invert
+        # A freshly-switched Solo photo always starts as "Solo Couleur" -
+        # imaging.load_color() just loaded a real color image, so nothing
+        # about it is B&W by default (unlike a Trichrome channel, whose
+        # own correct default *is* harris_shutter=False/classic - Solo and
+        # Trichrome have opposite natural defaults for this same field).
+        item.normal_layer.harris_shutter = True
         self.normal_layer = item.normal_layer
         self._sync_import_and_channels_ui()
         self.recompute_preview()
@@ -1996,8 +2031,17 @@ class MainWindow(QMainWindow):
 
     def _switch_to_trichrome_mode(self, item) -> None:
         self.push_undo()
+        # Leaving a "Solo N&B" selection (see on_harris_shutter_toggled)
+        # restores whatever saturation was set to before it got forced to
+        # 0.0 - the same restore the film buttons do when switching back
+        # to "Solo Couleur" directly, just reached via the Mode combo
+        # instead.
+        if item.saturation_before_bw is not None:
+            item.global_corr.saturation = item.saturation_before_bw
+            item.saturation_before_bw = None
         item.mode = "trichrome"
         self._sync_import_and_channels_ui()
+        self._sync_global_panel_from_model()
         self.recompute_preview()
         self.canvas.zoom_fit()
 
@@ -2036,6 +2080,12 @@ class MainWindow(QMainWindow):
         layer.preview_scale = preview_scale
         layer.quarter_turns = state.get("quarter_turns", 0) if state is not None else 0
         layer.film_base = film_base
+        # A fresh manual load always starts as "Solo Couleur" (a real color
+        # image was just loaded); restoring from a previous session's
+        # ``state`` instead honors whichever film type was selected then -
+        # defaulting True there too, for a state dict saved before this
+        # field existed.
+        layer.harris_shutter = state.get("harris_shutter", True) if state is not None else True
         if 0 <= self.batch_current_index < len(self.batch_items):
             item = self.batch_items[self.batch_current_index]
             item.base = os.path.splitext(os.path.basename(path))[0]
@@ -2046,8 +2096,7 @@ class MainWindow(QMainWindow):
                 item.mode = "normal"
                 self._sync_channels_panel_availability("normal")
 
-        self.import_panel.set_mode("normal")
-        self.import_panel.set_normal_filename(os.path.basename(path))
+        self._sync_import_and_channels_ui()
         self.recompute_preview()
         self.canvas.zoom_fit()
         return True
@@ -2133,6 +2182,9 @@ class MainWindow(QMainWindow):
         normal_layer.image_preview = preview
         normal_layer.preview_scale = preview_scale
         normal_layer.film_base = film_base
+        # A freshly-created Solo item always starts as "Solo Couleur" - see
+        # the same note in _switch_to_normal_mode.
+        normal_layer.harris_shutter = True
         return BatchItem(
             base=os.path.splitext(os.path.basename(path))[0], paths={}, layers=new_project_layers(),
             global_corr=GlobalCorrection(), mode="normal", normal_layer=normal_layer, selected=True)
@@ -2268,8 +2320,7 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.light_panel.set_invert(self._active_invert_state())
-        self._sync_harris_shutter_checkbox()
+        self.import_panel.set_invert(self._active_invert_state())
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
         self._sync_import_and_channels_ui()
@@ -2361,8 +2412,8 @@ class MainWindow(QMainWindow):
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.light_panel.set_invert(self._active_invert_state())
-            self._sync_harris_shutter_checkbox()
+            self.import_panel.set_invert(self._active_invert_state())
+            self._sync_import_and_channels_ui()
             self._sync_global_panel_from_model()
             self.recompute_preview()
         for idx in indices:
@@ -2446,13 +2497,14 @@ class MainWindow(QMainWindow):
                 layer.invert = False
             item.normal_layer.invert = False
             item.global_corr.reset()
+            item.saturation_before_bw = None
             item.crop.reset()
 
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.light_panel.set_invert(self._active_invert_state())
-            self._sync_harris_shutter_checkbox()
+            self.import_panel.set_invert(self._active_invert_state())
+            self._sync_import_and_channels_ui()
             self._sync_global_panel_from_model()
             if self.block_visible.get("crop", False):
                 self._sync_crop_panel_from_item()
@@ -2492,6 +2544,7 @@ class MainWindow(QMainWindow):
             layers=[copy.copy(l) for l in src.layers],
             global_corr=copy.copy(src.global_corr),
             mode=src.mode, normal_layer=copy.copy(src.normal_layer),
+            saturation_before_bw=src.saturation_before_bw,
             selected=False,
             capture_date=src.capture_date,
         )
@@ -2518,6 +2571,7 @@ class MainWindow(QMainWindow):
                     global_corr=copy.copy(it.global_corr),
                     crop=copy.copy(it.crop),
                     mode=it.mode, normal_layer=copy.copy(it.normal_layer),
+                    saturation_before_bw=it.saturation_before_bw,
                     selected=it.selected, uid=it.uid,
                     capture_date=it.capture_date, custom_order=it.custom_order,
                 ) for it in self.batch_items
@@ -2554,8 +2608,7 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.light_panel.set_invert(self._active_invert_state())
-        self._sync_harris_shutter_checkbox()
+        self.import_panel.set_invert(self._active_invert_state())
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
         self._sync_import_and_channels_ui()
@@ -2647,7 +2700,7 @@ class MainWindow(QMainWindow):
         loaded_before = sum(1 for l in self.layers if l.has_image())
         try:
             full = imaging.load_grayscale(
-                path, channel=CHANNEL_NAMES[index] if self.harris_shutter_checkbox.isChecked() else None)
+                path, channel=CHANNEL_NAMES[index] if self.import_panel.is_harris_shutter_active() else None)
         except Exception as exc:
             QMessageBox.critical(self, i18n.tr("dialog_load_error_title"),
                                   i18n.tr("dialog_load_error_text", error=exc))
@@ -2661,7 +2714,7 @@ class MainWindow(QMainWindow):
         layer.image_full = full
         layer.image_preview = preview
         layer.preview_scale = preview_scale
-        layer.harris_shutter = self.harris_shutter_checkbox.isChecked()
+        layer.harris_shutter = self.import_panel.is_harris_shutter_active()
         layer.film_base = film_base
         if layer.is_reference and 0 <= self.batch_current_index < len(self.batch_items):
             self.batch_items[self.batch_current_index].base = os.path.splitext(os.path.basename(path))[0]
@@ -2999,6 +3052,10 @@ class MainWindow(QMainWindow):
             normal_layer = ChannelLayer(color_index=0, label="Normal")
             normal_layer.quarter_turns = settings.value("normal_quarter_turns", 0, type=int)
             normal_layer.invert = settings.value("normal_invert", False, type=bool)
+            # Default True ("Solo Couleur") for a session saved before this
+            # field existed - a Solo photo has only ever behaved as color
+            # until now, never as an implicit B&W.
+            normal_layer.harris_shutter = settings.value("normal_harris_shutter", True, type=bool)
             normal_layer.film_base = _decode_film_base(settings.value("normal_film_base", "", type=str))
             normal_path = settings.value("normal_path", "", type=str)
             normal_mtime = settings.value("normal_mtime", -1.0, type=float)
@@ -3103,10 +3160,10 @@ class MainWindow(QMainWindow):
         """Restores which panels were shown/hidden - shared by both the
         QSettings autosave and .trirgb restore paths. Separate from
         _apply_restored_items since it's window-level state, not tied to
-        batch_items. (Harris Shutter's checkbox used to be synced here too,
-        back when it was one session-wide flag - now that it's per-photo
-        like invert, _apply_restored_items syncs it via
-        _sync_harris_shutter_checkbox() alongside set_invert(), the same
+        batch_items. (Harris Shutter's own combo state used to be synced
+        here too, back when it was one session-wide flag - now that it's
+        per-photo like invert, _apply_restored_items syncs it via
+        _sync_import_and_channels_ui() alongside set_invert(), the same
         place/timing as every other per-photo widget.)
 
         block_side/block_visible/block_collapsed/left_block_order/
@@ -3184,8 +3241,7 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.light_panel.set_invert(self._active_invert_state())
-        self._sync_harris_shutter_checkbox()
+        self.import_panel.set_invert(self._active_invert_state())
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
         self._sync_import_and_channels_ui()
@@ -3228,7 +3284,7 @@ class MainWindow(QMainWindow):
                 "mode": item.mode,
                 "normal": {
                     "path": nl.path or "", "quarter_turns": nl.quarter_turns, "invert": nl.invert,
-                    "film_base": nl.film_base,
+                    "harris_shutter": nl.harris_shutter, "film_base": nl.film_base,
                 },
                 "global": {
                     "black": gc.black_point, "white": gc.white_point, "gamma": gc.gamma,
@@ -3324,6 +3380,9 @@ class MainWindow(QMainWindow):
             normal_path = n.get("path", "")
             normal_layer.quarter_turns = n.get("quarter_turns", 0)
             normal_layer.invert = n.get("invert", False)
+            # Default True ("Solo Couleur") for a .trirgb saved before this
+            # field existed - same reasoning as the QSettings restore path.
+            normal_layer.harris_shutter = n.get("harris_shutter", True)
             normal_layer.film_base = n.get("film_base")
             if normal_path:
                 # Same is_missing()-on-load-failure retention as the 3
@@ -3592,6 +3651,7 @@ class MainWindow(QMainWindow):
             settings.setValue("normal_mtime", normal_mtime)
             settings.setValue("normal_quarter_turns", nl.quarter_turns)
             settings.setValue("normal_invert", nl.invert)
+            settings.setValue("normal_harris_shutter", nl.harris_shutter)
             settings.setValue("normal_film_base", json.dumps(nl.film_base) if nl.film_base else "")
 
             gc = item.global_corr
@@ -3805,7 +3865,7 @@ class MainWindow(QMainWindow):
         # Re-derive from the active photo's actual (possibly unchanged, if
         # it wasn't among targets) state, rather than trusting `checked`
         # blindly - keeps the button honest in that edge case.
-        self.light_panel.set_invert(self._active_invert_state())
+        self.import_panel.set_invert(self._active_invert_state())
 
     def on_active_toggled(self, index: int, checked: bool) -> None:
         if checked:
@@ -3829,18 +3889,6 @@ class MainWindow(QMainWindow):
                 and self.batch_items[self.batch_current_index].mode == "normal"):
             return self.normal_layer.invert
         return self.layers[0].invert
-
-    def _sync_harris_shutter_checkbox(self) -> None:
-        """Reflects the active photo's own Harris Shutter mode
-        (self.layers[0].harris_shutter - kept identical across all 3
-        channels of a photo, same invariant as invert) on the checkbox,
-        without re-triggering on_harris_shutter_toggled. Called everywhere
-        set_invert(self.layers[0].invert) already is, since the two are
-        synced at exactly the same moments (photo switch, undo/redo,
-        session restore, paste, reset)."""
-        self.harris_shutter_checkbox.blockSignals(True)
-        self.harris_shutter_checkbox.setChecked(self.layers[0].harris_shutter)
-        self.harris_shutter_checkbox.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Alignment / tone parameter changes from the panels
@@ -3917,29 +3965,61 @@ class MainWindow(QMainWindow):
         self.recompute_preview()
 
     def on_harris_shutter_toggled(self, checked: bool) -> None:
-        """Harris Shutter is per-channel state now (ChannelLayer.harris_shutter,
-        kept identical across a photo's 3 channels - see the field's own
-        docstring in model.py), not one session-wide flag - so toggling this
-        checkbox applies to every currently-selected photo at once, falling
-        back to just the active one (_target_batch_indices, same convention
-        as on_locate_missing_files/on_invert_toggled). Always sets the
-        explicit new `checked` value on every targeted channel, never
-        toggles each against its own prior state, so a selection with mixed
-        harris_shutter states converges on one state instead of each photo
-        flipping independently. For each targeted channel that has a real
-        loaded image, this also switches how it was interpreted at load
-        time (luminance vs. its own R/G/B channel - see
-        imaging.load_grayscale) by reloading it from disk under the new
-        mode; alignment/tone-curve values are untouched, only the pixel
-        source changes. Future loads (single manual load or batch import)
-        pick up the new mode automatically since they all read this same
-        checkbox at load time."""
+        """Harris Shutter/film-type is per-item state now (ChannelLayer.harris_shutter,
+        kept identical across a photo's 3 Trichrome channels - see the
+        field's own docstring in model.py), not one session-wide flag - so
+        this applies to every currently-selected photo at once, falling
+        back to just the active one (_target_batch_indices, same
+        convention as on_locate_missing_files/on_invert_toggled). Always
+        sets the explicit new `checked` value, never toggles against prior
+        state, so a selection with mixed harris_shutter states converges
+        on one state instead of each photo flipping independently.
+
+        **Deliberately branches on each targeted item's own current mode -
+        unlike invert, this does NOT write both layers[0].harris_shutter
+        and normal_layer.harris_shutter unconditionally.** The two
+        represent genuinely independent choices (which Trichrome variant,
+        vs. Solo Couleur/N&B - see the "Film type" section in CLAUDE.md
+        for the full behavior matrix), each remembered on its own across
+        mode switches - a real bug caught by testing exactly that
+        (switching Solo→B&W Trichrome→Solo lost the Solo-specific
+        selection, because an earlier version of this method wrote
+        normal_layer.harris_shutter unconditionally every time, clobbering
+        it whenever a Trichrome-variant pick happened to also flow through
+        here). For a Trichrome item: reloads each channel that has a real
+        loaded image from disk under the new interpretation (luminance vs.
+        its own R/G/B channel - see imaging.load_grayscale). For a Solo
+        item: forces GlobalCorrection.saturation to 0.0 when switching to
+        B&W (Color Trichrome, and re-selecting Color, don't touch
+        saturation at all - only the Solo+B&W transition does). Future
+        loads (single manual load or batch import) pick up the new
+        Trichrome mode automatically since they all read
+        ImportPanel.is_harris_shutter_active() at load time."""
         targets = self._target_batch_indices()
         if not targets:
             return
         self.push_undo()
         for idx in targets:
             item = self.batch_items[idx]
+            if item.mode == "normal":
+                was_color = item.normal_layer.harris_shutter
+                item.normal_layer.harris_shutter = checked
+                saturation_changed = False
+                if not checked and was_color:
+                    # Genuine Couleur -> N&B transition - remember the
+                    # current saturation so leaving B&W can restore it,
+                    # rather than re-saving 0.0 on a re-click while
+                    # already in B&W.
+                    item.saturation_before_bw = item.global_corr.saturation
+                    item.global_corr.saturation = 0.0
+                    saturation_changed = True
+                elif checked and not was_color and item.saturation_before_bw is not None:
+                    item.global_corr.saturation = item.saturation_before_bw
+                    item.saturation_before_bw = None
+                    saturation_changed = True
+                if saturation_changed and idx != self.batch_current_index:
+                    self._refresh_carousel_thumbnail_for_item(idx)
+                continue
             item_reloaded = False
             for ci, layer in enumerate(item.layers):
                 layer.harris_shutter = checked
@@ -3962,11 +4042,12 @@ class MainWindow(QMainWindow):
             if item_reloaded and idx != self.batch_current_index:
                 self._refresh_carousel_thumbnail_for_item(idx)
         if self.batch_current_index in targets:
+            self._sync_global_panel_from_model()
             self.recompute_preview()
         # Re-derive from the active photo's actual (possibly unchanged, if
         # it wasn't among targets) state, rather than trusting `checked`
-        # blindly - keeps the checkbox honest in that edge case.
-        self._sync_harris_shutter_checkbox()
+        # blindly - keeps the Mode combo honest in that edge case.
+        self._sync_import_and_channels_ui()
 
     def on_rotate_right(self) -> None:
         self._rotate_all_channels(clockwise=True)
@@ -4566,7 +4647,14 @@ class MainWindow(QMainWindow):
         also avoids paying for a second straighten/crop/to_uint8 pass that
         would just get thrown away unused."""
         self.light_panel.reset_button.setEnabled(self.global_corr.has_light_correction())
-        self.color_panel.reset_button.setEnabled(self.global_corr.has_color_correction())
+        # Never re-enable Color's own Reset while the whole Color block is
+        # disabled (Solo N&B) - has_color_correction() doesn't know about
+        # that state, so left unguarded this would silently reactivate the
+        # button the moment any *other* edit (e.g. a Light slider) called
+        # recompute_preview, even though set_disabled_message already
+        # turned the whole block off.
+        if not self._solo_bw_active():
+            self.color_panel.reset_button.setEnabled(self.global_corr.has_color_correction())
         self.crop_panel.reset_button.setEnabled(self.crop.has_crop())
         self.curves_panel.reset_button.setEnabled(self.global_corr.has_curve_correction())
 

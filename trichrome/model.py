@@ -64,6 +64,25 @@ class ChannelLayer:
     # has_tone_correction()/reset_tone() (see MainWindow.on_harris_shutter_toggled).
     # Unlike invert, changing it requires an actual reload from disk (it
     # changes what the pixel data *is*, not a live transform on top of it).
+    #
+    # Also used on normal_layer (2026-09-07, "Film type") - a completely
+    # separate meaning there, since Solo mode has no trichrome channels to
+    # reinterpret: True/"Solo Couleur" is the default (a real color photo,
+    # nothing forced), False/"Solo N&B" forces GlobalCorrection.saturation
+    # to 0 and disables the Color block, explained via ColorPanel's own
+    # set_disabled_message(). Both a trichrome channel's and normal_layer's
+    # own harris_shutter are always kept in sync by the same click
+    # (MainWindow.on_harris_shutter_toggled writes both, unconditionally,
+    # regardless of the item's current mode - same "harmless on whichever
+    # one isn't currently read" convention as invert) - which one actually
+    # matters is purely a function of BatchItem.mode at read time. See the
+    # "Film type" section in CLAUDE.md for the full mode x film-type
+    # behavior matrix. **The correct default differs by role**: False is
+    # right for a trichrome channel (classic B&W-through-filter is the
+    # standard case) but wrong for normal_layer (a Solo photo is loaded via
+    # imaging.load_color() - a real color image - so it must default True,
+    # explicitly set at every fresh Solo-photo creation/load site rather
+    # than relying on this dataclass default).
     harris_shutter: bool = False
 
     # Film base correction (2026-09-04, see the "Sample Film Base" section
@@ -311,12 +330,26 @@ class BatchItem:
     # A plain ChannelLayer reused as a convenient single-image holder (gets
     # has_image()/is_missing() for free) - NOT one of the 3 trichrome
     # channels and never passed into compose_trichrome/compose_rgb_from_channels;
-    # its own alignment/tone/harris_shutter fields are unused (Normal mode
-    # has no per-channel controls, no UI exposes them), only
-    # path/image_full/image_preview/preview_scale/quarter_turns/invert
-    # matter here.
+    # its own alignment/tone fields are unused (Normal mode has no per-
+    # channel controls, no UI exposes them) - path/image_full/image_preview/
+    # preview_scale/quarter_turns/invert/harris_shutter are what matter
+    # here. harris_shutter is the one field with a genuinely different
+    # meaning on this object than on a trichrome channel - see its own
+    # docstring above ("Film type" / Solo Couleur vs Solo N&B).
     normal_layer: ChannelLayer = field(
         default_factory=lambda: ChannelLayer(color_index=0, label="Normal"))
+
+    # Remembers global_corr.saturation from right before a Solo N&B
+    # selection forced it to 0.0 (see MainWindow.on_harris_shutter_toggled),
+    # so switching away from Solo N&B - back to Solo Couleur, or to either
+    # Trichrome variant - restores it instead of leaving saturation at 0.
+    # None whenever the item isn't (and was never) in that forced-zero
+    # state. Session-persistence scope: in-memory/undo-redo only (threaded
+    # through _snapshot_state's BatchItem(...) call), deliberately not
+    # saved to QSettings/.trirgb - a session reload while mid-Solo-N&B
+    # simply has no "before" value to restore, same as the value being
+    # cleared by a plain photo reload.
+    saturation_before_bw: Optional[float] = None
 
     # Stable identity, assigned once and never reassigned (even by undo/redo
     # or a resort) - lets the UI track "this same photo" across reordering,

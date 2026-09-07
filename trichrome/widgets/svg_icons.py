@@ -38,6 +38,23 @@ def tinted_svg_pixmap(svg_name: str, size: int, color: QColor, dpr: float) -> QP
     return pixmap
 
 
+def raw_svg_pixmap(svg_name: str, size: int, dpr: float) -> QPixmap:
+    """Renders an SVG using its own embedded colors verbatim, with no
+    uniform re-tint pass - for the rare icon that deliberately encodes
+    meaning through multiple colors at once (e.g. the Mode selector's
+    layers icon, one distinct color per layer) rather than the single-
+    color-glyph convention every other icon in resources/icons/ follows."""
+    renderer = QSvgRenderer(icon_path(svg_name))
+    pixmap = QPixmap(max(1, round(size * dpr)), max(1, round(size * dpr)))
+    pixmap.setDevicePixelRatio(dpr)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    renderer.render(painter, QRectF(0, 0, size, size))
+    painter.end()
+    return pixmap
+
+
 def rotated_tinted_svg_pixmap(svg_name: str, size: int, color: QColor, dpr: float, rotation: float = 0.0) -> QPixmap:
     """Same as tinted_svg_pixmap, optionally rotated in place around its own
     center - shared by SvgIconLabel and CollapsibleSection's disclosure
@@ -145,6 +162,26 @@ class SvgCheckableToolButton(SvgToolButton):
         return super()._glyph_color()
 
 
+class SvgColorCheckableToolButton(SvgCheckableToolButton):
+    """Like SvgCheckableToolButton, but tinted to a fixed custom color
+    instead of the palette's button-text color - full strength while
+    checked, faded (alpha 70 - reads as a muted/"grayed" version of the
+    same hue against this app's dark background, the same alpha value
+    SvgCheckableToolButton's own dimmed state already uses) while
+    unchecked. For a toggle whose "on" state should always read as one
+    specific color rather than plain white (e.g. Files' Color Film
+    button, meant to always read as orange)."""
+
+    def __init__(self, svg_name: str, color, size: tuple[int, int] = (30, 26), icon_size: int = 18, parent=None):
+        super().__init__(svg_name, size=size, icon_size=icon_size, parent=parent)
+        self._color = QColor(color)
+
+    def _glyph_color(self) -> QColor:
+        color = QColor(self._color)
+        color.setAlpha(255 if (self.isEnabled() and self.isChecked()) else 70)
+        return color
+
+
 class SvgLetterToggleButton(SvgTwoStateToggleButton):
     """A checkable single-letter channel button (R/G/B/Y) drawn from the
     "Letters" icon set: the solid circle-letter glyph while active, the
@@ -205,3 +242,10 @@ class SvgIconLabel(QLabel):
             color = QColor(self.palette().buttonText().color())
         dpr = self.devicePixelRatioF() or 1.0
         self.setPixmap(rotated_tinted_svg_pixmap(svg_name, self._icon_size, color, dpr, rotation))
+
+    def set_icon_raw(self, svg_name: str) -> None:
+        """Like set_icon(), but renders the SVG's own embedded colors
+        verbatim instead of re-tinting the whole glyph to one color - see
+        raw_svg_pixmap()."""
+        dpr = self.devicePixelRatioF() or 1.0
+        self.setPixmap(raw_svg_pixmap(svg_name, self._icon_size, dpr))

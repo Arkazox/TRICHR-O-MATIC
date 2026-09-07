@@ -3978,6 +3978,715 @@ later ("Nous reviendrons plus précisément à la fenêtre d'import plus tard").
     Rotate now provably change real pixel data and persisted state in
     Normal mode, which they previously did not at all.
 
+## Mode selector (added 2026-09-07)
+
+Two passes in one day, both in the Files block (`import_panel.py`),
+directly implementing the roadmap's "clarify the different operating
+modes" item.
+
+**First pass: Negative (invert) and Harris Shutter Effect relocated to the
+top of the Files block.** The user's own reasoning: both describe
+per-photo source state (how *this specific photo's* files were loaded/
+should be interpreted), not a "correction" applied afterward - so neither
+belonged where it used to live. `invert_button` moved out of `LightPanel`'s
+header (`widgets/global_panel.py`) - `LightPanel` lost its `invert_toggled`
+signal and `set_invert()` method entirely, both now owned by `ImportPanel`.
+The Harris Shutter checkbox + its "?" info button moved out of the bottom
+of `independent_channels_group` ("Trichrome Process") in `main_window.py`
+- `ImportPanel` gained `harris_shutter_toggled`/matching setter, wired the
+same way. `MainWindow._sync_channels_panel_availability` calls
+`import_panel.set_harris_shutter_enabled(not is_normal)` instead of
+touching the checkbox directly (Harris Shutter still only means anything
+in Trichrome mode).
+
+**Second pass, same day: unified into one 3-way Mode selector**, styled
+like `CropPanel`'s own aspect-ratio row (icon + label + combo + trailing
+"?" button) - the user's explicit spec. This replaced *two* separate
+controls that described the same underlying thing from two angles: the
+plain Normal/Trichrome toggle buttons, and the just-relocated Harris
+Shutter checkbox (itself only meaningful inside Trichrome mode) - now one
+`QComboBox` with 3 named choices:
+- **Solo** - `BatchItem.mode == "normal"` (a single already-composed
+  photo).
+- **B&W Trichrome** - `mode == "trichrome"`, `ChannelLayer.harris_shutter
+  == False` (the classic case - 3 B&W photos through color filters).
+- **Color Trichrome** - `mode == "trichrome"`, `harris_shutter == True` (3
+  real color photos, each keeping its own R/G/B channel - see the Harris
+  Shutter Effect section above for the actual processing difference).
+
+- **`ImportPanel._on_mode_combo_changed()`** maps the selected index to
+  the underlying pair of signals: Solo emits `mode_change_requested("normal")`
+  only; either Trichrome variant emits `mode_change_requested("trichrome")`
+  **and** `harris_shutter_toggled(key == "color_trichrome")` - both fire
+  even when `item.mode` is already `"trichrome"` (switching B&W↔Color
+  Trichrome doesn't touch mode at all), since
+  `on_import_mode_change_requested`'s own `if item.mode == mode: return`
+  guard makes that half a correct no-op, and only `harris_shutter_toggled`
+  does real work in that case. `is_harris_shutter_active()` (combo index
+  == "color_trichrome") replaces the old checkbox's `isChecked()` at every
+  read site in `main_window.py` (`start_batch_import`,
+  `_load_image_from_path`'s `imaging.load_grayscale(..., channel=...)`
+  call and its own `layer.harris_shutter = ...` write).
+- **`ImportPanel.set_mode_selection(mode, harris_shutter)`** replaces the
+  old `set_mode(mode)` as the one programmatic-sync entry point (photo
+  switch, undo/redo, session restore, paste/reset, a cancelled/reverted
+  mode switch) - blocks signals, picks the right combo index from the
+  `(mode, harris_shutter)` pair, and updates the mode icon + which
+  container (`trichrome_container`/`normal_container`) is visible, same as
+  the old `set_mode()` did for the container half.
+- **`MainWindow._sync_import_and_channels_ui()`** is now the single place
+  that keeps the combo honest - it already read `self.batch_items[...].mode`
+  for the old `set_mode()` call, and now also reads
+  `self.layers[0].harris_shutter` (always valid at every call site, since
+  `self.layers` is set to the active item's own layers before this is ever
+  called) to build the `(mode, harris_shutter)` pair for
+  `set_mode_selection()`. The now-redundant standalone
+  `_sync_harris_shutter_checkbox()` method was deleted outright - every
+  one of its 6 call sites either already had a `_sync_import_and_channels_ui()`
+  call immediately after (redundant, removed) or didn't and now calls it
+  directly instead (`paste_settings_to`, `reset_batch_items`,
+  `on_harris_shutter_toggled`'s own trailing re-sync). The 3 old direct
+  `import_panel.set_mode("trichrome"/"normal")` calls (a cancelled
+  `ModeSwitchDialog`, `_switch_to_normal_mode`'s load-error path,
+  `_load_normal_image_from_path`'s success path) were all replaced with
+  `self._sync_import_and_channels_ui()` too, for the same reason - it
+  already derives the fully-correct current state from the model, so
+  hardcoding a mode string at the call site was redundant and, in the
+  error/cancel paths, didn't account for `harris_shutter` at all.
+- **New icons - `General/layers-mode-{solo,bw,color}.svg`** - all three
+  derived from the existing `General/layers-outline.svg` (a 3-layer stack
+  glyph, already used elsewhere in the app) by splitting its 2 `<path>`
+  elements (the original had the top+bottom layers sharing one path,
+  confirmed by inspecting the SVG directly) into 3 separate paths - one
+  per visual layer - so each could carry its own explicit `stroke` color:
+  **Solo** grays the top+bottom layers (`#5c5c5c`) and keeps the middle
+  one white (one photo "in focus"); **B&W Trichrome** renders all 3 in a
+  near-white light-gray gradient (`#e4e4e4`/`#f6f6f6`/`#d0d0d0`); **Color
+  Trichrome** colors each layer in its real channel color
+  (`#e05555`/`#3fae4a`/`#4a7fe0` - matching `channel_panel.CHANNEL_COLORS`
+  exactly, not just visually similar reds/greens/blues). Verified by
+  rendering each to a PNG and inspecting it before wiring them in - the
+  path split preserves the original glyph's geometry exactly (confirmed
+  against the original `layers-outline.svg`'s own render).
+- **`svg_icons.raw_svg_pixmap()` + `SvgIconLabel.set_icon_raw()`** (new) -
+  every other icon in `resources/icons/` is a plain single-color glyph,
+  tinted at paint time to whatever color the current state calls for
+  (`tinted_svg_pixmap`'s `CompositionMode_SourceIn` pass) - which would
+  flatten these 3 new multi-color icons to one uniform color, defeating
+  the entire point. `raw_svg_pixmap()` renders an SVG's own embedded
+  colors verbatim (no re-tint pass) - `SvgIconLabel.set_icon_raw()` is the
+  thin wrapper `ImportPanel.mode_icon` actually calls. This is deliberately
+  a narrow, additional code path alongside the existing tinted one, not a
+  replacement for it - every other icon in the app still goes through the
+  normal single-tint convention.
+- **i18n**: `mode_select_label`/`mode_solo_option`/`mode_bw_trichrome_option`/
+  `mode_color_trichrome_option`/`mode_select_info` (new) replace the now-dead
+  `import_mode_normal_button`/`import_mode_trichrome_button`/
+  `harris_shutter_checkbox`/`harris_shutter_info` (removed, confirmed zero
+  remaining references first). `mode_select_info` is the "?" bubble's HTML
+  text, same bold-white-name/muted-gray-description convention as every
+  other info bubble in this app (`<b>` inherits the label's own `#f0f0f0`,
+  `<span style="color:#9a9a9a;">` for the description, `<br><br>` between
+  the 3 blocks) - covers all 3 modes in one bubble, reusing/adapting the
+  old `harris_shutter_info` wording for the 2 Trichrome variants and adding
+  a matching Solo paragraph.
+- **A real test-environment trap hit while verifying this**: a headless
+  test using a fake, *nonexistent* file path (e.g. `/tmp/fake_0.png`, never
+  actually written) for a `ChannelLayer.path` and then triggering a Solo↔
+  Trichrome switch through `_switch_to_normal_mode`'s real
+  `imaging.load_color(path)` call hung indefinitely under this
+  environment's sandbox (confirmed via `faulthandler.dump_traceback_later`
+  - the stack sat inside `Image.open()` on the nonexistent path, which
+  should raise `FileNotFoundError` near-instantly on a normal filesystem).
+  Not a bug in this feature or `imaging.load_color` itself - purely a
+  sandboxed-`/tmp`-access quirk of this specific test environment. Fixed
+  by writing a real tiny PNG to the scratchpad directory instead of using
+  a fake path - any future headless test that needs `ChannelLayer.path` to
+  point at something real (as opposed to just checking `has_image()`,
+  which only looks at `image_preview`) should do the same, not assume a
+  nonexistent path fails fast.
+- Verified headlessly (isolated QSettings domain, real on-disk PNG per the
+  trap above): combo index 1 ("B&W Trichrome") is the correct construction-
+  time default; selecting Color Trichrome with 3 real loaded channels sets
+  `harris_shutter=True` on the layers and reads back correctly via
+  `is_harris_shutter_active()` without touching `item.mode`; the invert
+  button still works independently; a full French retranslation preserves
+  both the combo's translated item text and the current selection index;
+  the `ModeSwitchDialog` accept path (mocked `.exec()`) correctly switches
+  to Solo and updates the combo; the cancel path correctly reverts both
+  `item.mode` and the combo's displayed index back to Color Trichrome
+  (not just Trichrome) - confirming `_sync_import_and_channels_ui()`
+  actually restores the harris_shutter half of the pair, not just mode; a
+  trivial 0-loaded-channels flip in both directions; a full undo restoring
+  both `mode` and `harris_shutter` together after a Color Trichrome
+  selection; pyflakes clean across every touched file; i18n EN/FR parity;
+  a full app boot plus retranslate in both languages. **Not verified
+  here**: the real visual read of the 3 new icons and the combo/info-
+  bubble layout at real size/DPI in the running app - needs the user's own
+  pass, same as any visual/interactive change.
+
+**Icons revised same day, once the user supplied real "stack" assets**
+(`resources/icons/General/stack.svg`, `stack-front.svg`, `stack-back.svg`
+- Bootstrap's filled "bi-stack" glyph and its Tabler-style front/back
+  emphasized variants) to replace the first pass's `layers-outline.svg`-
+  derived icons, which were plain-outline rather than "full" (filled).
+- **`layers-mode-bw.svg`/`layers-mode-color.svg` rebuilt from `stack.svg`**
+  (a solid front diamond + 2 filled chevron slivers behind it, rather than
+  3 equal-weight outline diamonds) - same split-the-shared-path technique
+  as the first pass (`stack.svg`'s 2 `<path>` elements have the same
+  top+bottom-share-one-path structure `layers-outline.svg` did, confirmed
+  by inspecting the path data's y-coordinate ranges before touching
+  anything), just applied to a different source glyph. B&W Trichrome:
+  white (front) → `#e5e5e5` (90% gray) → `#cccccc` (80% gray, back) - a
+  brightness gradient from front to back rather than 3 arbitrary grays.
+  Color Trichrome: unchanged mapping (front=R/`#e05555`, middle=G/`#3fae4a`,
+  back=B/`#4a7fe0`).
+- **`stack-middle.svg` (new asset)** - the user asked for a Solo icon "in
+  the spirit of stack-front/stack-back" but with the *middle* card filled
+  instead. Reading `stack-front.svg`/`stack-back.svg` side by side first
+  revealed the actual design language they share, which isn't obvious
+  from either file alone: the *front* card, being fully unoccluded, is a
+  complete filled diamond; a card with something in front of it (back, or
+  now middle) only ever shows as a small filled **chevron sliver** - the
+  visible sliver peeking out from behind, not a full diamond with a
+  notch. (An initial attempt built a "notched diamond" fill for the
+  middle layer by pattern-matching the vertex coordinates without first
+  confirming what shape they actually traced - rendering the isolated
+  path revealed it was just the existing chevron outline, filled; once
+  bottom-filled was rendered in isolation too for comparison, both traced
+  the *same* small chevron polygon, confirming the whole family's real
+  rule is "occluded layers are chevron slivers, filled or not - never a
+  full diamond.") `stack-middle.svg` reuses `stack-back.svg`'s own top
+  path verbatim for its top diamond (confirmed to trace the identical
+  4-vertex diamond as `stack-front.svg`'s own top path, just parameterized
+  from a different starting vertex) and `stack-front.svg`'s own bottom
+  path verbatim for its bottom chevron - only the middle chevron's fill is
+  new, closing the existing open middle-chevron stroke path into a proper
+  fillable polygon by adding one connecting vertex, the same way
+  `stack-back.svg`'s own bottom-filled path closes its open counterpart.
+  `_MODE_ICONS["solo"]` now points at `General/stack-middle.svg`; the
+  outline-based `General/layers-mode-solo.svg` from the first pass is left
+  on disk unreferenced, same convention as every other superseded icon in
+  this project (`Toolbar/Import.svg`, the old hand-drawn `Toolbar/scan.svg`, ...).
+- Verified by rendering every file (`stack.svg`, `stack-front.svg`,
+  `stack-back.svg`, `stack-middle.svg`, both rebuilt mode icons, and each
+  isolated candidate middle-fill path during the debugging above) to a PNG
+  against a dark background and inspecting each one before wiring
+  anything in - not just trusting the path arithmetic, given the first,
+  wrong attempt was itself a plausible-looking but unverified geometric
+  derivation. Also re-ran the full headless Mode-selector suite from the
+  first pass (icon pixmap non-null for all 3 combo states) against the
+  new files. **Not verified here**: the real visual read at actual
+  toolbar size/DPI - same standing caveat as the first pass.
+
+**Third pass, same day - the user caught 2 more issues after seeing it
+run**: Solo's icon rendered visibly smaller than the other 2, and the
+B&W Trichrome gradient direction/values needed adjusting.
+- **Size mismatch, root cause**: `stack-middle.svg` was authored as a
+  plain Tabler-style icon, `viewBox="0 0 24 24"` with the actual glyph
+  only occupying a 16×16 area centered inside it (the standard Tabler
+  4-unit padding on all sides) - confirmed by reading off the min/max
+  x/y across all 3 paths' coordinates (4 to 20 on both axes). `stack.svg`
+  (what `layers-mode-bw.svg`/`layers-mode-color.svg` derive from) has its
+  glyph filling almost the entirety of its own `viewBox="0 0 16 16"` with
+  negligible padding. Since every icon here renders by scaling its whole
+  `viewBox` to fill a fixed target pixel square (`raw_svg_pixmap`/
+  `QSvgRenderer.render(painter, QRectF(0,0,size,size))`), that unequal
+  padding-to-content ratio is exactly what made Solo look smaller at the
+  same nominal icon size. Fixed by tightening `stack-middle.svg`'s own
+  `viewBox` to `"4 4 16 16"` - the glyph's real bounding box - which
+  crops the dead padding out so the render fills the target square the
+  same way the other 2 do; the (already invisible, `stroke="none"
+  fill="none"`) background-rect path Tabler icons conventionally include
+  was dropped too, since it's now partly outside the tightened viewBox
+  and did nothing visually either way. No path geometry changed, purely
+  the viewBox crop.
+- **B&W Trichrome gradient**: reassigned per explicit user spec, read
+  bottom-to-top - back (bottom, the chevron sliver) is now white
+  (`#ffffff`), middle is 75% gray (`#bfbfbf`), front (top, the full
+  diamond) is 50% gray (`#808080`) - a full reversal of the first pass's
+  front-brightest assumption, and a different pair of percentages (75/50
+  instead of 90/80) - same `X% of 255` conversion convention as before
+  (`0.75*255≈191→#bfbfbf`, `0.50*255=127.5→128→#808080`).
+- Verified by rendering all 3 mode icons side by side at the real 18px
+  icon size (scaled up for inspection) - confirmed matching size and the
+  correct bottom-to-top white/75%/50% gradient - plus the existing
+  headless pixmap-non-null sweep across all 3 combo states.
+
+**Fourth pass, same day - `stack-middle.svg` abandoned in favor of
+building Solo directly on `stack.svg`'s own geometry, plus the B&W
+gradient direction flipped once more.** The third pass's `viewBox="4 4 16
+16"` crop fixed the *size* mismatch but introduced a new, related defect
+the user then caught: cropping the viewBox exactly to the path vertices'
+own bounding box ignored that the 1.5-unit stroke extends another 0.75
+units of ink beyond those vertices in every direction - so the tightened
+viewBox was clipping the stroke itself at the top and bottom edges
+("l'icone est croppée en haut et en bas"). Rather than re-deriving a
+correctly-padded Tabler viewBox, the user asked to abandon the Tabler
+`stack-front`/`stack-back` family for Solo entirely and rebuild it "from
+the stack base" instead - i.e. reuse the exact same `stack.svg` split
+(the 3 paths `layers-mode-bw.svg`/`layers-mode-color.svg` already use,
+sharing their exact geometry/viewBox=`"0 0 16 16"`) rather than a
+differently-proportioned Tabler source, sidestepping the padding/cropping
+class of bug altogether. `stack-middle.svg`'s content was replaced
+outright (filename kept, since `_MODE_ICONS["solo"]` already points at
+it and "middle filled" still accurately describes it): the exact same top
+(diamond) and bottom (chevron) paths as the other 2 mode icons, but with
+`fill="none" stroke="#5c5c5c" stroke-width="1" stroke-linejoin="round"`
+instead of a solid fill - "creuses... mais en gris" (hollow, but gray) -
+`#5c5c5c` reused from the very first (layers-outline-based) Solo icon
+attempt's own grayed-out color, the one already-established "muted gray"
+in this app rather than picking a new one; the middle (chevron) path
+stays a plain solid `fill="#ffffff"`, unchanged. Because this reuses
+`stack.svg`'s own native, already-correctly-proportioned viewBox
+verbatim, there's no padding/cropping arithmetic left to get wrong - the
+3 mode icons are now guaranteed to match in size by construction (same
+source viewBox, same coordinate system), not by manually tuning a crop
+rectangle.
+- **B&W Trichrome gradient inverted again**: "inverse l'ordre (blanc en
+  haut)" - front (top, the full diamond) is now white (`#ffffff`), middle
+  stays 75% gray (`#bfbfbf`, untouched by this flip since only the two
+  ends swapped), back (bottom, the chevron) is now 50% gray (`#808080`) -
+  the exact reverse of the third pass's bottom-to-top assignment.
+- Verified: re-rendered all 3 mode icons side by side at the real 18px
+  icon size again post-rebuild (Solo's outline top/bottom + solid white
+  middle, no visible clipping at any edge; B&W's white-top/gray-bottom
+  gradient; Color unchanged) and confirmed each `SvgIconLabel` pixmap
+  comes back non-null at exactly the expected 18×18 size for all 3 combo
+  states.
+
+**Fifth pass, same day - Solo's top diamond read visibly "rounder" than
+the sharp-pointed filled diamonds on the other 2 icons.** Root cause:
+`stack-middle.svg`'s outline paths used `stroke-linejoin="round"`, which
+rounds off a stroked path's corners with an arc - at the diamond's sharp
+~45° tips this reads as a visibly blunted point next to `layers-mode-bw.svg`/
+`layers-mode-color.svg`'s own filled diamonds, which have no stroke at
+all and so keep their exact mathematically-sharp vertices. Confirmed by
+rendering both join styles side by side before touching the real file -
+`stroke-linejoin="miter"` (the SVG default, made explicit here rather
+than left implicit) keeps the tip sharp and pointed, matching the filled
+diamonds' silhouette almost exactly. One-line fix in `stack-middle.svg`
+(both outline paths' `stroke-linejoin`), no geometry changed. Verified by
+re-rendering all 3 mode icons side by side again and the same headless
+pixmap-non-null sweep.
+
+**Sixth pass, same day - a Film row added below the Mode combo**: 2 new
+buttons (`bw_film_button`/`color_film_button`, both `Scan/film.svg`) as a
+quicker, always-visible alternative to picking B&W/Color Trichrome from
+the Mode combo, plus `invert_button` (Negative) relocated into the same
+row (previously its own row above Mode) - user's explicit layout spec.
+- **Not an exclusive `QButtonGroup`** - both buttons independently
+  clickable via `.clicked` (not `.toggled`), each emitting
+  `mode_change_requested("trichrome")` + `harris_shutter_toggled(is_color)`
+  on every click, including a re-click of the already-active one (same
+  "re-click still re-applies" convention as the default-layout toolbar
+  buttons) - a `QButtonGroup` couldn't represent Solo's "neither is
+  active" state anyway (see below). `ImportPanel.set_mode_selection()` is
+  still the single place that resyncs all 3 controls (combo, its icon,
+  both film buttons) together from the model's actual `(mode,
+  harris_shutter)` state - both film buttons read unchecked at once
+  while in Solo mode.
+- **B&W button**: plain `SvgCheckableToolButton` - its existing default
+  behavior (dim palette-color while unchecked, full palette color/white
+  while checked) already is "gris ou blanc," no custom class needed.
+- **Color button needs a fixed hue** (always orange, not whatever the
+  palette happens to use) that also *dims* rather than just disabling -
+  `SvgColorCheckableToolButton` (new, `svg_icons.py`) is `SvgCheckableToolButton`
+  with a caller-supplied fixed color instead of the palette's button-text
+  color, alpha 70 while unchecked (translucent orange over this app's
+  dark background reads as a muted, grayed orange - "Orange grisé", the
+  same alpha value every other dimmed icon in this app already uses, not
+  a new tier) and full alpha while checked. `_COLOR_FILM_TINT = "#e67e22"`
+  (`import_panel.py`) - deliberately not one of `channel_panel.CHANNEL_COLORS`
+  (reserved for R/G/B), and a nod to color negative film's own orange
+  base/mask as the thematic reason for orange specifically.
+- i18n: `bw_film_button_tooltip`/`color_film_button_tooltip` (new).
+- Verified headlessly: clicking each film button drives `item.mode`/
+  `layers[0].harris_shutter` and syncs the Mode combo's index correctly
+  in both directions, including from Solo (auto-switches to Trichrome,
+  same `ModeSwitchDialog` interception as the combo's own Solo→Trichrome
+  path); re-clicking an already-checked film button still re-applies;
+  both film buttons read unchecked together in Solo mode; a full app
+  boot plus French retranslation confirms both new tooltips. Also
+  rendered the real panel widget to an image in both states (via
+  `QWidget.render()`, not just checking `.isChecked()`) to visually
+  confirm the dim/bright and gray/orange colors actually look right, not
+  just that the boolean state is correct.
+
+**Seventh pass, same day - `Preview/invert.svg` visibly smaller than the
+2 Film Roll icons in the same row**, same class of bug as the earlier
+`stack-middle.svg` sizing issue: its `viewBox="0 -960 960 960"` carries
+real padding around the glyph (confirmed by rendering to a high-res image
+and scanning for the non-transparent pixel bounding box, rather than
+eyeballing or hand-parsing the path - `x: 140-818, y: 56-904` of the full
+960×960 box). Since the glyph itself isn't square (678×848), tightened
+the viewBox to the smallest *square* crop that still contains it in both
+axes (`"55 -904 848 848"` - centered on the content's own center,
+matching its full height exactly and adding only the unavoidable
+horizontal padding a non-square glyph needs in a square box) rather than
+the raw non-square bounding box, so the fix doesn't anisotropically
+stretch the glyph. `Preview/invert.svg` is used nowhere else (confirmed
+via grep before editing), so this couldn't affect any other icon. Verified
+by rendering all 3 film-row icons together at the real 18px size again.
+
+## Film type: the Mode × Negative/B&W/Color behavior matrix (added 2026-09-07)
+
+**This is the foundational spec for how a photo's mode and film-type
+selection drive the rest of the pipeline - added at the user's explicit
+request to document it clearly, since every future feature touching
+Trichrome/Solo processing should treat this table as the source of truth.**
+Two per-item flags, both already covered above, combine here:
+`BatchItem.mode` (`"normal"`/Solo vs `"trichrome"`) and
+`ChannelLayer.harris_shutter` - which, as of this pass, means something
+different depending on *which* `ChannelLayer` it's read from: on a
+Trichrome channel (`item.layers[i]`) it's the existing Harris Shutter
+Effect switch (luminance vs. real R/G/B channel extraction); on
+`item.normal_layer` it's a new, independent "Film type" switch for Solo
+mode (True = Solo Couleur, False = Solo N&B). **Both are driven by the
+exact same 2 UI controls** - the Files block's `bw_film_button`/
+`color_film_button` (and, for the Trichrome variants only, the Mode
+combo's own last 2 entries) - which one actually gets written depends
+purely on the active item's current `mode` at click time (see
+`MainWindow.on_harris_shutter_toggled`'s mode-branching, below).
+
+**The Negative (invert) button is the one control in this row that does
+*not* branch by mode** - `ChannelLayer.invert` already applies uniformly
+whether the active item is Solo or either Trichrome variant (confirmed
+working since the 2026-09-04 "Real bug: Negative and Rotate silently did
+nothing in Normal mode" fix, `_active_invert_state()`/`on_invert_toggled`
+already read/write whichever of `normal_layer.invert`/`layers[...].invert`
+the active mode actually uses) - nothing changed here this pass, it's
+listed for completeness since the user's own spec explicitly called it
+out as the one uniform case among the 3 buttons.
+
+**The 6 non-trivial Mode × Film-type-button combinations** (exact spec
+given by the user, French terms kept verbatim where they name the actual
+UI state):
+
+| Click | Current mode | Result |
+|---|---|---|
+| Color | Solo | **Stays Solo** ("Solo Couleur") - every tool active except Trichrome Process (nothing to process - Solo has no 3 channels) |
+| Color | B&W Trichrome | Auto-switches to Color Trichrome (mode stays `"trichrome"`, only harris_shutter flips) |
+| Color | Color Trichrome | No-op / re-applies - every tool active, composes with Harris Shutter Effect |
+| B&W | Solo | **Stays Solo** ("Solo N&B") - forces `GlobalCorrection.saturation = 0.0`, disables the Color block's tools (message: "Black & White Film Selected"/"Film Noir et Blanc Sélectionné"), Trichrome Process still disabled (Solo mode) |
+| B&W | Color Trichrome | Auto-switches to B&W Trichrome |
+| B&W | B&W Trichrome | No-op / re-applies - every tool active, classic Trichrome composite |
+
+- **Why clicking a film button while in Trichrome never has to touch
+  `item.mode`**: it's already `"trichrome"`, so only `harris_shutter`
+  needs to change to move between the 2 Trichrome variants -
+  `ImportPanel._on_film_type_clicked` was simplified to *only* ever emit
+  `harris_shutter_toggled` (it used to also force
+  `mode_change_requested("trichrome")` unconditionally, from the previous
+  pass, which is what made "stays Solo" impossible - removed outright).
+  The Mode combo's own entries still emit both signals when picked
+  directly (`_on_mode_combo_changed` unchanged), since picking "B&W
+  Trichrome" *from Solo* via the combo is a real mode switch the film
+  buttons alone are never asked to perform.
+- **`MainWindow.on_harris_shutter_toggled` branches on each targeted
+  item's own `mode` - a real bug caught by testing, not just a design
+  choice made up front.** The first draft kept the old "always write
+  both `layers[0].harris_shutter` and `normal_layer.harris_shutter`
+  unconditionally" pattern, copied directly from how `invert` already
+  works - reasonable for `invert` (one real polarity, genuinely shared
+  between both representations of the same photo) but wrong here, since
+  Solo's film-type and Trichrome's film-type are two *independent*
+  choices that happen to reuse the same field name and buttons. Caught by
+  a headless test: switching Solo→B&W Trichrome→Solo silently lost the
+  Solo-specific selection, because the Trichrome-variant pick's own
+  `harris_shutter_toggled(False)` call was unconditionally overwriting
+  `normal_layer.harris_shutter` too, even though the click never touched
+  Solo at all. Fixed by branching: `if item.mode == "normal":` writes
+  only `normal_layer.harris_shutter` (+ forces saturation to 0.0 when
+  turning B&W on) and `continue`s, skipping the Trichrome per-channel
+  reload loop entirely; otherwise the original per-channel reload logic
+  runs exactly as before, never touching `normal_layer`.
+- **Switching Trichrome→Solo for the same item always resets to "Solo
+  Couleur," it does not restore a previously-remembered Solo selection -
+  and this is correct, not a gap.** `_switch_to_normal_mode` always
+  re-derives `normal_layer` fully fresh from whichever Trichrome channel
+  was chosen (`imaging.load_color(source_layer.path)` - a real reload,
+  same as it already does for `quarter_turns`/`invert`, both copied from
+  the *source Trichrome channel*, never preserved from a hypothetical
+  earlier Solo session on this same item) - `harris_shutter` follows the
+  same established pattern, explicitly set `True` there rather than
+  preserved. What *does* persist correctly: revisiting Solo mode without
+  an intervening reload (switching the *active photo* away and back,
+  undo/redo, session save/reload) - each item's own Solo film-type is a
+  real, independently-tracked field like any other, confirmed by testing
+  activating a second item and back rather than round-tripping the same
+  item through Trichrome.
+- **Every fresh Solo-photo creation/load site explicitly sets
+  `harris_shutter = True`**, since the dataclass's own default (`False`)
+  is *correct* for a Trichrome channel (classic B&W-through-filter is the
+  standard case) but *wrong* for `normal_layer` (loaded via
+  `imaging.load_color()` - a real color image, nothing implicitly B&W
+  about it) - the two roles need opposite defaults for the same field,
+  so relying on the dataclass default for both wasn't an option. Fixed at
+  all 3 sites: `_switch_to_normal_mode`, `_build_normal_batch_item`
+  (shared by Add Photo, Finder drag-and-drop, Scan tool captures), and
+  `_load_normal_image_from_path`'s fresh-load branch (`state is None`) -
+  its restore-from-session branch instead reads `state.get("harris_shutter",
+  True)`, though in practice nothing currently calls it with a real
+  `state` dict (session restore for Solo photos is done inline in
+  `_legacy_restore_session`/`_build_restored_items_from_data` instead,
+  covered separately below) - kept for symmetry with `quarter_turns`'s
+  own already-existing `state`-aware branch.
+- **`ColorPanel.set_disabled_message(message: str | None)`** (new,
+  `global_panel.py`) is the mechanism behind "désactive les outils
+  couleur" - disables the 3 sliders + the white-balance eyedropper button
+  and shows `color_disabled_label` (new, same styling/positioning
+  convention as Trichrome Process's own `channels_disabled_label` for
+  Normal mode) in their place; `None` clears it. Driven from
+  `MainWindow._sync_channels_panel_availability`, which already runs at
+  every point the active item's mode or Harris Shutter state could have
+  changed (via `_sync_import_and_channels_ui`) - `solo_bw = is_normal and
+  not self.normal_layer.harris_shutter` is the one new line gating it, so
+  it's automatically correct after every relevant transition (mode
+  switch, film button click, undo/redo, session restore, photo switch)
+  without any new call sites needed. Not gated on `harris_shutter` at all
+  while in Trichrome mode - Color stays fully enabled for both Trichrome
+  variants, per the table above.
+- **Saturation is force-set (`= 0.0`), not read-around** - a real, undo-
+  able edit to `GlobalCorrection.saturation` itself, so the slider
+  visibly shows 0 (via the existing `_sync_global_panel_from_model()`
+  call, added to `on_harris_shutter_toggled`'s active-item tail) rather
+  than a hidden pipeline-level override the UI wouldn't reflect.
+  - **Restored on leaving Solo N&B, added 2026-09-07** ("repasse le
+    réglage de saturation là où il était avant de passer en noir et
+    blanc") - `BatchItem.saturation_before_bw: Optional[float]`
+    (`model.py`) remembers whatever `global_corr.saturation` held right
+    before a genuine Couleur→N&B transition (not re-saved on a re-click
+    while already in B&W, which would just overwrite it with 0).
+    `on_harris_shutter_toggled` restores it and clears the field on the
+    matching genuine N&B→Couleur transition; `_switch_to_trichrome_mode`
+    does the same restore-and-clear when leaving Solo N&B via the Mode
+    combo instead of the film buttons (both are "leaving Solo B&W," the
+    user's spec covers both). Both call `_sync_global_panel_from_model()`
+    afterward so the Color slider visibly reflects the restored value.
+    `reset_batch_items` ("Reset All") also clears the field alongside its
+    own `global_corr.reset()`, so a reset doesn't leave a stale pre-reset
+    value to resurrect later. Threaded through `_snapshot_state`'s/
+    `duplicate_batch_item`'s explicit `BatchItem(...)` reconstruction
+    calls per the usual "any new field must be threaded through or it
+    silently resets on undo" rule - **deliberately not threaded through
+    either session-persistence mechanism** (QSettings/`.trirgb`) - it's a
+    short-lived "undo point" for the saturation slider, not saved
+    project state; a session reload while mid-Solo-N&B simply has nothing
+    to restore later, same as if the value had never been remembered.
+    Verified headlessly: film-button B&W→Couleur restore, Mode-combo
+    Solo-B&W→Trichrome restore, and a full undo/redo round-trip all
+    correctly recover the exact pre-B&W value (not just clear to the
+    slider's own default).
+- **Session persistence** - `normal_layer.harris_shutter` threaded
+  through both mechanisms as a new field, defaulting to `True` (Couleur)
+  when absent so a session/`.trirgb` saved before this feature loads
+  correctly (a pre-existing Solo photo was only ever color, never
+  implicitly B&W): QSettings key `normal_harris_shutter`
+  (`_save_session_state`/`_legacy_restore_session`, same per-item scoping
+  as `normal_invert`/`normal_quarter_turns` right next to it); `.trirgb`
+  JSON gains a `"harris_shutter"` key inside the existing `"normal"` dict
+  (`_collect_session_data`/`_build_restored_items_from_data`).
+  `_snapshot_state`/`_restore_state` (undo/redo) needed no changes -
+  `normal_layer` as a whole object is already deep-copied via
+  `copy.copy()`, so any field already on the dataclass (this one already
+  existed, just gained real meaning in a second context) is automatically
+  included, same reason the Exposure slider/Curves tool needed none
+  either.
+- Verified headlessly with real synthetic images throughout (a real color
+  PNG for Solo, real grayscale PNGs for Trichrome - not fake nonexistent
+  paths, per the standing testing-environment trap documented in the
+  Testing section) and isolated QSettings domains: all 6 table cells
+  above, both directly (checking `item.mode`/`harris_shutter`/`saturation`
+  after each click) and visually-adjacent state (`bw_film_button`/
+  `color_film_button` checked state, `color_panel.saturation.isEnabled()`,
+  `color_disabled_label`'s own visibility via `.isHidden()` - not
+  `.isVisible()`, which needs a shown top-level window and is a documented
+  trap elsewhere in this file); that visiting Solo mode never touches a
+  Trichrome item's own remembered `layers[0].harris_shutter`; that a
+  second item's own Solo film-type is correctly restored when switching
+  the *active photo* back to it (via `activate_batch_item` +
+  `carousel.select_only`, not a same-item Trichrome↔Solo round trip); a
+  full undo/redo cycle restoring both `harris_shutter` and the forced
+  `saturation` together as one edit; a full `.trirgb` save/reload round
+  trip (via the real `save_session_to_path`/`load_session_from_path`
+  pair on the same instance, confirming the actual file-level format) and
+  its old-format-missing-key fallback (stripped the key from the written
+  JSON and reloaded, confirmed it defaults to Couleur); pyflakes clean
+  across every touched file; i18n EN/FR parity; a full app boot plus
+  retranslate. **A real test-harness trap hit while verifying the "switch
+  active photo" scenario**: `activate_batch_item(index)` alone does *not*
+  update carousel selection, only which photo is current/displayed -
+  `_target_batch_indices()` (what `on_harris_shutter_toggled` actually
+  operates on) falls back to the active index only when *nothing* is
+  selected, so a stale selection left over from adding a second photo
+  silently redirected a film-button click to the wrong item. Fixed the
+  test by also calling `carousel.select_only(index)`, matching what a
+  real click on a photo does in the actual UI (both activates *and*
+  selects it) - not a bug in the feature itself, but worth remembering
+  for any future test that activates a photo programmatically and then
+  expects a per-photo action to target it. **Not verified here**: the
+  real visual/interactive feel of the disabled Color block and its
+  message in the running app - needs the user's own pass, same as any
+  visual/interactive change.
+
+**Follow-up, 2026-09-07 - disabled tool blocks now gray out and disable
+completely, not just their sliders/checkboxes individually.** Until this
+pass, "Trichrome Process disabled in Solo mode" and "Color disabled in
+Solo N&B" each disabled a hand-picked subset of widgets (channel panels,
+Auto Align, the lock row; sliders + the eyedropper, respectively) with an
+italic gray `#888` message - inconsistent per-block, and any header
+action button (Reset, "?" info, Reset-all-alignment/color) stayed
+clickable regardless. User's own spec: "grise complètement la case outil
+et rend impossible de cliquer sur les boutons, en dehors de ceux pour
+cacher / fermer le bloc outil" - the whole block grays out and every
+button becomes unclickable except collapse/close - plus the message
+itself moves to the same yellow as the canvas's own "Displaying original"
+Compare indicator (`#f2c40c`, `main_window.py`'s `compare_indicator`), not
+a muted gray italic.
+- **`widgets/block_header_bar.py` gained the shared mechanism** -
+  `DISABLED_MESSAGE_STYLE` (`"color: #f2c40c; font-weight: 600; font-size:
+  11px;"`), `make_disabled_message_label()` (a hidden-by-default `QLabel`
+  in that style - callers add it as the *first* widget in their own
+  `body_layout`, right after `finish_block_chrome`, so it renders at the
+  top of the block), and `set_block_disabled(body, message_label,
+  message, extra_widgets=())` - disables `body` (every block's real
+  content already lives there, so this alone covers sliders/checkboxes/
+  panels with zero per-widget bookkeeping) plus whatever header-row
+  widgets the caller passes as `extra_widgets` (title, "?" info button,
+  Reset/eyedropper/etc.) - deliberately never touches `collapse_button`/
+  `close_button`, the one thing that must stay clickable. **Confirmed
+  empirically before relying on it**: a `QLabel` with an explicit
+  stylesheet `color` still renders that exact color even while its
+  ancestor (`body`) is disabled - Qt's disabled-palette dimming only
+  affects widgets that don't already have their own explicit color, which
+  is why the message label can safely live *inside* the disabled `body`
+  instead of needing to be a sibling of it.
+- **`ColorPanel.set_disabled_message`** (`global_panel.py`) now calls
+  `set_block_disabled(self.body, self.color_disabled_label, message,
+  extra_widgets=(self.title_label, self.scope_info_button,
+  self.pick_white_balance_btn, self.reset_button))` - replaces its old
+  hand-rolled `set_sliders_enabled(not active)` +
+  `pick_white_balance_btn.setEnabled(not active)` pair (the two-line
+  version this replaced didn't touch the title/"?"/Reset at all).
+  `color_disabled_label` itself is now built via
+  `make_disabled_message_label()` instead of a one-off gray-italic
+  `QLabel`.
+- **`independent_channels_group` ("Trichrome Process")** in
+  `main_window.py`'s `_build_ui`: `channels_disabled_label` moved to be
+  the *first* widget added to `independent_channels_layout` (was
+  previously added after the lock row/Auto Align, third-from-top) so it
+  actually renders at the block's top, matching the user's "en haut des
+  blocs" spec - and is now built via `make_disabled_message_label()` too.
+  `_sync_channels_panel_availability` replaced its 6-line manual
+  `panel.setEnabled(...)`/`auto_align_button.setEnabled(...)`/
+  `lock_label.setEnabled(...)`/`lock_buttons[...].setEnabled(...)`/
+  `lock_info_button.setEnabled(...)` sweep with one
+  `set_block_disabled(self.independent_channels_body,
+  self.channels_disabled_label, ..., extra_widgets=(
+  self.independent_channels_title_label,
+  self.channels_scope_info_button, self.reset_all_alignment_button,
+  self.reset_all_color_button))` call - the individual per-widget calls
+  were only ever needed because nothing disabled the shared body before;
+  `channel_panels`/`auto_align_button`/the lock row all already live
+  inside `independent_channels_body`, so disabling the body alone covers
+  every one of them for free.
+- **Both messages reworded** to the user's exact spec:
+  `channels_disabled_normal_mode` → "Tool available only in Trichrome
+  mode" / "Outil disponible uniquement en mode trichrome" (verbatim FR
+  text as given, including the lowercase "trichrome"); `color_disabled_bw_film`
+  → "Tool Disabled: Black & White Film Selected" / "Outil Désactivé :
+  Film Noir et Blanc Sélectionné" (the user's own FR draft was missing
+  the accent on the first "é" of "Sélectionné" - silently corrected,
+  matching the existing FR text's own spelling one line below it and this
+  project's established typo-correction convention).
+- **A real, easy-to-miss gap fixed while wiring this up**:
+  `retranslate_ui()`'s existing `channels_disabled_label`
+  re-translation-if-currently-shown line, and the new equivalent added
+  for `color_disabled_label`, both used `.isVisible()` at first - which
+  requires the *whole ancestor chain* (including the top-level window
+  itself having been `.show()`n) to return true, not just the label's own
+  visibility flag. A headless test constructing `MainWindow()` without
+  ever showing it caught this returning `False` even for a label that was
+  genuinely, explicitly shown - the documented `isVisible()` vs.
+  `isHidden()` trap elsewhere in this file, hit again here. Both switched
+  to `not label.isHidden()`, which reflects the widget's own explicit
+  flag regardless of whether an ancestor window has been shown.
+- Verified headlessly (`QT_QPA_PLATFORM=offscreen`, isolated QSettings
+  domain, real synthetic Solo photo): for both blocks in their disabled
+  state - `body.isEnabled()` is `False`, every listed header widget
+  (title, "?", Reset/Reset-all-alignment/Reset-all-color, the white
+  balance eyedropper) is individually `False`, `collapse_button`/
+  `close_button` both stay `True`, the message label's text matches the
+  new wording and its stylesheet contains `#f2c40c`; leaving the disabled
+  state (Solo N&B→Couleur, Solo→Trichrome) re-enables everything
+  including the title; a French language switch while a block is
+  disabled correctly re-translates the message text in place without
+  touching the disabled/enabled state itself, and switching back to
+  English does the same; a full app boot plus both-direction retranslate
+  with no block disabled; pyflakes clean across every touched file; i18n
+  EN/FR parity holds. **Not verified here**: the real visual read of the
+  grayed-out block and the yellow banner at real size/DPI in the running
+  app - needs the user's own pass, same as any visual/interactive change.
+
+**Follow-up, 2026-09-07 - the 3 R/G/B channel panel frames also gray out
+when Trichrome Process is disabled.** `setEnabled(False)` cascading down
+from `independent_channels_body` (see above) already disabled each
+`ChannelPanel`'s interactive controls, but not its own colored border/
+title or its 2 nested `CollapsibleSection` (Alignment/Light) borders -
+same root cause as the disabled-message label needing an explicit color:
+these are all explicit QSS colors (`QGroupBox { border: 2px solid
+{color}; ... }`), which don't automatically follow Qt's disabled-palette
+dimming the way a plain unstyled border would.
+- **`ChannelPanel.set_frame_disabled(disabled: bool)`** (`channel_panel.py`)
+  re-applies the group box's and both `CollapsibleSection`s' stylesheets
+  using either the panel's own real channel color (`self._color`,
+  stashed at construction instead of only a local variable) or a new
+  module constant `_DISABLED_BORDER_COLOR = "#5c5c5c"` - the same muted
+  gray already established elsewhere in the app (the Mode selector's Solo
+  icon). The original inline `self.setStyleSheet(...)` call in `__init__`
+  was factored into a small `_apply_group_box_style(color)` helper, reused
+  by both `__init__` (initial real-color style) and `set_frame_disabled`.
+- **`MainWindow._sync_channels_panel_availability`** calls `panel.set_frame_disabled(is_normal)`
+  for each of the 3 `channel_panels`, right after the existing
+  `set_block_disabled(...)` call for the block's own header/body.
+- Verified headlessly: each panel's `styleSheet()` contains its real
+  channel color (`#e05555`/`#3fae4a`/`#4a7fe0`) plus both `CollapsibleSection`
+  stylesheets while in Trichrome mode; switching to Solo replaces all 3
+  occurrences (group box border+title, both section borders) with
+  `#5c5c5c` on every panel; switching back to Trichrome restores the real
+  colors exactly. **Not verified here**: the real visual read at real
+  size/DPI - needs the user's own pass.
+
+**Follow-up, 2026-09-07 - real bug: editing Light while Color was disabled
+(Solo N&B) silently reactivated Color's own Reset button.** Caught by the
+user directly in the running app. Root cause: `recompute_preview()` (run
+on every edit, including a Light slider drag) unconditionally set
+`color_panel.reset_button.setEnabled(self.global_corr.has_color_correction())`
+on every call - `has_color_correction()` has no concept of the Solo-N&B
+"whole block disabled" state `set_disabled_message`/`set_block_disabled`
+had just turned on, so any edit anywhere that triggered a recompute (not
+just editing Color itself) silently clobbered that button back to
+whatever its correction-based state would normally be, even though the
+rest of the block (sliders, "?" button, the block's own header Reset via
+`set_block_disabled`) correctly stayed disabled throughout.
+- **`MainWindow._solo_bw_active()`** (new) is the single source of truth
+  for "is the active photo Solo mode with B&W film type selected" -
+  factored out of `_sync_channels_panel_availability`'s own inline
+  `solo_bw = is_normal and not self.normal_layer.harris_shutter` (that
+  call site now uses the shared method too, for one source of truth
+  rather than two copies of the same formula). `recompute_preview`'s
+  reset-button sync now skips re-setting `color_panel.reset_button`'s
+  enabled state entirely while `_solo_bw_active()` is true, leaving
+  whatever `set_disabled_message` already set untouched.
+- Verified headlessly (real synthetic Solo photo): switching to Solo N&B
+  correctly disables Color's Reset; editing `global_corr.brightness` and
+  calling `recompute_preview()` (the exact sequence a Light slider drag
+  triggers) no longer re-enables it, while `light_panel.reset_button`
+  still correctly reflects the real edit; leaving B&W (with a real color
+  correction present) still correctly re-enables Color's Reset once the
+  block itself is re-enabled.
+
 ## Roadmap
 
 A running todo list, not tied to version numbers - update it as items are
@@ -3997,14 +4706,20 @@ picked up/finished rather than reorganizing it per release.
 
 **Smaller items:**
 
-- Clarify the different operating modes (Normal, Trichrome, Harris Shutter
-  effect) - how they relate to each other and how that's communicated in
-  the UI.
+- ✅ Clarify the different operating modes (Normal, Trichrome, Harris
+  Shutter effect) - done 2026-09-07, see `## Mode selector` below (Files
+  block's unified Solo / B&W Trichrome / Color Trichrome combo).
 - Clarify the Film modes (Black & White, Color Negative, Reversible) the
-  same way.
-- Adapt the Import menu/UI to reflect those clarified modes.
+  same way - this is the Scan tool's own 3-way Film selector
+  (`scan_panel.py`'s `MODES`/B&W-Color-Color Reversal buttons), a
+  different concept from the Mode selector above - still open.
+- Adapt the Import menu/UI to reflect those clarified modes - done for the
+  operating-mode half (the Files block's own Mode selector above); the
+  Film-modes half is still open, tied to the previous bullet.
 - Give each of the above its own matching icon so the modes read clearly
-  at a glance, not just from label text.
+  at a glance, not just from label text - done for the operating modes
+  (Mode selector's 3 `General/layers-mode-*.svg` icons); still open for
+  the Scan tool's Film modes.
 - Do a pass over how the different tools relate to each other in the
   processing pipeline - clarify their actual order (which one applies
   before/after which) both internally and for the user.

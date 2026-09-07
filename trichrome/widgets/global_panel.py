@@ -1,17 +1,22 @@
 """Global (whole-image) color correction, split into two peer blocks: Light
-(exposure/brightness/contrast/highlights/shadows/white/black/gamma, plus
-Negative) and Color (temperature/tint/saturation, plus white balance pick).
-Split from one combined GlobalPanel into LightPanel/ColorPanel on
-2026-09-04, per the user's request - each is now a standalone block in the
-side-panel block system (see block_header_bar.py), not sub-sections of one
-larger panel."""
+(exposure/brightness/contrast/highlights/shadows/white/black/gamma) and
+Color (temperature/tint/saturation, plus white balance pick). Split from
+one combined GlobalPanel into LightPanel/ColorPanel on 2026-09-04, per the
+user's request - each is now a standalone block in the side-panel block
+system (see block_header_bar.py), not sub-sections of one larger panel.
+
+Negative (invert) used to live in this panel's header (moved here when
+Light/Color were split out) but moved again, 2026-09-07, to the top of the
+Files block (import_panel.py) - it's per-photo source state, not a Light
+correction, so it belongs alongside Harris Shutter Effect there instead."""
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QGroupBox, QToolButton, QWidget
 
 from .. import i18n
-from .block_header_bar import finish_block_chrome, start_block_chrome
+from .block_header_bar import (
+    finish_block_chrome, make_disabled_message_label, set_block_disabled, start_block_chrome)
 from .controls import SliderSpin
 from .info_bubble import show_info_bubble
 from .svg_icons import HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgCheckableToolButton, SvgToolButton
@@ -20,7 +25,6 @@ from .svg_icons import HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, Sv
 class LightPanel(QGroupBox):
     changed = Signal()
     reset_requested = Signal()
-    invert_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -33,13 +37,6 @@ class LightPanel(QGroupBox):
             lambda: show_info_bubble(i18n.tr("global_scope_info"), self.scope_info_button))
         header_row.addWidget(self.scope_info_button)
         header_row.addStretch(1)
-        # Icon-only toggle (dims while off, full color while on) for
-        # Negative/invert - kept in this block per the user's explicit
-        # request when Light/Color were split out of the old combined panel.
-        self.invert_button = SvgCheckableToolButton(
-            "Preview/invert.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
-        self.invert_button.toggled.connect(self.invert_toggled.emit)
-        header_row.addWidget(self.invert_button)
         self.reset_button = SvgToolButton(
             "General/Reset.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.reset_button.clicked.connect(self.reset_requested.emit)
@@ -72,14 +69,8 @@ class LightPanel(QGroupBox):
         for w in self._sliders:
             w.setEnabled(enabled)
 
-    def set_invert(self, checked: bool) -> None:
-        self.invert_button.blockSignals(True)
-        self.invert_button.setChecked(checked)
-        self.invert_button.blockSignals(False)
-
     def retranslate_ui(self) -> None:
         self.title_label.setText(i18n.tr("global_light_subheader"))
-        self.invert_button.setToolTip(i18n.tr("invert_checkbox_tooltip"))
         self.black_point.set_label_text(i18n.tr("black_point"))
         self.white_point.set_label_text(i18n.tr("white_point"))
         self.highlights.set_label_text(i18n.tr("highlights_label"))
@@ -119,6 +110,14 @@ class ColorPanel(QGroupBox):
         header_row.addWidget(self.reset_button)
         self.body, self.body_layout, self.collapse_button, self.close_button = finish_block_chrome(outer, header_row)
 
+        # Shown instead-of/alongside the (disabled) sliders while a Solo
+        # photo has the B&W film type selected (see
+        # MainWindow._sync_channels_panel_availability/set_disabled_message
+        # below) - same convention as Trichrome Process's own
+        # channels_disabled_label for Normal mode.
+        self.color_disabled_label = make_disabled_message_label()
+        self.body_layout.addWidget(self.color_disabled_label)
+
         self.temperature = SliderSpin(i18n.tr("temperature_label"), -100, 100, 0.0, decimals=0, percent_mode=True)
         self.tint = SliderSpin(i18n.tr("tint_label"), -100, 100, 0.0, decimals=0, percent_mode=True)
         self.saturation = SliderSpin(i18n.tr("saturation_label"), 0.0, 3.0, 1.0, decimals=2, percent_mode=True)
@@ -136,6 +135,18 @@ class ColorPanel(QGroupBox):
     def set_sliders_enabled(self, enabled: bool) -> None:
         for w in self._sliders:
             w.setEnabled(enabled)
+
+    def set_disabled_message(self, message: str | None) -> None:
+        """Grays out and disables the whole block (sliders, the white
+        balance eyedropper, the "?" scope-info button, and the header
+        Reset button - everything except collapse/close) and shows
+        ``message`` in their place - pass None to clear it and re-enable
+        everything. See MainWindow._sync_channels_panel_availability's
+        "Solo N&B" case, the only current caller."""
+        set_block_disabled(
+            self.body, self.color_disabled_label, message,
+            extra_widgets=(
+                self.title_label, self.scope_info_button, self.pick_white_balance_btn, self.reset_button))
 
     def set_pick_white_balance_active(self, active: bool) -> None:
         self.pick_white_balance_btn.blockSignals(True)

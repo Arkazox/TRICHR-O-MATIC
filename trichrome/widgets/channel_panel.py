@@ -14,6 +14,13 @@ from .info_bubble import show_info_bubble
 CHANNEL_COLORS = {"R": "#e05555", "G": "#3fae4a", "B": "#4a7fe0"}
 CHANNEL_KEY = {"R": "channel_r", "G": "channel_g", "B": "channel_b"}
 
+# The already-established "muted gray" elsewhere in this app (e.g. the
+# Mode selector's Solo icon) - used to gray out a panel's own colored
+# border/title when the whole Trichrome Process block is disabled (Solo
+# mode), since an explicit QSS color doesn't automatically dim the way a
+# plain unstyled border would when the widget/its ancestor is disabled.
+_DISABLED_BORDER_COLOR = "#5c5c5c"
+
 
 class ChannelPanel(QGroupBox):
     align_changed = Signal()
@@ -26,10 +33,9 @@ class ChannelPanel(QGroupBox):
     def __init__(self, label: str, parent: QWidget | None = None):
         super().__init__(parent)
         self.label = label
-        color = CHANNEL_COLORS.get(label, "#888")
-        self.setStyleSheet(f"QGroupBox {{ border: 2px solid {color}; border-radius: 6px; "
-                            f"margin-top: 8px; font-weight: bold; }} "
-                            f"QGroupBox::title {{ color: {color}; subcontrol-origin: margin; left: 8px; }}")
+        self._color = CHANNEL_COLORS.get(label, "#888")
+        color = self._color
+        self._apply_group_box_style(color)
 
         root = QVBoxLayout(self)
 
@@ -106,6 +112,27 @@ class ChannelPanel(QGroupBox):
         self.retranslate_ui()
 
     # -- helpers -------------------------------------------------------
+    def _apply_group_box_style(self, color: str) -> None:
+        self.setStyleSheet(f"QGroupBox {{ border: 2px solid {color}; border-radius: 6px; "
+                            f"margin-top: 8px; font-weight: bold; }} "
+                            f"QGroupBox::title {{ color: {color}; subcontrol-origin: margin; left: 8px; }}")
+
+    def set_frame_disabled(self, disabled: bool) -> None:
+        """Grays this panel's own colored border/title, and its 2 nested
+        CollapsibleSection borders, to _DISABLED_BORDER_COLOR - restores
+        the real channel color when re-enabled. Needed alongside
+        setEnabled(False) (which MainWindow._sync_channels_panel_availability
+        already applies to the whole Trichrome Process block, cascading
+        down to this panel) because an explicit QSS color, unlike a plain
+        unstyled border, doesn't automatically dim just because the widget
+        (or an ancestor) is disabled - confirmed empirically the same way
+        block_header_bar.set_block_disabled's own yellow message label
+        needed its own explicit color to survive a disabled ancestor."""
+        color = _DISABLED_BORDER_COLOR if disabled else self._color
+        self._apply_group_box_style(color)
+        self.align_box.setStyleSheet(f"CollapsibleSection {{ border: 1px solid {color}; border-radius: 6px; }}")
+        self.tone_box.setStyleSheet(f"CollapsibleSection {{ border: 1px solid {color}; border-radius: 6px; }}")
+
     def block_align_signals(self, block: bool) -> None:
         for w in (self.dx, self.dy, self.scale, self.rotation):
             w.blockSignals(block)

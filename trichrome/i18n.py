@@ -179,15 +179,33 @@ EN = {
 
     "independent_channels_group_title": "Trichrome Process",
     "import_panel_title": "Files",
-    "import_mode_normal_button": "Normal",
-    "import_mode_trichrome_button": "Trichrome",
+    "mode_select_label": "Mode",
+    "mode_solo_option": "Solo",
+    "mode_bw_trichrome_option": "B&W Trichrome",
+    "mode_color_trichrome_option": "Color Trichrome",
+    "mode_select_info": (
+        "<b>Solo</b><br>"
+        "<span style=\"color:#9a9a9a;\">A single already-composed photo, loaded and edited "
+        "as-is - no channel recomposition</span>"
+        "<br><br>"
+        "<b>B&amp;W Trichrome</b><br>"
+        "<span style=\"color:#9a9a9a;\">Classic mode: combines 3 black &amp; white photos "
+        "to recompose a color image</span>"
+        "<br><br>"
+        "<b>Color Trichrome</b><br>"
+        "<span style=\"color:#9a9a9a;\">Simulates RGB filters from 3 color photos, each keeping "
+        "its own real channel, to create a &quot;Harris Shutter Effect&quot;</span>"
+    ),
+    "bw_film_button_tooltip": "B&W Film (Black & White Trichrome)",
+    "color_film_button_tooltip": "Color Film (Color Trichrome)",
     "load_normal_dialog_title": "Load Image",
     "add_photo_tooltip": "Add Photo",
     "status_photo_added": "Photo added",
     "status_photos_added": "{n} photo(s) added",
     "dialog_drop_photos_failed_text": "Could not load the following file(s):\n{files}",
     "normal_photo_label": "Photo",
-    "channels_disabled_normal_mode": "Available only in Trichrome mode",
+    "channels_disabled_normal_mode": "Tool available only in Trichrome mode",
+    "color_disabled_bw_film": "Tool Disabled: Black & White Film Selected",
     "mode_switch_dialog_title": "Trichrome Photo",
     "mode_switch_dialog_text": (
         "Are you sure you want to switch back to Normal mode? Choose which "
@@ -200,16 +218,6 @@ EN = {
     "menu_tools_histogram": "Histogram",
     "reset_all_alignment_tooltip": "Reset alignment for all channels",
     "reset_all_color_tooltip": "Reset color for all channels",
-    "harris_shutter_checkbox": "Harris Shutter Effect (Color Source Image)",
-    "harris_shutter_info": (
-        "<b>Off (default)</b><br>"
-        "<span style=\"color:#9a9a9a;\">Classic Trichrome Mode: combines 3 black &amp; white photos "
-        "to recompose a color image</span>"
-        "<br><br>"
-        "<b>On</b><br>"
-        "<span style=\"color:#9a9a9a;\">Color Mode: simulates RGB filters from 3 color photos to "
-        "create a &quot;Harris Shutter Effect&quot;</span>"
-    ),
     "lock_layer_position_label": "Lock layer position:",
     "lock_layer_position_info": "Auto Align never moves the locked channel - it aligns the other "
                                  "two onto it instead, keeping whatever manual position you've set. "
@@ -700,15 +708,33 @@ FR = {
 
     "independent_channels_group_title": "Traitement Trichrome",
     "import_panel_title": "Fichiers",
-    "import_mode_normal_button": "Normal",
-    "import_mode_trichrome_button": "Trichrome",
+    "mode_select_label": "Mode",
+    "mode_solo_option": "Solo",
+    "mode_bw_trichrome_option": "Trichromie N&B",
+    "mode_color_trichrome_option": "Trichromie Couleur",
+    "mode_select_info": (
+        "<b>Solo</b><br>"
+        "<span style=\"color:#9a9a9a;\">Une seule photo déjà composée, chargée et éditée "
+        "telle quelle - aucune recomposition de canaux</span>"
+        "<br><br>"
+        "<b>Trichromie N&amp;B</b><br>"
+        "<span style=\"color:#9a9a9a;\">Mode classique : combine 3 photos noir et blanc "
+        "pour recomposer une image couleur</span>"
+        "<br><br>"
+        "<b>Trichromie Couleur</b><br>"
+        "<span style=\"color:#9a9a9a;\">Simule des filtres RGB à partir de 3 photos couleur, "
+        "chacune gardant son propre canal réel, pour créer un &quot;Harris Shutter Effect&quot;</span>"
+    ),
+    "bw_film_button_tooltip": "Film N&B (Trichromie Noir et Blanc)",
+    "color_film_button_tooltip": "Film Couleur (Trichromie Couleur)",
     "load_normal_dialog_title": "Charger l'image",
     "add_photo_tooltip": "Ajouter une photo",
     "status_photo_added": "Photo ajoutée",
     "status_photos_added": "{n} photo(s) ajoutée(s)",
     "dialog_drop_photos_failed_text": "Impossible de charger le(s) fichier(s) suivant(s) :\n{files}",
     "normal_photo_label": "Photo",
-    "channels_disabled_normal_mode": "Disponible uniquement en mode Trichrome",
+    "channels_disabled_normal_mode": "Outil disponible uniquement en mode trichrome",
+    "color_disabled_bw_film": "Outil Désactivé : Film Noir et Blanc Sélectionné",
     "mode_switch_dialog_title": "Photo Trichrome",
     "mode_switch_dialog_text": (
         "Êtes-vous sûr de vouloir repasser en mode Normal ? Choisissez le "
@@ -721,16 +747,6 @@ FR = {
     "menu_tools_histogram": "Histogramme",
     "reset_all_alignment_tooltip": "Réinitialiser l'alignement de toutes les couches",
     "reset_all_color_tooltip": "Réinitialiser les couleurs de toutes les couches",
-    "harris_shutter_checkbox": "Effet Harris Shutter (image source en couleur)",
-    "harris_shutter_info": (
-        "<b>Désactivé (par défaut)</b><br>"
-        "<span style=\"color:#9a9a9a;\">Mode Trichromie Classique : Combine 3 photos noir et blanc "
-        "pour recomposer une image couleur</span>"
-        "<br><br>"
-        "<b>Activé</b><br>"
-        "<span style=\"color:#9a9a9a;\">Mode Couleur : Simule des filtres RGB à partir de 3 photos "
-        "couleurs afin de créer un &quot;Harris Shutter Effect&quot;</span>"
-    ),
     "lock_layer_position_label": "Position verrouillée :",
     "lock_layer_position_info": "L'alignement automatique ne déplace jamais la couche verrouillée - "
                                  "il aligne les deux autres dessus, en conservant la position "
