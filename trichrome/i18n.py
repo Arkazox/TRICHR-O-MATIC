@@ -459,12 +459,6 @@ directly on the preview.</p>
     "scan_device_not_connected": "Not connected",
     "scan_device_connected": "Connected: {model}",
     "scan_device_refresh": "Refresh",
-    "scan_use_webcam_checkbox": "Webcam / iPhone (test)",
-    "scan_use_webcam_tooltip": (
-        "Temporary testing option: capture from a built-in webcam or an "
-        "iPhone connected via Continuity Camera instead of a real tethered "
-        "camera. Will be removed later."
-    ),
     "scan_mode_group": "Film",
     "scan_mode_bw": "B&W",
     "scan_mode_color": "Color",
@@ -1001,12 +995,6 @@ boutons de la barre d'outils)</li>
     "scan_device_not_connected": "Non connecté",
     "scan_device_connected": "Connecté : {model}",
     "scan_device_refresh": "Actualiser",
-    "scan_use_webcam_checkbox": "Webcam / iPhone (test)",
-    "scan_use_webcam_tooltip": (
-        "Option de test temporaire : capturer depuis une webcam intégrée ou "
-        "un iPhone connecté via Continuity Camera, à la place d'un véritable "
-        "appareil relié. Sera retirée plus tard."
-    ),
     "scan_mode_group": "Film",
     "scan_mode_bw": "N&B",
     "scan_mode_color": "Couleur",

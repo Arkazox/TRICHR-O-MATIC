@@ -59,7 +59,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import i18n, imaging
-from ..scan_tool import gphoto_backend, manifest, naming, webcam_backend
+from ..scan_tool import gphoto_backend, manifest, naming
 from ..scan_tool import scan_window
 from ..scan_tool.capture_worker import CaptureWorker
 from ..scan_tool.scan_window import (
@@ -142,10 +142,6 @@ class ScanPanel(QGroupBox):
         super().__init__(parent)
         self._settings = QSettings(scan_window.ORG_NAME, scan_window.APP_NAME)
         self._cameras: list[gphoto_backend.DetectedCamera] = []
-        # TEMPORARY (see webcam_backend.py's own module docstring): lets
-        # testing proceed without a real tethered camera connected.
-        self._webcam_devices: list[webcam_backend.WebcamDevice] = []
-        self._webcam_capture: webcam_backend.WebcamCapture | None = None
         self._capturing = False
         self._quality_config_path: str | None = None
         self._backlight_window: BacklightWindow | None = None
@@ -211,16 +207,6 @@ class ScanPanel(QGroupBox):
         self.refresh_button.clicked.connect(self._on_refresh_clicked)
         status_row.addWidget(self.refresh_button)
         layout.addLayout(status_row)
-        # TEMPORARY (see webcam_backend.py's own module docstring): a
-        # built-in webcam or an iPhone via Continuity Camera, for testing
-        # without a real tethered camera connected. Delete this checkbox
-        # and _on_use_webcam_toggled/_poll_webcam_devices/
-        # _start_webcam_capture/_on_webcam_captured/_on_webcam_capture_error
-        # (and the branches in _poll_devices/_on_camera_selected/
-        # _on_capture_clicked/_advance_rgb_sequence that check it) to revert.
-        self.use_webcam_checkbox = QCheckBox()
-        self.use_webcam_checkbox.toggled.connect(self._on_use_webcam_toggled)
-        layout.addWidget(self.use_webcam_checkbox)
         self.camera_combo = QComboBox()
         self.camera_combo.currentIndexChanged.connect(self._on_camera_selected)
         layout.addWidget(self.camera_combo)
@@ -387,8 +373,6 @@ class ScanPanel(QGroupBox):
         self.title_label.setText(i18n.tr("menu_tools_scan"))
         self.device_section_label.setText(i18n.tr("scan_device_group"))
         self.refresh_button.setToolTip(i18n.tr("scan_device_refresh"))
-        self.use_webcam_checkbox.setText(i18n.tr("scan_use_webcam_checkbox"))
-        self.use_webcam_checkbox.setToolTip(i18n.tr("scan_use_webcam_tooltip"))
         self.mode_section_label.setText(i18n.tr("scan_mode_group"))
         for btn, (_key, label_key, _invert) in zip(self._mode_buttons, MODES):
             # QPushButton treats a single "&" as a mnemonic marker (would
@@ -419,16 +403,10 @@ class ScanPanel(QGroupBox):
         # whatever text happened to be set last.
         if self.quality_label.isVisible():
             self.quality_label.setText(i18n.tr("scan_quality_label"))
-        devices_present = self._webcam_devices if self.use_webcam_checkbox.isChecked() else self._cameras
-        if not devices_present:
+        if not self._cameras:
             self.status_label.setText(i18n.tr("scan_device_not_connected"))
         elif self.status_label.text():
-            model = (
-                devices_present[0].description
-                if self.use_webcam_checkbox.isChecked()
-                else devices_present[0].model
-            )
-            self.status_label.setText(i18n.tr("scan_device_connected", model=model))
+            self.status_label.setText(i18n.tr("scan_device_connected", model=self._cameras[0].model))
         if not self._capturing:
             self.capture_status_label.setText(i18n.tr("scan_ready_status"))
         self._sync_mode_note()
@@ -449,7 +427,6 @@ class ScanPanel(QGroupBox):
         fields = (
             self.base_folder_edit, self.subfolder_edit, self.roll_name_edit,
             self.next_number_spin, self.use_roll_subfolder_checkbox,
-            self.use_webcam_checkbox,
         )
         for w in fields:
             w.blockSignals(True)
@@ -460,7 +437,6 @@ class ScanPanel(QGroupBox):
         self.use_roll_subfolder_checkbox.setChecked(
             self._settings.value("use_roll_as_subfolder", False, type=bool)
         )
-        self.use_webcam_checkbox.setChecked(self._settings.value("use_webcam", False, type=bool))
         for w in fields:
             w.blockSignals(False)
         self.subfolder_edit.setEnabled(not self.use_roll_subfolder_checkbox.isChecked())
@@ -492,7 +468,6 @@ class ScanPanel(QGroupBox):
             "roll_name": self.roll_name_edit.text(),
             "next_number": self.next_number_spin.value(),
             "use_roll_as_subfolder": self.use_roll_subfolder_checkbox.isChecked(),
-            "use_webcam": self.use_webcam_checkbox.isChecked(),
             "mode_index": self.mode_group.checkedId(),
             "light_mode_index": self.light_mode_group.checkedId(),
         }
@@ -516,7 +491,7 @@ class ScanPanel(QGroupBox):
             return
         fields = (
             self.base_folder_edit, self.subfolder_edit, self.roll_name_edit,
-            self.next_number_spin, self.use_roll_subfolder_checkbox, self.use_webcam_checkbox,
+            self.next_number_spin, self.use_roll_subfolder_checkbox,
         )
         for w in fields:
             w.blockSignals(True)
@@ -530,8 +505,6 @@ class ScanPanel(QGroupBox):
             self.next_number_spin.setValue(data["next_number"])
         if "use_roll_as_subfolder" in data:
             self.use_roll_subfolder_checkbox.setChecked(data["use_roll_as_subfolder"])
-        if "use_webcam" in data:
-            self.use_webcam_checkbox.setChecked(data["use_webcam"])
         for w in fields:
             w.blockSignals(False)
         self.subfolder_edit.setEnabled(not self.use_roll_subfolder_checkbox.isChecked())
@@ -546,11 +519,6 @@ class ScanPanel(QGroupBox):
         self._sync_light_note()
         self._sync_film_base_status_label()
         self._save_settings()
-        # use_webcam was restored with signals blocked above (to avoid the
-        # field-clobbering issue explained in the docstring), so
-        # _on_use_webcam_toggled's own _poll_devices() call never fired -
-        # do it explicitly, since the camera/webcam device list needs to
-        # reflect whichever mode was actually just restored.
         self._poll_devices()
 
     def _save_settings(self) -> None:
@@ -559,7 +527,6 @@ class ScanPanel(QGroupBox):
         self._settings.setValue("roll_name", self.roll_name_edit.text())
         self._settings.setValue("next_number", self.next_number_spin.value())
         self._settings.setValue("use_roll_as_subfolder", self.use_roll_subfolder_checkbox.isChecked())
-        self._settings.setValue("use_webcam", self.use_webcam_checkbox.isChecked())
         self._settings.setValue("mode_index", self.mode_group.checkedId())
         self._settings.setValue("light_mode_index", self.light_mode_group.checkedId())
 
@@ -659,17 +626,10 @@ class ScanPanel(QGroupBox):
         if self.light_mode_group.checkedId() != 2:
             show_alert(self, i18n.tr("scan_error_title"), i18n.tr("scan_sample_base_requires_rgb_light"))
             return
-        use_webcam = self.use_webcam_checkbox.isChecked()
-        port: str | None = None
-        if use_webcam:
-            if self._selected_webcam_device() is None:
-                show_alert(self, i18n.tr("scan_error_title"), i18n.tr("scan_no_camera_error"))
-                return
-        else:
-            port = self._selected_port()
-            if not port:
-                show_alert(self, i18n.tr("scan_error_title"), i18n.tr("scan_no_camera_error"))
-                return
+        port = self._selected_port()
+        if not port:
+            show_alert(self, i18n.tr("scan_error_title"), i18n.tr("scan_no_camera_error"))
+            return
 
         self._sync_backlight_window()
         self._sampling_base = True
@@ -739,43 +699,6 @@ class ScanPanel(QGroupBox):
             return self._cameras[idx].port
         return None
 
-    def _selected_webcam_device(self) -> webcam_backend.WebcamDevice | None:
-        idx = self.camera_combo.currentIndex()
-        if 0 <= idx < len(self._webcam_devices):
-            return self._webcam_devices[idx]
-        return None
-
-    def _on_use_webcam_toggled(self, _checked: bool) -> None:
-        self._save_settings()
-        self._poll_devices()
-
-    def _poll_webcam_devices(self) -> None:
-        devices = webcam_backend.list_cameras()
-        previous = [d.description for d in self._webcam_devices]
-        current = [d.description for d in devices]
-        self._webcam_devices = devices
-        self.quality_label.hide()
-        self.quality_combo.hide()
-
-        if not devices:
-            self.status_dot.setStyleSheet("color: #888; font-size: 14px;")
-            self.status_label.setText(i18n.tr("scan_device_not_connected"))
-            self.camera_combo.clear()
-            self.capture_button.setEnabled(False)
-            return
-
-        self.status_dot.setStyleSheet("color: #2ecc71; font-size: 14px;")
-        self.status_label.setText(i18n.tr("scan_device_connected", model=devices[0].description))
-        self.capture_button.setEnabled(True)
-
-        if current != previous:
-            self.camera_combo.blockSignals(True)
-            self.camera_combo.clear()
-            for dev in devices:
-                self.camera_combo.addItem(dev.description)
-            self.camera_combo.setCurrentIndex(0)
-            self.camera_combo.blockSignals(False)
-
     def _on_refresh_clicked(self) -> None:
         self._poll_devices()
         if not self._refresh_spin_timer.isActive():
@@ -792,9 +715,6 @@ class ScanPanel(QGroupBox):
 
     def _poll_devices(self) -> None:
         if self._capturing:
-            return
-        if self.use_webcam_checkbox.isChecked():
-            self._poll_webcam_devices()
             return
         try:
             cameras = gphoto_backend.auto_detect(timeout=3.0)
@@ -833,10 +753,6 @@ class ScanPanel(QGroupBox):
             self._on_camera_selected(0)
 
     def _on_camera_selected(self, _index: int) -> None:
-        if self.use_webcam_checkbox.isChecked():
-            # No gphoto2 quality-config concept for a webcam/Continuity
-            # Camera device.
-            return
         port = self._selected_port()
         self._quality_config_path = None
         self.quality_label.hide()
@@ -956,17 +872,10 @@ class ScanPanel(QGroupBox):
             return
         if not self._ensure_base_folder():
             return
-        use_webcam = self.use_webcam_checkbox.isChecked()
-        port: str | None = None
-        if use_webcam:
-            if self._selected_webcam_device() is None:
-                show_alert(self, i18n.tr("scan_error_title"), i18n.tr("scan_no_camera_error"))
-                return
-        else:
-            port = self._selected_port()
-            if not port:
-                show_alert(self, i18n.tr("scan_error_title"), i18n.tr("scan_no_camera_error"))
-                return
+        port = self._selected_port()
+        if not port:
+            show_alert(self, i18n.tr("scan_error_title"), i18n.tr("scan_no_camera_error"))
+            return
 
         # Bug fix (2026-09-04): under White light, the backlight window was
         # only ever raised on the light-mode *switch* (_on_light_mode_changed)
@@ -990,10 +899,7 @@ class ScanPanel(QGroupBox):
             self._advance_rgb_sequence()
         else:
             self._rgb_sequence_active = False
-            if use_webcam:
-                self._start_webcam_capture(suffix=None)
-            else:
-                self._start_capture(port, suffix=None)
+            self._start_capture(port, suffix=None)
 
     def _advance_rgb_sequence(self) -> None:
         letter = _RGB_SEQUENCE[self._rgb_sequence_step]
@@ -1002,13 +908,10 @@ class ScanPanel(QGroupBox):
         window.show()
         window.raise_()
         self.capture_status_label.setText(i18n.tr("scan_capturing_channel_status", channel=letter))
-        if self.use_webcam_checkbox.isChecked():
-            QTimer.singleShot(_LIGHT_SETTLE_DELAY_MS, lambda: self._start_webcam_capture(letter))
-        else:
-            QTimer.singleShot(
-                _LIGHT_SETTLE_DELAY_MS,
-                lambda: self._start_capture(self._rgb_sequence_port, letter),
-            )
+        QTimer.singleShot(
+            _LIGHT_SETTLE_DELAY_MS,
+            lambda: self._start_capture(self._rgb_sequence_port, letter),
+        )
 
     def _start_capture(self, port: str, suffix: str | None) -> None:
         dest_folder = self._capture_destination_folder()
@@ -1046,51 +949,6 @@ class ScanPanel(QGroupBox):
     def _clear_capture_thread_refs(self) -> None:
         self._thread = None
         self._worker = None
-
-    def _start_webcam_capture(self, suffix: str | None) -> None:
-        """TEMPORARY (see webcam_backend.py) - mirrors _start_capture()
-        above but through WebcamCapture instead of CaptureWorker/gphoto2.
-        Runs on this (the GUI) thread rather than a QThread, since QCamera
-        must not be driven off the main thread - feeds the same
-        _on_capture_step_finished()/_on_capture_error() handlers used for a
-        real tethered capture, so history logging, RGB-sequence stepping,
-        and processing all work identically regardless of backend."""
-        device = self._selected_webcam_device()
-        if device is None:
-            self._handle_capture_failure(i18n.tr("scan_no_camera_error"))
-            return
-        dest_folder = self._capture_destination_folder()
-        try:
-            os.makedirs(dest_folder, exist_ok=True)
-        except OSError as exc:
-            self._handle_capture_failure(str(exc))
-            return
-
-        index = self.next_number_spin.value()
-        base = naming.base_name(self.roll_name_edit.text(), index)
-        if suffix:
-            base += f"_{suffix}"
-        dest_path = os.path.join(dest_folder, f"{base}.jpg")
-
-        self._capturing = True
-        self.capture_button.setEnabled(False)
-        if not suffix:
-            self.capture_status_label.setText(i18n.tr("scan_capturing_status"))
-        # else: _advance_rgb_sequence() already set the per-channel status
-        # text above, before the settle delay - don't overwrite it here.
-
-        self._webcam_capture = webcam_backend.WebcamCapture(device.device, dest_path, parent=self)
-        self._webcam_capture.captured.connect(self._on_webcam_captured)
-        self._webcam_capture.error.connect(self._on_webcam_capture_error)
-        self._webcam_capture.start()
-
-    def _on_webcam_captured(self, path: str) -> None:
-        self._webcam_capture = None
-        self._on_capture_step_finished([path])
-
-    def _on_webcam_capture_error(self, message: str) -> None:
-        self._webcam_capture = None
-        self._handle_capture_failure(message)
 
     def _end_capture_ui(self) -> None:
         self._capturing = False
@@ -1207,9 +1065,6 @@ class ScanPanel(QGroupBox):
         self._refresh_spin_timer.stop()
         if self._backlight_window is not None:
             self._backlight_window.close()
-        if self._webcam_capture is not None:
-            self._webcam_capture.deleteLater()
-            self._webcam_capture = None
         if self._film_base_temp_dir:
             shutil.rmtree(self._film_base_temp_dir, ignore_errors=True)
             self._film_base_temp_dir = None

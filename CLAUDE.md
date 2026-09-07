@@ -2974,102 +2974,21 @@ image data is touched.
     directly or via mocks, the same functions the real hardware pass
     already confirmed work.
 
-- **Webcam/iPhone testing backend, added 2026-09-04 - explicitly temporary,
-  per the user's own framing** ("à des fins de tests, nous supprimerons
-  cette option par la suite" - for testing purposes, we'll remove this
-  option afterward). Lets Scan-block testing proceed without a real
-  tethered camera connected, using a built-in webcam or an iPhone via
-  macOS Continuity Camera instead. **To fully revert**: delete
-  `trichrome/scan_tool/webcam_backend.py`, the `use_webcam_checkbox` in
-  `scan_panel.py` (device group UI, `retranslate_ui`, `_load_settings`/
-  `_save_settings`), the branches it triggers in
-  `_poll_devices`/`_on_camera_selected`/`_on_capture_clicked`/
-  `_advance_rgb_sequence` in the same file (each marked with a
-  "TEMPORARY" comment), the 2 `scan_use_webcam_*` i18n keys, and the 2
-  `NSCamera*` keys in `trichrome.spec`'s `info_plist`.
-  - **`trichrome/scan_tool/webcam_backend.py`** (new): `WebcamDevice`
-    (thin wrapper over a `QCameraDevice`), `list_cameras()` (`QMediaDevices
-    .videoInputs()` - the built-in webcam and, once connected/trusted, an
-    iPhone via Continuity Camera both show up here like any other camera,
-    confirmed with the user's real iPhone: `"Caméra de « iPhone de
-    Simon »"`), and `WebcamCapture(QObject)` - a one-shot still capture via
-    `QCamera`/`QMediaCaptureSession`/`QImageCapture`, started and waited on
-    until `QCamera.activeChanged` reports true (a webcam - Continuity
-    Camera especially - can take a moment to spin up) before triggering
-    `captureToFile()`. **Must run on the GUI thread**, unlike
-    `gphoto_backend`'s subprocess calls (safe from a worker `QThread`) -
-    `QCamera` drives the platform's native AVFoundation session, not meant
-    to be touched off the main thread, so `ScanPanel` calls it directly
-    rather than through a `QThread` wrapper the way gphoto2 captures are.
-    `captured(path)`/`error(message)` deliberately mirror
-    `CaptureWorker`'s `finished`/`error` signal shapes so `ScanPanel` can
-    feed a webcam capture into the exact same downstream handlers
-    (history logging, RGB-sequence stepping, processing) used for a real
-    tethered capture, without a separate code path there.
-  - **A real risk found while testing, not just a hypothetical**: under
-    `QT_QPA_PLATFORM=offscreen` (no real window for macOS to show its
-    camera-permission prompt against), the camera never reports itself
-    active and neither `captured`/`error` would otherwise ever fire -
-    confirmed by testing this directly, and a real risk in the shipped app
-    too if a user denies camera permission (the same TCC prompt, just with
-    a "no" instead of no prompt at all). Fixed with a defensive
-    `_START_TIMEOUT_MS = 8000` `QTimer` safety net (a `_finished` guard
-    flag shared by `_on_image_saved`/`_on_camera_error`/
-    `_on_capture_error`/`_on_timeout`, all routing through one
-    `_finish_error()` so exactly one of `captured`/`error` ever fires) -
-    verified firing correctly at ~8.3s with a message pointing at System
-    Settings ▸ Privacy & Security ▸ Camera.
-  - **`ScanPanel` wiring** (`widgets/scan_panel.py`): `use_webcam_checkbox`
-    sits in the Device group, right below the status row - checking it
-    re-polls immediately via the existing `_poll_devices()` (now a thin
-    dispatcher to either the original gphoto2 branch or the new
-    `_poll_webcam_devices()`, which lists `webcam_backend.list_cameras()`
-    into the same `camera_combo` and drives the same status
-    dot/label/capture-button-enabled state). `_on_camera_selected()` no-ops
-    in webcam mode (no gphoto2 quality-config concept for a webcam
-    device) - the Format dropdown stays hidden throughout. Capture
-    branches in `_on_capture_clicked()`/`_advance_rgb_sequence()`
-    (`self.use_webcam_checkbox.isChecked()`) into a new
-    `_start_webcam_capture(suffix)`, a close parallel of the existing
-    `_start_capture(port, suffix)` but building the destination path
-    directly as `<roll>_<index>[_<channel>].jpg` (`naming.base_name()` +
-    the same optional channel suffix `build_filename_pattern()` uses -
-    gphoto2's `%C` extension-substitution token has no meaning for a
-    webcam still, which is always a plain JPEG) instead of going through a
-    `QThread`/`CaptureWorker`. `_on_webcam_captured(path)` feeds straight
-    into the same `_on_capture_step_finished([path])` used for a real
-    capture - full reuse of history/RGB-sequence/processing logic;
-    `_on_webcam_capture_error(message)` feeds `_handle_capture_failure()`
-    the same way `_on_capture_error()` already does. `self._webcam_capture`
-    holds the live `WebcamCapture` instance (cleared once it finishes) so
-    it isn't garbage-collected mid-capture; `shutdown()` also
-    `deleteLater()`s it if a capture is still in flight when the window
-    closes. The checkbox's own state persists through the panel's existing
-    `_load_settings`/`_save_settings` (`"use_webcam"` QSettings key, same
-    `scan_window.ORG_NAME`/`.APP_NAME` domain - see the QSettings-isolation
-    memory note for why this file reads them as `scan_window.ORG_NAME`
-    rather than a bare import).
-  - **`trichrome.spec`**: added `NSCameraUsageDescription`/
-    `NSCameraUseContinuityCameraDeviceType` to `info_plist`, needed for a
-    real distributed `.app` (not required running from source, which is
-    the user's typical workflow, but correct/complete to add regardless) -
-    both marked with the same "TEMPORARY" comment for easy removal.
-  - Verified headlessly, isolated QSettings domain confirmed untouched on
-    the real one throughout: device listing finds real hardware (the
-    built-in FaceTime HD camera and the user's iPhone via Continuity
-    Camera, in this actual dev environment); toggling the checkbox on/off
-    re-polls correctly without crashing either direction; a full capture
-    attempt through `ScanPanel._on_capture_clicked()` correctly reaches
-    the timeout safety net (permission unavailable headlessly, same
-    limitation as the backend's own isolated test), fires the alert
-    dialog with the expected message, and correctly resets
-    `_capturing`/re-enables the button rather than hanging; settings
-    round-trip; i18n EN/FR parity; full app boot with the block present.
-    **Not, and can't be, verified here**: an actual successful webcam/
-    iPhone still capture (needs a real window for the camera permission
-    prompt, and the user's own hardware) - this needs the user's own pass
-    in the real running app, same caveat every other hardware-dependent
-    piece of the Scan tool already carries.
+- **Webcam/iPhone testing backend - added 2026-09-04, removed 2026-09-07.**
+  Was a deliberately temporary way to test the Scan block without a real
+  tethered camera (a built-in webcam or an iPhone via Continuity Camera
+  stood in for gphoto2), per the user's own framing at the time ("à des
+  fins de tests, nous supprimerons cette option par la suite"). Removed
+  outright once real hardware testing was no longer blocked on it:
+  `trichrome/scan_tool/webcam_backend.py` deleted; `use_webcam_checkbox`
+  and every branch it drove in `scan_panel.py` (`_poll_devices`/
+  `_on_camera_selected`/`_on_capture_clicked`/`_advance_rgb_sequence`/
+  `_selected_webcam_device`/`_poll_webcam_devices`/`_start_webcam_capture`/
+  `_on_webcam_captured`/`_on_webcam_capture_error`) removed; the 2
+  `scan_use_webcam_*` i18n keys and the 2 `NSCamera*` `info_plist` keys in
+  `trichrome.spec` removed. The Scan block is gphoto2-only again - see the
+  hardware note above (real X-T3 tethering confirmed working 2026-09-02)
+  for what testing without this shim actually requires.
 
 - **Integrated block simplified, 2026-09-04 - dropped the processed-JPG
   option, flattened the 5 QGroupBox sub-sections into hairlines, renamed
@@ -4059,20 +3978,44 @@ later ("Nous reviendrons plus précisément à la fenêtre d'import plus tard").
     Rotate now provably change real pixel data and persisted state in
     Normal mode, which they previously did not at all.
 
-## v0.6.0 wishlist (added 2026-09-02)
+## Roadmap
 
-- **Metadata panel** - add a panel showing metadata (presumably EXIF from
-  the source photos and/or the trichrome composite's own derived info,
-  exact scope not yet stated). No spec yet: what fields, where it lives in
-  the UI, whether it's per-channel or per-composite, read-only or
-  editable. Don't start on this without a real functional spec, same
-  caveat as the Scan tool above.
+A running todo list, not tied to version numbers - update it as items are
+picked up/finished rather than reorganizing it per release.
 
-## Crop tool (ongoing since 2026-09-01)
+**Major features:**
 
-Built out from a placeholder into a real tool, then refined the same day and
-again on 2026-09-02 - expect further functional and visual passes, this
-section should stay current rather than becoming a historical log.
+- **Metadata panel** - planned for later. Not yet specified: what fields
+  (presumably EXIF from the source photos and/or the trichrome composite's
+  own derived info), where it lives in the UI, whether it's per-channel or
+  per-composite, read-only or editable. Don't start on this without a real
+  functional spec, same caveat as the Scan tool always carried while it was
+  being built out.
+- **Scan tool** - in progress. See the `## Negative scan tool` section
+  below for the full build-out log (tethered capture, Scan Light RGB
+  sequence, film base correction, session integration as a block).
+
+**Smaller items:**
+
+- Clarify the different operating modes (Normal, Trichrome, Harris Shutter
+  effect) - how they relate to each other and how that's communicated in
+  the UI.
+- Clarify the Film modes (Black & White, Color Negative, Reversible) the
+  same way.
+- Adapt the Import menu/UI to reflect those clarified modes.
+- Give each of the above its own matching icon so the modes read clearly
+  at a glance, not just from label text.
+- Do a pass over how the different tools relate to each other in the
+  processing pipeline - clarify their actual order (which one applies
+  before/after which) both internally and for the user.
+
+## Crop tool (built out 2026-09-01, functional)
+
+Built out from a placeholder into a real, working tool - aspect ratio
+presets, interactive drag/resize rectangle, straighten, mirror, grid
+overlays, active-crop-mode decoupled from block visibility. Considered
+done/functional; further passes are refinements on top of a working tool,
+not core build-out.
 
 **Shape of the feature:**
 - `CropPanel` (`widgets/crop_panel.py`): aspect ratio (presets + custom +
