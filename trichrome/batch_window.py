@@ -10,11 +10,12 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPushButton, QRadioButton, QTableWidget, QTableWidgetItem,
+    QPushButton, QRadioButton, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
 from . import batch, filters as filters_module, i18n
+from .widgets.alert_dialog import show_alert
 from .widgets.channel_panel import CHANNEL_COLORS
 from .widgets.controls import CollapsibleSection
 from .widgets.import_panel import MODE_ICONS, MODE_KEYS, MODE_LABEL_KEYS
@@ -949,7 +950,7 @@ class BatchWindow(QMainWindow):
         if self.processing_mode_radios["solo"].isChecked():
             paths = self._solo_paths()
             if not paths:
-                QMessageBox.warning(self, i18n.tr("batch_window_title"), i18n.tr("batch_solo_no_photos"))
+                show_alert(self, i18n.tr("batch_window_title"), i18n.tr("batch_solo_no_photos"))
                 return
             # Same "build a fresh Solo BatchItem per path, load what you
             # can, report the rest" flow Finder drag-and-drop already
@@ -962,18 +963,18 @@ class BatchWindow(QMainWindow):
         auto_mode = self.mode_auto_radio.isChecked()
         semi_mode = self.mode_semi_radio.isChecked()
         if auto_mode and not self.input_path_edit.text():
-            QMessageBox.warning(self, i18n.tr("batch_window_title"), i18n.tr("batch_error_no_input"))
+            show_alert(self, i18n.tr("batch_window_title"), i18n.tr("batch_error_no_input"))
             return
         if semi_mode:
             paths = self._semi_paths()
             remainder = len(paths) % 3
             if paths and remainder != 0:
-                QMessageBox.warning(self, i18n.tr("batch_window_title"),
+                show_alert(self, i18n.tr("batch_window_title"),
                                      i18n.tr("batch_semi_invalid_count", n=len(paths), remainder=remainder))
                 return
         triplets = self._current_triplets()
         if not triplets:
-            QMessageBox.warning(self, i18n.tr("batch_window_title"), i18n.tr("batch_status_no_triplets"))
+            show_alert(self, i18n.tr("batch_window_title"), i18n.tr("batch_status_no_triplets"))
             return
 
         self.main_window.start_batch_import(

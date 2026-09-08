@@ -8,11 +8,12 @@ from PySide6.QtCore import QSettings, QThread
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QMessageBox, QProgressBar, QPushButton, QRadioButton, QVBoxLayout,
+    QProgressBar, QPushButton, QRadioButton, QVBoxLayout,
 )
 
 from .. import i18n, imaging
 from ..export_worker import BatchExportWorker
+from .alert_dialog import show_alert
 
 ORG_NAME = "TrichromeMaker"
 APP_NAME = "TrichromeMaker"
@@ -171,7 +172,7 @@ class ExportDialog(QDialog):
     def start_export(self) -> None:
         same_as_source = self.same_as_source_checkbox.isChecked()
         if not same_as_source and not self.output_path_edit.text():
-            QMessageBox.warning(self, i18n.tr("export_dialog_title"), i18n.tr("batch_error_no_output"))
+            show_alert(self, i18n.tr("export_dialog_title"), i18n.tr("batch_error_no_output"))
             return
 
         mw = self.main_window
@@ -190,7 +191,7 @@ class ExportDialog(QDialog):
             items = list(mw.batch_items)
 
         if not items:
-            QMessageBox.warning(self, i18n.tr("export_dialog_title"), i18n.tr("export_no_items"))
+            show_alert(self, i18n.tr("export_dialog_title"), i18n.tr("export_no_items"))
             return
 
         self._items_to_export = items
@@ -233,7 +234,7 @@ class ExportDialog(QDialog):
         ref = mw._reference_layer()
         if is_normal:
             if not ref.has_image():
-                QMessageBox.warning(self, i18n.tr("export_dialog_title"), i18n.tr("dialog_export_missing"))
+                show_alert(self, i18n.tr("export_dialog_title"), i18n.tr("dialog_export_missing"))
                 return
             if output_dir is None:
                 output_dir = os.path.dirname(ref.path) if ref.path else ""
@@ -245,7 +246,7 @@ class ExportDialog(QDialog):
             rgb = imaging.compose_normal(image, global_params)
         else:
             if not all(l.has_image() for l in mw.layers):
-                QMessageBox.warning(self, i18n.tr("export_dialog_title"), i18n.tr("dialog_export_missing"))
+                show_alert(self, i18n.tr("export_dialog_title"), i18n.tr("dialog_export_missing"))
                 return
             if output_dir is None:
                 output_dir = os.path.dirname(ref.path) if ref.path else ""
@@ -266,7 +267,7 @@ class ExportDialog(QDialog):
         try:
             imaging.save_image(out_path, rgb, bit_depth=bit_depth)
         except Exception as exc:
-            QMessageBox.critical(self, i18n.tr("dialog_export_error_title"),
+            show_alert(self, i18n.tr("dialog_export_error_title"),
                                   i18n.tr("dialog_export_error_text", error=exc))
             return
         if not self.same_as_source_checkbox.isChecked():

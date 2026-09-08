@@ -52,7 +52,7 @@ class CurvesPanel(QGroupBox):
         outer, header_row, self.title_label = start_block_chrome(self, "curves", "curves_group_title")
         header_row.addStretch(1)
         self.reset_button = SvgToolButton(
-            "General/Reset.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+            "Global/Reset.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.reset_button.clicked.connect(self.reset_requested.emit)
         header_row.addWidget(self.reset_button)
         self.body, layout, self.collapse_button, self.close_button = finish_block_chrome(outer, header_row)

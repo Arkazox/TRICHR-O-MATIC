@@ -241,8 +241,8 @@ class SvgLetterToggleButton(SvgTwoStateToggleButton):
 
     def __init__(self, letter: str, color, initial_checked: bool = False,
                  size: tuple[int, int] = (30, 26), icon_size: int = 18, parent=None):
-        checked_svg = f"Letters/circle-letter-{letter.lower()}.svg"
-        unchecked_svg = f"Letters/circle-dotted-letter-{letter.lower()}.svg"
+        checked_svg = f"Global/circle-letter-{letter.lower()}.svg"
+        unchecked_svg = f"Global/circle-dotted-letter-{letter.lower()}.svg"
         super().__init__(checked_svg, unchecked_svg, initial_checked=initial_checked,
                           size=size, icon_size=icon_size, parent=parent)
         self._color = QColor(color)

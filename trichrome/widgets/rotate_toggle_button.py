@@ -6,9 +6,9 @@ from .svg_icons import SvgToolButton
 
 class RotateRightButton(SvgToolButton):
     def __init__(self, parent=None):
-        super().__init__("Preview/rotate-cw-square.svg", parent=parent)
+        super().__init__("Filmstrip/rotate-cw-square.svg", parent=parent)
 
 
 class RotateLeftButton(SvgToolButton):
     def __init__(self, parent=None):
-        super().__init__("Preview/rotate-ccw-square.svg", parent=parent)
+        super().__init__("Filmstrip/rotate-ccw-square.svg", parent=parent)

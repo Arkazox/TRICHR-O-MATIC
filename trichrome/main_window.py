@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPalette,
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QApplication, QButtonGroup, QDialog, QFileDialog, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QPushButton, QSizePolicy, QSplitter, QStackedWidget, QStatusBar,
+    QMainWindow, QMenu, QPushButton, QSizePolicy, QSplitter, QStackedWidget, QStatusBar,
     QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -684,11 +684,11 @@ class MainWindow(QMainWindow):
         independent_channels_header.addWidget(self.channels_scope_info_button)
         independent_channels_header.addStretch(1)
         self.reset_all_alignment_button = SvgToolButton(
-            "Color Correction/reset_alignment.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+            "Tools/Trichrome Process/reset_alignment.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.reset_all_alignment_button.clicked.connect(self.on_reset_all_alignment)
         independent_channels_header.addWidget(self.reset_all_alignment_button)
         self.reset_all_color_button = SvgToolButton(
-            "Color Correction/reset_settings.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+            "Tools/Trichrome Process/reset_settings.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.reset_all_color_button.clicked.connect(self.on_reset_all_color)
         independent_channels_header.addWidget(self.reset_all_color_button)
         (self.independent_channels_body, independent_channels_layout,
@@ -765,10 +765,10 @@ class MainWindow(QMainWindow):
 
         self.canvas = CanvasWidget()
 
-        self.zoom_out_btn = SvgToolButton("Preview/zoom_out.svg")
-        self.zoom_in_btn = SvgToolButton("Preview/zoom_in.svg")
-        self.zoom_fit_btn = SvgToolButton("Preview/fit_screen.svg")
-        self.zoom_100_btn = SvgToolButton("Preview/view_real_size.svg")
+        self.zoom_out_btn = SvgToolButton("Filmstrip/zoom_out.svg")
+        self.zoom_in_btn = SvgToolButton("Filmstrip/zoom_in.svg")
+        self.zoom_fit_btn = SvgToolButton("Filmstrip/fit_screen.svg")
+        self.zoom_100_btn = SvgToolButton("Filmstrip/view_real_size.svg")
         self.zoom_out_btn.clicked.connect(self.on_zoom_out_clicked)
         self.zoom_in_btn.clicked.connect(self.on_zoom_in_clicked)
         self.zoom_fit_btn.clicked.connect(self.canvas.zoom_fit)
@@ -809,7 +809,7 @@ class MainWindow(QMainWindow):
         self.sort_menu.addAction(self.sort_action_reversed)
         self.sort_btn.setMenu(self.sort_menu)
 
-        self.grid_view_toggle_btn = SvgCheckableToolButton("General/grid-3x3.svg", icon_size=14)
+        self.grid_view_toggle_btn = SvgCheckableToolButton("Filmstrip/grid-3x3.svg", icon_size=14)
         self.grid_view_toggle_btn.toggled.connect(self.on_grid_view_toggled)
 
         self.carousel_toggle_btn = FilmstripToggleButton()
@@ -1086,8 +1086,8 @@ class MainWindow(QMainWindow):
         self.trichrome_toolbar_btn = SvgCheckableToolButton("Toolbar/trichrome.svg", **btn_kwargs)
         self.trichrome_toolbar_btn.setChecked(True)
         self.settings_toolbar_btn = SvgCheckableToolButton("Toolbar/horizontal_sliders.svg", **btn_kwargs)
-        self.crop_toolbar_btn = SvgCheckableToolButton("Crop/crop.svg", **btn_kwargs)
-        self.scan_toolbar_btn = SvgCheckableToolButton("Scan/camera-plus.svg", **btn_kwargs)
+        self.crop_toolbar_btn = SvgCheckableToolButton("Global/crop.svg", **btn_kwargs)
+        self.scan_toolbar_btn = SvgCheckableToolButton("Toolbar/camera-plus.svg", **btn_kwargs)
         self.default_layout_group = QButtonGroup(self)
         self.default_layout_group.setExclusive(True)
         for btn in (
@@ -2058,7 +2058,7 @@ class MainWindow(QMainWindow):
         try:
             full = imaging.load_color(source_layer.path)
         except Exception as exc:
-            QMessageBox.critical(self, i18n.tr("dialog_load_error_title"),
+            show_alert(self, i18n.tr("dialog_load_error_title"),
                                   i18n.tr("dialog_load_error_text", error=exc))
             self._sync_import_and_channels_ui()
             return
@@ -2112,7 +2112,7 @@ class MainWindow(QMainWindow):
         try:
             full = imaging.load_color(path)
         except Exception as exc:
-            QMessageBox.critical(self, i18n.tr("dialog_load_error_title"),
+            show_alert(self, i18n.tr("dialog_load_error_title"),
                                   i18n.tr("dialog_load_error_text", error=exc))
             return False
 
@@ -2728,7 +2728,7 @@ class MainWindow(QMainWindow):
             full = imaging.load_grayscale(
                 path, channel=CHANNEL_NAMES[index] if self.import_panel.is_harris_shutter_active() else None)
         except Exception as exc:
-            QMessageBox.critical(self, i18n.tr("dialog_load_error_title"),
+            show_alert(self, i18n.tr("dialog_load_error_title"),
                                   i18n.tr("dialog_load_error_text", error=exc))
             return False
 
@@ -3544,7 +3544,7 @@ class MainWindow(QMainWindow):
         if not restored_items:
             if not show_warnings:
                 raise ValueError(f"session file has no restorable items: {path!r}")
-            QMessageBox.warning(self, i18n.tr("dialog_session_load_error_title"),
+            show_alert(self, i18n.tr("dialog_session_load_error_title"),
                                  i18n.tr("dialog_session_load_empty"))
             return
 
@@ -3600,7 +3600,7 @@ class MainWindow(QMainWindow):
         try:
             self.load_session_from_path(path)
         except Exception as exc:
-            QMessageBox.critical(self, i18n.tr("dialog_session_load_error_title"),
+            show_alert(self, i18n.tr("dialog_session_load_error_title"),
                                   i18n.tr("dialog_session_load_error_text", error=exc))
 
     def _sync_global_panel_from_model(self) -> None:
@@ -4653,7 +4653,7 @@ class MainWindow(QMainWindow):
         ref = self._reference_layer()
         targets = [i for i, layer in enumerate(self.layers) if not layer.is_reference]
         if not ref.has_image() or any(not self.layers[i].has_image() for i in targets):
-            QMessageBox.warning(self, i18n.tr("dialog_alignment_title"),
+            show_alert(self, i18n.tr("dialog_alignment_title"),
                                  i18n.tr("dialog_alignment_missing_images"))
             return
 
@@ -4692,7 +4692,7 @@ class MainWindow(QMainWindow):
             self.recompute_preview()
 
         if failed_channels:
-            QMessageBox.warning(self, i18n.tr("dialog_auto_align_title"),
+            show_alert(self, i18n.tr("dialog_auto_align_title"),
                                  i18n.tr("dialog_auto_align_failed_channels", channels=", ".join(failed_channels)))
             self.statusBar().showMessage(i18n.tr("status_auto_align_failed"), 5000)
         else:

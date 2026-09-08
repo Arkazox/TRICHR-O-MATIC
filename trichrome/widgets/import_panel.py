@@ -55,7 +55,7 @@ _MODE_COMBO_ICON_SIZE = 18
 # just this combo, not a blanket app-wide QComboBox rule, since no other
 # combo in the app (crop_panel.py's aspect-ratio/grid pickers) was asked
 # for this treatment. The dropdown arrow reuses the same
-# General/chevron-down.svg glyph every block's own collapse chevron
+# Global/chevron-down.svg glyph every block's own collapse chevron
 # already uses (already a plain white stroke, so no re-tinting needed -
 # confirmed by rendering it as a QComboBox::down-arrow image, which Qt's
 # QSS engine renders as a real vector cheveron, not a broken image).
@@ -80,7 +80,7 @@ QComboBox::drop-down {{
     width: 20px;
 }}
 QComboBox::down-arrow {{
-    image: url({icon_path("General/chevron-down.svg")});
+    image: url({icon_path("Global/chevron-down.svg")});
     width: 12px;
     height: 12px;
 }}
@@ -108,7 +108,7 @@ QComboBox QAbstractItemView {{
 # from white at the front down to darker light-grays at the back
 # (#ffffff/#e5e5e5/#cccccc - "white", "90% gray", "80% gray"); Color
 # Trichrome colors each layer in its real R/G/B channel color (matching
-# channel_panel.CHANNEL_COLORS exactly). solo is General/stack-middle.svg -
+# channel_panel.CHANNEL_COLORS exactly). solo is Global/stack-middle.svg -
 # a new asset built to match stack-front.svg/stack-back.svg's own family
 # (front/back's card fully outlined AND filled; a card occluded by the one
 # in front of it is outline-only with just a filled chevron sliver peeking
@@ -117,9 +117,9 @@ QComboBox QAbstractItemView {{
 # leave-it-there convention as every other superseded icon in this project.
 MODE_KEYS = ("solo", "bw_trichrome", "color_trichrome")
 MODE_ICONS = {
-    "solo": "General/stack-middle.svg",
-    "bw_trichrome": "General/layers-mode-bw.svg",
-    "color_trichrome": "General/layers-mode-color.svg",
+    "solo": "Global/stack-middle.svg",
+    "bw_trichrome": "Global/layers-mode-bw.svg",
+    "color_trichrome": "Global/layers-mode-color.svg",
 }
 MODE_LABEL_KEYS = {
     "solo": "mode_solo_option",

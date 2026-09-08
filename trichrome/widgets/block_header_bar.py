@@ -127,11 +127,11 @@ def finish_block_chrome(outer: QVBoxLayout, header_row: QHBoxLayout):
     close_button's clicks, since it owns the cross-block visible/collapsed
     state."""
     collapse_button = SvgToolButton(
-        "General/chevron-down.svg", size=_UTILITY_BTN_SIZE, icon_size=_COLLAPSE_ICON_SIZE)
+        "Global/chevron-down.svg", size=_UTILITY_BTN_SIZE, icon_size=_COLLAPSE_ICON_SIZE)
     collapse_button.setToolTip(i18n.tr("block_collapse_tooltip"))
     header_row.addWidget(collapse_button)
     close_button = SvgToolButton(
-        "General/close.svg", size=_UTILITY_BTN_SIZE, icon_size=_CLOSE_ICON_SIZE)
+        "Global/close.svg", size=_UTILITY_BTN_SIZE, icon_size=_CLOSE_ICON_SIZE)
     close_button.setToolTip(i18n.tr("block_close_tooltip"))
     header_row.addWidget(close_button)
     outer.addLayout(header_row)
@@ -220,7 +220,7 @@ class BlockDragHandle(SvgToolButton):
 
     def __init__(self, block_key: str, drag_source: QWidget,
                  size: tuple[int, int] = (16, 16), icon_size: int = 12, parent: QWidget | None = None):
-        super().__init__("General/grip-vertical.svg", size=size, icon_size=icon_size, parent=parent)
+        super().__init__("Global/grip-vertical.svg", size=size, icon_size=icon_size, parent=parent)
         self.block_key = block_key
         self.drag_source = drag_source
         self.setCursor(Qt.OpenHandCursor)

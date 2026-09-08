@@ -24,24 +24,24 @@ from .svg_icons import (
 # sit outside that ordering, at their existing spots).
 RATIO_KEYS = ("original", "free", "1:1", "5:4", "4:3", "7:5", "3:2", "16:9", "custom")
 _RATIO_ICONS = {
-    "original": "Crop/aspect-ratio.svg",
-    "free": "Crop/crop_free.svg",
-    "1:1": "Crop/crop_1_1.svg",
-    "5:4": "Crop/crop_5_4.svg",
-    "4:3": "Crop/crop_4_3.svg",
-    "7:5": "Crop/crop_7_5.svg",
-    "3:2": "Crop/crop_3_2.svg",
-    "16:9": "Crop/crop_16_9.svg",
-    "custom": "Crop/aspect-ratio.svg",
+    "original": "Tools/Crop/aspect-ratio.svg",
+    "free": "Tools/Crop/crop_free.svg",
+    "1:1": "Tools/Crop/crop_1_1.svg",
+    "5:4": "Tools/Crop/crop_5_4.svg",
+    "4:3": "Tools/Crop/crop_4_3.svg",
+    "7:5": "Tools/Crop/crop_7_5.svg",
+    "3:2": "Tools/Crop/crop_3_2.svg",
+    "16:9": "Tools/Crop/crop_16_9.svg",
+    "custom": "Tools/Crop/aspect-ratio.svg",
 }
 _GRID_MODES = ("off", "3x3", "2x2", "golden", "grid")
 _GRID_ICONS = {
     # No dedicated "off"/no-grid glyph - falls back to the generic one.
-    "off": "Crop/grid.svg",
-    "3x3": "Crop/grid_3x3.svg",
-    "2x2": "Crop/grid-2x2.svg",
-    "golden": "Crop/grid-golden-ratio.svg",
-    "grid": "Crop/grid.svg",
+    "off": "Tools/Crop/grid.svg",
+    "3x3": "Tools/Crop/grid_3x3.svg",
+    "2x2": "Tools/Crop/grid-2x2.svg",
+    "golden": "Tools/Crop/grid-golden-ratio.svg",
+    "grid": "Tools/Crop/grid.svg",
 }
 _MIRROR_BTN_SIZE = (34, 30)
 _MIRROR_ICON_SIZE = 20
@@ -76,11 +76,11 @@ class CropPanel(QGroupBox):
         # reachable from inside the panel now that Crop block visibility
         # alone no longer implies active crop mode.
         self.activate_button = SvgCheckableToolButton(
-            "Crop/crop.svg", size=_HEADER_BTN_SIZE, icon_size=_HEADER_ICON_SIZE)
+            "Global/crop.svg", size=_HEADER_BTN_SIZE, icon_size=_HEADER_ICON_SIZE)
         self.activate_button.toggled.connect(self.activate_toggled.emit)
         header_row.addWidget(self.activate_button)
         self.reset_button = SvgToolButton(
-            "General/Reset.svg", size=_HEADER_BTN_SIZE, icon_size=_HEADER_ICON_SIZE)
+            "Global/Reset.svg", size=_HEADER_BTN_SIZE, icon_size=_HEADER_ICON_SIZE)
         self.reset_button.clicked.connect(self.reset_requested.emit)
         header_row.addWidget(self.reset_button)
         self.body, layout, self.collapse_button, self.close_button = finish_block_chrome(outer, header_row)
@@ -94,7 +94,7 @@ class CropPanel(QGroupBox):
         self.aspect_ratio_combo.currentIndexChanged.connect(lambda _i: self._on_ratio_changed())
         ratio_row.addWidget(self.aspect_ratio_combo, stretch=1)
         self.invert_orientation_button = SvgToolButton(
-            "Crop/crop_rotate.svg", size=_HEADER_BTN_SIZE, icon_size=_HEADER_ICON_SIZE)
+            "Tools/Crop/crop_rotate.svg", size=_HEADER_BTN_SIZE, icon_size=_HEADER_ICON_SIZE)
         self.invert_orientation_button.clicked.connect(self.orientation_invert_requested.emit)
         ratio_row.addWidget(self.invert_orientation_button)
         layout.addLayout(ratio_row)
@@ -123,11 +123,11 @@ class CropPanel(QGroupBox):
 
         mirror_row = QHBoxLayout()
         self.mirror_h_button = SvgCheckableToolButton(
-            "Crop/mirror_line.svg", size=_MIRROR_BTN_SIZE, icon_size=_MIRROR_ICON_SIZE)
+            "Tools/Crop/mirror_line.svg", size=_MIRROR_BTN_SIZE, icon_size=_MIRROR_ICON_SIZE)
         self.mirror_h_button.toggled.connect(lambda _c: self.settings_changed.emit())
         mirror_row.addWidget(self.mirror_h_button)
         self.mirror_v_button = SvgCheckableToolButton(
-            "Crop/mirror_line_vertical.svg", size=_MIRROR_BTN_SIZE, icon_size=_MIRROR_ICON_SIZE)
+            "Tools/Crop/mirror_line_vertical.svg", size=_MIRROR_BTN_SIZE, icon_size=_MIRROR_ICON_SIZE)
         self.mirror_v_button.toggled.connect(lambda _c: self.settings_changed.emit())
         mirror_row.addWidget(self.mirror_v_button)
         mirror_row.addStretch(1)

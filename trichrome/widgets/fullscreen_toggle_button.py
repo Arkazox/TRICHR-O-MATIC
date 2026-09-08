@@ -7,4 +7,4 @@ from .svg_icons import SvgTwoStateToggleButton
 
 class FullscreenToggleButton(SvgTwoStateToggleButton):
     def __init__(self, parent=None):
-        super().__init__("Preview/fullscreen_exit.svg", "Preview/fullscreen.svg", initial_checked=False, parent=parent)
+        super().__init__("Filmstrip/fullscreen_exit.svg", "Filmstrip/fullscreen.svg", initial_checked=False, parent=parent)

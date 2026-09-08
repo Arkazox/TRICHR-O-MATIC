@@ -260,11 +260,11 @@ class HistogramPanel(QWidget):
             self._channel_buttons[ch] = btn
         toggle_row.addStretch(1)
         self.pick_button = SvgCheckableToolButton(
-            "Color Correction/eyedropper.svg", size=(34, 30), icon_size=20)
+            "Global/eyedropper.svg", size=(34, 30), icon_size=20)
         self.pick_button.toggled.connect(self._on_pick_toggled)
         self.pick_button.toggled.connect(self.pick_toggled.emit)
         toggle_row.addWidget(self.pick_button)
-        self.reset_button = SvgToolButton("General/Reset.svg", size=(34, 30), icon_size=20)
+        self.reset_button = SvgToolButton("Global/Reset.svg", size=(34, 30), icon_size=20)
         self.reset_button.clicked.connect(self._on_reset_clicked)
         toggle_row.addWidget(self.reset_button)
         layout.addLayout(toggle_row)

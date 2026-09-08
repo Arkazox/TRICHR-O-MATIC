@@ -7,12 +7,58 @@ from typing import Optional
 
 import numpy as np
 import cv2
+import rawpy
 from PIL import Image
 
 MAX_PREVIEW_DIM = 1400
 
 _EXIF_DATETIME_ORIGINAL = 36867
 _EXIF_DATETIME = 306
+
+# Extensions load_grayscale/load_color hand to rawpy (LibRaw) instead of
+# PIL. Not exhaustive of everything LibRaw can open - just the common
+# formats worth recognizing by extension; .raf (Fuji) is listed first
+# since the X-T3 is the one camera actually confirmed working with this
+# app's Scan tool so far.
+_RAW_EXTENSIONS = {
+    ".raf",
+    ".cr2", ".cr3",
+    ".nef", ".nrw",
+    ".arw", ".srf", ".sr2",
+    ".dng",
+    ".orf",
+    ".rw2",
+    ".pef",
+    ".raw",
+}
+
+
+def is_raw_path(path: str) -> bool:
+    """True if ``path``'s extension is one load_grayscale/load_color will
+    decode via rawpy/LibRaw instead of PIL."""
+    return os.path.splitext(path)[1].lower() in _RAW_EXTENSIONS
+
+
+def _load_raw_rgb_uint16(path: str) -> np.ndarray:
+    """Decode a RAW file via LibRaw into a demosaiced RGB array (uint16,
+    full 0..65535 range) - the RAW counterpart of PIL's decode step in
+    load_grayscale/load_color below, converging into the same dtype-
+    normalization/channel-collapse tail those functions already have.
+
+    Deliberately requests sRGB output (LibRaw's own default output_color/
+    gamma), not linear - so a RAW source behaves like every other
+    supported file type as far as this app's tone-curve/color pipeline is
+    concerned, rather than needing a separate linear-aware code path.
+    use_camera_wb neutralizes the sensor's own color filter array bias
+    (same neutral starting point a camera's own JPEG/TIFF rendering
+    already gives the PIL-based path) without no_auto_bright's opposite -
+    LibRaw's own auto-exposure guess is left off since it would fight with
+    this app's own Exposure/tone-curve sliders. user_flip is left at its
+    default (-1: honor the file's own embedded orientation), so unlike
+    the PIL path there's no separate _apply_exif_orientation step needed.
+    """
+    with rawpy.imread(path) as raw:
+        return raw.postprocess(use_camera_wb=True, no_auto_bright=True, output_bps=16)
 
 
 def extract_capture_date(path: str) -> Optional[float]:

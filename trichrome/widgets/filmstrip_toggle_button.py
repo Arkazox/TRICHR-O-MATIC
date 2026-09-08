@@ -10,7 +10,7 @@ from .svg_icons import SvgToolButton
 
 class FilmstripToggleButton(SvgToolButton):
     def __init__(self, parent=None):
-        super().__init__("Preview/gallery-thumbnails.svg", parent=parent)
+        super().__init__("Filmstrip/gallery-thumbnails.svg", parent=parent)
         self.setCheckable(True)
         self.setChecked(True)
 

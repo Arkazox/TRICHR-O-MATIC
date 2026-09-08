@@ -11,7 +11,7 @@ from .svg_icons import SvgToolButton
 
 class CompareButton(SvgToolButton):
     def __init__(self, parent=None):
-        super().__init__("Preview/a-b.svg", parent=parent)
+        super().__init__("Filmstrip/a-b.svg", parent=parent)
         self.setCheckable(True)
 
     def _glyph_color(self) -> QColor:

@@ -66,7 +66,7 @@ class _ImageLabel(QLabel):
         if self.wb_pick_enabled or self.histogram_pick_enabled or self.film_base_pick_enabled:
             dpr = self.devicePixelRatioF() or 1.0
             size = 28
-            pixmap = tinted_svg_pixmap("Color Correction/eyedropper.svg", size, QColor(Qt.white), dpr)
+            pixmap = tinted_svg_pixmap("Global/eyedropper.svg", size, QColor(Qt.white), dpr)
             # Hotspot near the icon's own sampling tip (bottom-left area of
             # the glyph), not its center - matches where the cursor visually
             # points when sampling a pixel.

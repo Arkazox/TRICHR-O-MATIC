@@ -492,7 +492,7 @@ class CollapsibleSection(QFrame):
         # set_block_collapsed() docstring for why the sign matters here.
         rotation = 0.0 if checked else -90.0
         pixmap = rotated_tinted_svg_pixmap(
-            "General/chevron-down.svg", self._CHEVRON_ICON_SIZE, color, dpr, rotation)
+            "Global/chevron-down.svg", self._CHEVRON_ICON_SIZE, color, dpr, rotation)
         self.toggle_button.setIcon(QIcon(pixmap))
 
     def _on_clicked(self, checked: bool) -> None:

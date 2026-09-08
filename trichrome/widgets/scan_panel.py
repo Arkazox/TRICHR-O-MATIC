@@ -144,7 +144,7 @@ QRadioButton:checked {
 """
 _MODE_BUTTON_ICON_SIZE = 16
 
-# One icon (Scan/camera_roll.svg) reused for all 3 Film buttons, tinted a
+# One icon (Tools/Scan/camera_roll.svg) reused for all 3 Film buttons, tinted a
 # different fixed color per film type instead of the app's usual single
 # palette-driven tint - the color itself is the primary visual cue for
 # which film type is selected (2026-09-08, exact colors given by the
@@ -171,9 +171,9 @@ _MODE_NOTE_KEYS = {
 # tri-color Scan/rainbow-rgb.svg glyph was tried instead the same day but
 # the user preferred this banded-bulb version once they'd seen both, so
 # it was kept/reverted to rather than the rainbow.
-_EXTERNAL_LIGHT_ICON = "Scan/sun-light.svg"
-_WHITE_LIGHT_ICON = "Scan/light-bulb.svg"
-_RGB_LIGHT_ICON = "Scan/light-bulb.svg"
+_EXTERNAL_LIGHT_ICON = "Tools/Scan/sun-light.svg"
+_WHITE_LIGHT_ICON = "Tools/Scan/light-bulb.svg"
+_RGB_LIGHT_ICON = "Tools/Scan/light-bulb.svg"
 _LIGHT_ICON_COLOR = "#ffffff"
 
 # One full spin over 1 second when the Refresh button is clicked - timer-
@@ -286,7 +286,7 @@ class ScanPanel(QGroupBox):
         status_row.addWidget(self.status_dot)
         self.status_label = QLabel()
         status_row.addWidget(self.status_label, 1)
-        self.refresh_button = SvgToolButton("Scan/refresh.svg")
+        self.refresh_button = SvgToolButton("Tools/Scan/refresh.svg")
         self.refresh_button.clicked.connect(self._on_refresh_clicked)
         status_row.addWidget(self.refresh_button)
         device_content.addLayout(status_row)
@@ -312,7 +312,7 @@ class ScanPanel(QGroupBox):
         for idx, _mode in enumerate(MODES):
             btn = QRadioButton()
             btn.setIcon(tinted_svg_icon(
-                "Scan/camera_roll.svg", _MODE_BUTTON_ICON_SIZE, QColor(_FILM_ICON_COLORS[idx]), dpr))
+                "Tools/Scan/camera_roll.svg", _MODE_BUTTON_ICON_SIZE, QColor(_FILM_ICON_COLORS[idx]), dpr))
             btn.setIconSize(QSize(_MODE_BUTTON_ICON_SIZE, _MODE_BUTTON_ICON_SIZE))
             btn.setStyleSheet(_FRAMED_MODE_BUTTON_STYLE)
             self.mode_group.addButton(btn, idx)
@@ -405,7 +405,7 @@ class ScanPanel(QGroupBox):
         self.sample_base_button = QPushButton()
         self.sample_base_button.clicked.connect(self._on_sample_base_clicked)
         sample_base_row.addWidget(self.sample_base_button, 1)
-        self.pick_from_photo_button = SvgCheckableToolButton("Color Correction/eyedropper.svg")
+        self.pick_from_photo_button = SvgCheckableToolButton("Global/eyedropper.svg")
         self.pick_from_photo_button.toggled.connect(self.pick_film_base_from_photo_toggled.emit)
         sample_base_row.addWidget(self.pick_from_photo_button)
         light_content.addLayout(sample_base_row)

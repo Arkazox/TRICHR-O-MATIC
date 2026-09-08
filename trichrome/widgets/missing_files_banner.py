@@ -33,7 +33,7 @@ class MissingFilesBanner(QFrame):
 
         self.icon_label = QLabel()
         self.icon_label.setPixmap(tinted_svg_pixmap(
-            "General/warning.svg", _ICON_SIZE, _ICON_COLOR, self.devicePixelRatioF() or 1.0))
+            "Global/warning.svg", _ICON_SIZE, _ICON_COLOR, self.devicePixelRatioF() or 1.0))
         self.icon_label.setFixedSize(_ICON_SIZE, _ICON_SIZE)
         row.addWidget(self.icon_label)
 

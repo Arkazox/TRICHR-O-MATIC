@@ -69,11 +69,11 @@ class LightPanel(QGroupBox):
         # Negative/invert - back in this block's header (2026-09-07,
         # restored to its original home - see the module docstring above).
         self.invert_button = SvgCheckableToolButton(
-            "Preview/invert.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+            "Tools/Color Correction/invert.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.invert_button.toggled.connect(self.invert_toggled.emit)
         header_row.addWidget(self.invert_button)
         self.reset_button = SvgToolButton(
-            "General/Reset.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+            "Global/Reset.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.reset_button.clicked.connect(self.reset_requested.emit)
         header_row.addWidget(self.reset_button)
         self.body, self.body_layout, self.collapse_button, self.close_button = finish_block_chrome(outer, header_row)
@@ -150,18 +150,18 @@ class ColorPanel(QGroupBox):
         # Light's own Negative button) sitting right before the white
         # balance eyedropper, per the user's own placement spec ("en haut
         # du bouton couleur, à côté du bouton WB"). Icon moved by the user
-        # from General/ to its own Color Correction/b&w.svg (2026-09-07,
+        # from General/ to its own Tools/Color Correction/b&w.svg (2026-09-07,
         # same day as the saturation->real-grayscale rework above).
         self.black_white_button = SvgCheckableToolButton(
-            "Color Correction/b&w.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+            "Tools/Color Correction/b&w.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.black_white_button.toggled.connect(self.black_white_toggled.emit)
         header_row.addWidget(self.black_white_button)
         self.pick_white_balance_btn = SvgCheckableToolButton(
-            "Color Correction/eyedropper.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+            "Global/eyedropper.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.pick_white_balance_btn.toggled.connect(self.pick_white_balance_toggled.emit)
         header_row.addWidget(self.pick_white_balance_btn)
         self.reset_button = SvgToolButton(
-            "General/Reset.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+            "Global/Reset.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.reset_button.clicked.connect(self.reset_requested.emit)
         header_row.addWidget(self.reset_button)
         self.body, self.body_layout, self.collapse_button, self.close_button = finish_block_chrome(outer, header_row)
