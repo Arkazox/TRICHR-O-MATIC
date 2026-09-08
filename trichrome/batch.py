@@ -6,8 +6,9 @@ import re
 from dataclasses import dataclass
 
 from . import filters as filters_module
+from . import imaging
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
+IMAGE_EXTENSIONS = imaging.IMPORTABLE_EXTENSIONS
 _SEPARATORS = ("_", "-", " ", ".")
 
 # For each fixed Advanced Options mode: which filter gets patched into each

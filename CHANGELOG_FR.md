@@ -21,14 +21,41 @@ pas seulement d'historique.
 
 ## Non publié
 
+### Ajouté
+- **Prise en charge des fichiers RAW** : les photos peuvent désormais être
+  importées directement depuis des fichiers RAW d'appareil photo (Fuji
+  `.RAF`, Canon `.CR2`/`.CR3`, Nikon `.NEF`/`.NRW`, Sony `.ARW`/`.SRF`/
+  `.SR2`, Adobe `.DNG`, Olympus `.ORF`, Panasonic `.RW2`, Pentax `.PEF`,
+  et d'autres) - tous les sélecteurs de fichiers de l'application
+  (Charger par canal, Charger une image en mode Solo, la fenêtre de
+  reliaison des fichiers manquants, tous les sélecteurs de la fenêtre
+  d'import par lot) et le glisser-déposer depuis le Finder les acceptent
+  désormais, en plus des PNG/JPEG/TIFF/BMP.
+- **Glisser-déposer une photo directement sur l'aperçu** lui-même (tant
+  qu'aucune photo n'est encore chargée), pas seulement sur la bande de
+  vignettes ou la vue en grille.
+- **Un bouton « HQ »** à côté des boutons de zoom : une fois activé,
+  l'application affiche une version en pleine résolution de l'image
+  composée peu après l'arrêt de vos modifications, en plus de l'aperçu
+  rapide habituel - utile pour juger des détails fins en zoomant ou en
+  plein écran, sans ralentir les réglages en direct des curseurs/courbes.
+- **Raccourcis clavier pour le zoom** : ⌘+ et ⌘-, en plus des raccourcis
+  existants Z (100 %) et F (ajuster).
+
+### Modifié
+- Déposer la ou les toutes premières photos dans une session neuve/vide
+  remplace désormais la vignette vide initiale de la session au lieu de
+  la laisser trainer en plus des nouvelles photos.
+- L'outil Scan affiche désormais en permanence la mention « encore en
+  cours de développement », puisqu'il reste une fonctionnalité bêta.
+
 ### Tâches restantes pour les prochaines versions
 - **v0.6.0** : un **panneau de métadonnées** - pas encore spécifié.
-- **Prise en charge des fichiers RAW** - pas encore commencée ; cadrée en
-  discussion, pas encore prototypée.
-- Quelques anciennes fenêtres d'erreur (erreur de chargement d'image,
-  échec de l'alignement automatique, erreurs de chargement de session)
-  utilisent encore l'ancien style de fenêtre système et n'ont pas encore
-  été basculées vers le style d'alerte propre à l'application.
+- **Prise en charge des fichiers RAW** : un import par lot réel et
+  complet de triplets RAW via la fenêtre d'import par lot elle-même n'a
+  pas encore été vérifié avec de vrais fichiers d'appareil photo (seule
+  sa logique de correspondance de noms de fichiers a été testée avec des
+  fichiers factices vides).
 
 ---
 

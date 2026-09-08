@@ -491,8 +491,33 @@ since removing the field would touch the session-file schema.
 **Loading photos and Auto Align/Lock Layer Position live in the
 Trichrome Process block** (Trichrome modes only); Solo mode instead shows
 a single "Load Image" button in Files. Dragging image files from Finder
-onto the filmstrip, or a Batch Import in Solo Processing Mode, both add
-new photos as Solo.
+onto the filmstrip, onto the grid view, or (2026-09-08) onto the preview
+canvas itself while it's showing its empty-project placeholder, or a
+Batch Import in Solo Processing Mode, all add new photos as Solo — the
+canvas drop reuses the exact same `MainWindow.on_carousel_files_dropped`
+handler as the filmstrip/grid, via `CanvasWidget.files_dropped`
+(`widgets/canvas_widget.py`'s `_ImageLabel` only accepts file drops while
+`CanvasWidget.clear_image()` has armed `set_accept_file_drops(True)` —
+disarmed again the instant a real image is shown via `set_image_rgb`/
+`set_image_gray`, since that same canvas area is already used for align-
+drag/crop-drag/eyedropper interactions once there's something to display).
+The placeholder text itself (`canvas_placeholder` i18n key) invites both
+actions: "Load an image via the "Import" button, or drag an image file
+here."
+
+**Dropping the very first photo(s) into a project no longer leaves a
+stray empty thumbnail (fixed 2026-09-08).** A fresh session/New Session
+always starts with one untouched, genuinely-empty `BatchItem` (no image
+in any of its 3 channels or its `normal_layer`) - `MainWindow.
+_append_new_batch_items()` (the shared tail behind
+`on_carousel_files_dropped` and Scan tool add-to-session) now drops the
+existing batch first when *every* item in it is empty
+(`_is_batch_item_empty()`, the same "genuinely empty" criterion the
+session-restore paths already use) before appending the new photo(s) -
+so importing the first real photo(s) into an empty project replaces that
+placeholder instead of leaving it behind as a dangling first thumbnail.
+Only fires when the *entire* existing batch is empty - a real photo
+already in the project is never removed.
 
 ### Black & White and Negative — mode-agnostic, live in Light/Color
 
@@ -661,6 +686,71 @@ independent of the Solo-channel isolation (`isolate_channel`/
 `show_all_channels`, also linked to each channel panel's own Solo
 checkbox).
 
+### Preview resolution & HQ Preview
+
+The live preview always composites from `imaging.make_preview()`'s
+`~MAX_PREVIEW_DIM`-capped (1400px) arrays, never the full-resolution
+source - `recompute_preview()`/`_recompute_preview_normal()` only ever
+read `layer.image_preview`/`normal_layer.image_preview`. This keeps every
+slider/curve/crop edit fast regardless of source resolution, but reads
+visibly soft once zoomed in or in fullscreen - zoom/fullscreen just scale
+up the same capped `QImage` (`canvas_widget.py`'s `_refresh_pixmap`), they
+don't bypass the cap.
+
+**HQ Preview** (the "HQ" toggle button next to Zoom 100%, 2026-09-08) is
+an opt-in, idle-triggered full-resolution pass on top of that, not a
+replacement for it: `on_hq_preview_toggled` sets `self.hq_preview_enabled`;
+`_arm_hq_preview_if_enabled()` (re)starts `self._hq_idle_timer`, a
+single-shot `QTimer` restarted on every `recompute_preview()`/
+`_recompute_preview_normal()` exit - since `QTimer.start()` on an
+already-running single-shot timer restarts its countdown, calling this on
+every edit turns it into a settle-delay (fires `_HQ_PREVIEW_IDLE_MS` after
+the *last* edit) rather than a throttle (contrast with the Curves tool's
+own `_CURVE_RECOMPUTE_THROTTLE_MS`, which fires at most once per burst).
+Once idle, `_recompute_hq_preview()` reuses `imaging.compose_trichrome`/
+`compose_normal` - the same resolution-agnostic entry points
+`export_worker.py` calls for a real export - on full-res source arrays,
+then swaps the result into the canvas via the same `set_image_rgb`/
+`set_image_gray` the low-res path uses (swapping in a bigger array "just
+works": `_refresh_pixmap` always recomputes the on-screen size from
+`zoom * source width`, so this doesn't disturb zoom/scroll position). The
+next edit's own low-res `recompute_preview()` call overwrites it
+immediately, so HQ only ever shows once things are still.
+
+`_current_tone_params()`/`_current_global_params()` are the shared tuple-
+builders both the low-res preview and this HQ pass call, so they can't
+drift apart - don't reintroduce a separate inline copy of that
+tuple-building in either place.
+
+**No full-res path exists for Solo preview** (a preview-only view state,
+never handled by `export_worker.py` either) - `_arm_hq_preview_if_enabled`/
+`_recompute_hq_preview` both no-op while any layer's `solo` is set, same
+for Compare mode (a transient before/after view, not worth a full-res
+pass). The toggle itself stays enabled in both cases; it just has nothing
+to do until you leave that state.
+
+**Caching, and why it's split from the export path**: `_full_res_image`/
+`_full_res_color_image` (used by `export_worker.py`) deliberately do
+*not* cache their result onto `layer.image_full` - a big batch export
+processes many items in sequence and must not retain every one's full-res
+array in memory just because it was touched. HQ Preview's own
+`_full_res_image_cached`/`_full_res_color_image_cached` wrap those same
+loaders but *do* stash the result onto `layer.image_full`, so repeated
+edits to the *same* photo don't re-read/re-decode from disk on every
+single idle tick - only the first HQ pass on a given photo pays that cost
+(a RAW source's `rawpy` decode in particular can take a second or more
+per channel); every further tweak just re-runs the cheap numpy compose/
+crop step. This does mean a session where you HQ-preview many different
+large (especially RAW) photos in a row will accumulate their full-res
+arrays in memory for the rest of the session - no eviction exists yet if
+that becomes a real problem in practice.
+
+**Runs synchronously** (with `QApplication.setOverrideCursor(Qt.WaitCursor)`),
+not in a background `QThread` - simpler, and acceptable since it only
+fires once after editing stops, never on every tick; a first-time RAW
+decode can still cause a noticeable pause. Not persisted across launches
+(same as Compare/Crop-active) - resets to off on every relaunch.
+
 ## Scan tool
 
 The **Scan** block (`widgets/scan_panel.py`) is the integrated,
@@ -783,47 +873,50 @@ picked up/finished rather than reorganizing it per release.
   derived info), where it lives in the UI, whether it's per-channel or
   per-composite, read-only or editable. Don't start without a real
   functional spec.
-- **RAW file support** — first slice landed 2026-09-08, not yet tested
-  against a real camera file (none available in this environment).
-  `imaging.py`'s `load_grayscale`/`load_color` (the sole choke points
-  every caller already goes through) now branch on `is_raw_path()` (a
-  module-level `_RAW_EXTENSIONS` set — `.raf`/`.cr2`/`.cr3`/`.nef`/`.nrw`/
-  `.arw`/`.srf`/`.sr2`/`.dng`/`.orf`/`.rw2`/`.pef`/`.raw`) and decode via
-  `_load_raw_rgb_uint16()` (`rawpy.imread(...).postprocess(use_camera_wb=True,
-  no_auto_bright=True, output_bps=16)` — sRGB output, not linear, so a RAW
-  source converges into the exact same uint16-normalization/channel-
-  collapse tail the PIL path already had) instead of `PIL.Image.open()`.
-  `requirements.txt` gained `rawpy>=0.21`; `trichrome.spec`'s existing
-  `collect_all()` loop (previously `cv2`-only) now also bundles `rawpy` —
-  confirmed a prebuilt macOS arm64/cp312 wheel exists and bundles
-  `libraw_r.dylib` + its own deps inside the wheel itself, same
-  self-contained shape as the `opencv-python-headless` wheel already
-  bundled here, so no extra system dependency. Verified so far: extension
-  detection, a full headless app boot with `rawpy` imported, pyflakes
-  clean — **not** a real pixel-level decode (no `.RAF` sample in this
-  environment).
-  **Deliberately still scoped narrow**: the general Import window/batch
-  import/Finder drag-and-drop still filter on the older, PNG/JPEG/TIFF/
-  BMP-only `IMAGE_EXTENSIONS` (duplicated in `batch.py`/
-  `carousel_widget.py`/`batch_window.py`), so a RAW file dropped there is
-  still rejected before ever reaching `imaging.py` — untouched on
-  purpose. The Scan tool's own capture path has **no such filter** — it
-  hands whatever path gphoto2 downloaded straight to `load_grayscale`/
-  `load_color` (`scan_panel.py`'s film-base sampling,
-  `scan_tool/process.py`'s preview compose) — so if the camera is set to
-  RAW format, that path should already work end-to-end today, without
-  any further Scan-tool code changes, once verified against a real `.RAF`.
-  Still open: real-hardware verification (a genuine capture with the
-  X-T3 set to RAW, confirming decode correctness and demosaic
-  quality/speed on its X-Trans sensor specifically), and whether/when to
-  widen the general Import window to RAW too (a separate, larger
-  decision — `IMAGE_EXTENSIONS` is currently duplicated 3× (`batch.py`/
-  `carousel_widget.py`/`batch_window.py`) plus repeated inline in several
-  file-dialog name filters, worth consolidating into one shared constant
-  before extending it rather than adding RAW extensions in 3+ places
-  independently). `extract_capture_date()` needed no change — its
-  existing PIL-open-with-fallback-to-mtime already degrades gracefully
-  on a RAW file it can't parse, just without a real EXIF date.
+- **RAW file support** — core decode landed 2026-09-08 and confirmed
+  working by the user against real captures from the Scan tool; general
+  Import/Files/drag-and-drop widened the same day. Still not verified:
+  a real end-to-end batch import of `.RAF` triplets through the Batch
+  Import window itself (only its filename-matching logic was checked
+  with empty stub files, not a real decode).
+  - **Decode** (`imaging.py`): `load_grayscale`/`load_color` (the sole
+    choke points every caller already goes through) branch on
+    `is_raw_path()` and decode via `_load_raw_rgb_uint16()`
+    (`rawpy.imread(...).postprocess(use_camera_wb=True,
+    no_auto_bright=True, output_bps=16)` — sRGB output, not linear, so a
+    RAW source converges into the exact same uint16-normalization/
+    channel-collapse tail the PIL path already had) instead of
+    `PIL.Image.open()`. `requirements.txt` gained `rawpy>=0.21`;
+    `trichrome.spec`'s existing `collect_all()` loop (previously
+    `cv2`-only) also bundles `rawpy` now — a prebuilt macOS arm64/cp312
+    wheel bundles `libraw_r.dylib` + its own deps inside the wheel
+    itself, same self-contained shape as `opencv-python-headless`, so no
+    extra system dependency. `extract_capture_date()` needed no change —
+    its existing PIL-open-with-fallback-to-mtime already degrades
+    gracefully on a RAW file it can't parse, just without a real EXIF
+    date.
+  - **One shared extension list, not three.** `imaging.py` is now the
+    single source of truth: `RASTER_EXTENSIONS` (the original PNG/JPEG/
+    TIFF/BMP set) + `RAW_EXTENSIONS` (`.raf`/`.cr2`/`.cr3`/`.nef`/`.nrw`/
+    `.arw`/`.srf`/`.sr2`/`.dng`/`.orf`/`.rw2`/`.pef`/`.raw`) =
+    `IMPORTABLE_EXTENSIONS` (a tuple, not a set, so it also works
+    directly with `str.endswith()`), plus `qt_image_name_filter_patterns()`
+    for building a `QFileDialog` name filter. `batch.py`/
+    `carousel_widget.py`/`batch_window.py` — previously 3 independent,
+    hand-typed copies of the same PNG/JPEG/TIFF/BMP list — now all import
+    `imaging.IMPORTABLE_EXTENSIONS` instead. Every RAW extension added to
+    `imaging.py` in the future automatically reaches every consumer.
+  - **Every file-selection surface now accepts RAW**: the Files block's
+    per-channel Load and Solo-mode Load Image (`main_window.py`'s
+    `load_image`/`load_normal_image`), the missing-file relink dialog
+    (`_relink_one_channel_interactively`), the Batch Import window's Solo
+    image/folder pickers and Manual/Semi-automatic per-file pickers (all
+    6 `QFileDialog` name-filter sites now build their filter string from
+    `imaging.qt_image_name_filter_patterns()` instead of a hardcoded
+    `*.png *.jpg ...` literal), Finder drag-and-drop onto the carousel/
+    grid view, and the Batch Import window's Automatic-mode filename-
+    triplet matching (`batch.find_triplets`, confirmed headlessly that a
+    `photo_R/G/B.RAF` set is now detected as one triplet).
 
 **Smaller items:**
 

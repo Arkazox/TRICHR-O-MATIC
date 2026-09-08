@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import batch, filters as filters_module, i18n
+from . import batch, filters as filters_module, i18n, imaging
 from .widgets.alert_dialog import show_alert
 from .widgets.channel_panel import CHANNEL_COLORS
 from .widgets.controls import CollapsibleSection
@@ -25,7 +25,7 @@ from .widgets.svg_icons import raw_svg_icon
 ORG_NAME = "TrichromeMaker"
 APP_NAME = "TrichromeMaker"
 CHANNEL_LETTERS = ("R", "G", "B")
-IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
+IMAGE_EXTENSIONS = imaging.IMPORTABLE_EXTENSIONS
 ADVANCED_MODE_IDS = ("classic", "ir", "aerochrome", "custom")
 
 # Processing Mode's own 3 choices (2026-09-07) - a plain QRadioButton's
@@ -668,7 +668,7 @@ class BatchWindow(QMainWindow):
     def _add_solo_images(self) -> None:
         settings = QSettings(ORG_NAME, APP_NAME)
         start_dir = settings.value("last_import_dir", "") or ""
-        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
+        name_filter = f"Images ({imaging.qt_image_name_filter_patterns()});;" + i18n.tr("file_filter_all")
         paths, _ = QFileDialog.getOpenFileNames(
             self, i18n.tr("batch_solo_select_images_title"), start_dir, name_filter)
         if not paths:
@@ -844,7 +844,7 @@ class BatchWindow(QMainWindow):
     def _add_manual_files(self, channel: str) -> None:
         settings = QSettings(ORG_NAME, APP_NAME)
         start_dir = settings.value("last_import_dir", "") or self.input_path_edit.text() or ""
-        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
+        name_filter = f"Images ({imaging.qt_image_name_filter_patterns()});;" + i18n.tr("file_filter_all")
         paths, _ = QFileDialog.getOpenFileNames(
             self, i18n.tr("batch_select_files_title", channel=i18n.channel_name(channel)), start_dir, name_filter)
         if not paths:
@@ -904,7 +904,7 @@ class BatchWindow(QMainWindow):
     def _add_semi_files(self) -> None:
         settings = QSettings(ORG_NAME, APP_NAME)
         start_dir = settings.value("last_import_dir", "") or self.input_path_edit.text() or ""
-        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
+        name_filter = f"Images ({imaging.qt_image_name_filter_patterns()});;" + i18n.tr("file_filter_all")
         paths, _ = QFileDialog.getOpenFileNames(
             self, i18n.tr("batch_semi_select_title"), start_dir, name_filter)
         if not paths:

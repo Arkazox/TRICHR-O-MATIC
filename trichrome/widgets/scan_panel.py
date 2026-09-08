@@ -76,7 +76,9 @@ from ..scan_tool.scan_window import (
 # attribute lookup means patching scan_window.ORG_NAME/.APP_NAME isolates
 # both the standalone tool and this integrated panel at once.
 from .alert_dialog import show_alert
-from .block_header_bar import finish_block_chrome, start_block_chrome
+from .block_header_bar import (
+    DISABLED_MESSAGE_STYLE, finish_block_chrome, start_block_chrome,
+)
 from .controls import CollapsibleSection
 from .svg_icons import (
     SvgCheckableToolButton, SvgToolButton, gradient_tinted_svg_icon, tinted_svg_icon,
@@ -277,6 +279,16 @@ class ScanPanel(QGroupBox):
 
     def _build_ui(self) -> None:
         layout = self.body_layout
+
+        # Permanent "still under development" notice - unlike
+        # make_disabled_message_label()'s banner (hidden unless the block
+        # is disabled), this one is always visible; reuses the same yellow
+        # so it reads as the same "heads up" signal as everywhere else in
+        # the app (2026-09-08).
+        self.wip_notice_label = QLabel(i18n.tr("scan_wip_notice"))
+        self.wip_notice_label.setWordWrap(True)
+        self.wip_notice_label.setStyleSheet(DISABLED_MESSAGE_STYLE)
+        layout.addWidget(self.wip_notice_label)
 
         self.device_section = self._make_section(layout)
         device_content = self.device_section.content_layout
@@ -486,6 +498,7 @@ class ScanPanel(QGroupBox):
 
     def retranslate_ui(self) -> None:
         self.title_label.setText(i18n.tr("menu_tools_scan"))
+        self.wip_notice_label.setText(i18n.tr("scan_wip_notice"))
         self.device_section.setTitle(i18n.tr("scan_device_group"))
         self.refresh_button.setToolTip(i18n.tr("scan_device_refresh"))
         self.mode_section.setTitle(i18n.tr("scan_mode_group"))

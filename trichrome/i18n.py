@@ -77,6 +77,7 @@ EN = {
     "zoom_out": "Zoom Out",
     "zoom_fit_tooltip": "Fit to window (F)",
     "zoom_100": "100% (Real Size) (Z)",
+    "hq_preview_tooltip": "HQ Preview: show a full-resolution pass once editing settles (slower)",
     "rotate_left_tooltip": "Rotate left (⌘L)",
     "rotate_right_tooltip": "Rotate right (⌘R)",
     "fullscreen_button": "Fullscreen (⌘F)",
@@ -107,7 +108,7 @@ EN = {
     "scan_toolbar_tooltip": "Scan (S)",
     "right_panel_toggle_tooltip": "Show/hide right panel",
     "help_toolbar_tooltip": "Help (F1)",
-    "canvas_placeholder": "Load the 3 images (R, G, B) to see the preview",
+    "canvas_placeholder": 'Load an image via the "Import" button, or drag an image file here',
     "missing_files_banner_text": "The original source file(s) for this photo could not be found:",
     "missing_files_locate_button": "Locate…",
     "missing_files_locate_tooltip": "Pick the folder these files were moved to - Trichr-o-matic will look for files with the same name inside it, for every missing channel across the current selection.",
@@ -538,6 +539,7 @@ directly on the preview (Trichrome modes only).</p>
 
     # --- Scan tool (standalone test window, v0.5.0 direction) ---
     "scan_window_title": "Scan Tool (test)",
+    "scan_wip_notice": "This tool is still under development — some errors or unexpected behavior may occur.",
     "scan_device_group": "Device",
     "scan_device_not_connected": "Not connected",
     "scan_device_connected": "Connected: {model}",
@@ -683,6 +685,7 @@ FR = {
     "zoom_out": "Zoom arrière",
     "zoom_fit_tooltip": "Ajuster à la fenêtre (F)",
     "zoom_100": "100 % (taille réelle) (Z)",
+    "hq_preview_tooltip": "Aperçu HQ : bascule en pleine résolution une fois l'édition stabilisée (plus lent)",
     "rotate_left_tooltip": "Rotation à gauche (⌘L)",
     "rotate_right_tooltip": "Rotation à droite (⌘R)",
     "fullscreen_button": "Plein écran (⌘F)",
@@ -713,7 +716,7 @@ FR = {
     "scan_toolbar_tooltip": "Scan (S)",
     "right_panel_toggle_tooltip": "Afficher/masquer le panneau de droite",
     "help_toolbar_tooltip": "Aide (F1)",
-    "canvas_placeholder": "Chargez les 3 images (R, V, B) pour voir l'aperçu",
+    "canvas_placeholder": 'Charger une image via le bouton "importer" ou glisser ici un fichier image',
     "missing_files_banner_text": "Le(s) fichier(s) source d'origine de cette photo sont introuvables :",
     "missing_files_locate_button": "Localiser…",
     "missing_files_locate_tooltip": "Choisissez le dossier où ces fichiers ont été déplacés - Trichr-o-matic y recherchera les fichiers portant le même nom, pour chaque canal manquant de la sélection actuelle.",
@@ -1173,6 +1176,7 @@ panneau latéral</li>
 
     # --- Outil de scan (fenêtre de test autonome, direction v0.5.0) ---
     "scan_window_title": "Outil de scan (test)",
+    "scan_wip_notice": "Cet outil est encore en cours de développement — des erreurs ou comportements inattendus peuvent survenir.",
     "scan_device_group": "Appareil",
     "scan_device_not_connected": "Non connecté",
     "scan_device_connected": "Connecté : {model}",

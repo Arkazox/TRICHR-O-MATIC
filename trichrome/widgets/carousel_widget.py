@@ -30,7 +30,7 @@ from PySide6.QtCore import QMimeData, QPointF, Qt, Signal
 from PySide6.QtGui import QDrag, QPixmap
 from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
-from .. import i18n
+from .. import i18n, imaging
 from .controls import ArrowKeyScrollArea
 
 THUMB_W, THUMB_H = 96, 64
@@ -51,7 +51,7 @@ _INITIAL_GRID_CELL_TARGET = THUMB_W  # ~96px, used only to pick the starting col
 
 _REORDER_MIME = "application/x-trichrome-carousel-index"
 # Same set load_image's own file-picker filter accepts.
-_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
+_IMAGE_EXTENSIONS = imaging.IMPORTABLE_EXTENSIONS
 
 
 def _local_image_paths(mime_data: QMimeData) -> list[str]:

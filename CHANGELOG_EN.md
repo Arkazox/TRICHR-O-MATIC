@@ -18,13 +18,37 @@ next — so it doubles as a short roadmap snapshot, not just a history.
 
 ## Unreleased
 
+### Added
+- **RAW file support**: photos can now be imported directly from camera
+  RAW files (Fuji `.RAF`, Canon `.CR2`/`.CR3`, Nikon `.NEF`/`.NRW`, Sony
+  `.ARW`/`.SRF`/`.SR2`, Adobe `.DNG`, Olympus `.ORF`, Panasonic `.RW2`,
+  Pentax `.PEF`, and more) - every file picker in the app (per-channel
+  Load, Solo mode's Load Image, the missing-file relink dialog, every
+  picker in the Batch Import window) and Finder drag-and-drop now accept
+  them alongside PNG/JPEG/TIFF/BMP.
+- **Drag and drop a photo directly onto the preview** itself (while no
+  photo is loaded yet), not just onto the thumbnail strip or grid view.
+- **An "HQ" toggle** next to the zoom buttons: once on, the app shows a
+  full-resolution version of the composed photo a moment after you stop
+  editing, layered on top of the normal fast preview - useful for judging
+  fine detail while zoomed in or in fullscreen, without slowing down live
+  slider/curve edits.
+- **Keyboard shortcuts for zoom**: ⌘+ and ⌘-, alongside the existing Z
+  (100%) and F (fit) shortcuts.
+
+### Changed
+- Dropping the very first photo(s) into a brand-new/empty session now
+  replaces the session's initial empty placeholder instead of leaving it
+  behind as a stray extra thumbnail.
+- The Scan tool now carries a permanent "still under development" notice,
+  since it remains a beta feature.
+
 ### Remaining tasks for future versions
 - **v0.6.0**: a **metadata panel** - not yet specified.
-- **RAW file support** - not started; scoped in conversation, not yet
-  prototyped.
-- A handful of older error dialogs (image load errors, auto-align
-  failure, session-load errors) still use the old system-dialog look and
-  haven't been switched over to the app's own alert style yet.
+- **RAW file support**: a real end-to-end batch import of RAW triplets
+  through the Batch Import window itself hasn't been verified yet with
+  actual camera files (only its filename-matching logic was checked with
+  empty stub files).
 
 ---
 

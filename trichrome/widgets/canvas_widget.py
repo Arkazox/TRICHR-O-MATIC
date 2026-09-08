@@ -4,12 +4,14 @@ scale / rotate it. Plain trackpad scroll pans the view; Ctrl+wheel or a
 trackpad pinch gesture zooms it."""
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QScrollArea
 
-from .. import i18n
+from .. import i18n, imaging
 from .svg_icons import tinted_svg_pixmap
 
 MIN_ZOOM = 0.05
@@ -24,6 +26,18 @@ _GOLDEN_FRACTION_HIGH = 1.0 / _GOLDEN_RATIO       # ~0.618
 _GOLDEN_FRACTION_LOW = 1.0 - _GOLDEN_FRACTION_HIGH  # ~0.382
 
 
+def _local_image_paths(mime_data) -> list[str]:
+    """Same filtering convention as carousel_widget.py's own helper of the
+    same name - local files only, extension checked against every format
+    load_grayscale/load_color can actually open."""
+    if not mime_data.hasUrls():
+        return []
+    return [
+        url.toLocalFile() for url in mime_data.urls()
+        if url.isLocalFile() and os.path.splitext(url.toLocalFile())[1].lower() in imaging.IMPORTABLE_EXTENSIONS
+    ]
+
+
 class _ImageLabel(QLabel):
     drag_delta = Signal(float, float)  # in source-image pixels
     scale_delta = Signal(float)        # multiplicative factor
@@ -34,6 +48,7 @@ class _ImageLabel(QLabel):
     film_base_pick_requested = Signal(float, float)  # normalized x, y
     histogram_pixel_hovered = Signal(float, float)  # normalized x, y
     histogram_pixel_left = Signal()
+    files_dropped = Signal(list)  # local file paths dragged in from Finder
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,6 +60,7 @@ class _ImageLabel(QLabel):
         self.wb_pick_enabled = False
         self.film_base_pick_enabled = False
         self.histogram_pick_enabled = False
+        self._accept_file_drops = False
 
         self.crop_enabled = False
         self._crop_rect = (0.0, 0.0, 1.0, 1.0)  # normalized x, y, w, h
@@ -259,6 +275,36 @@ class _ImageLabel(QLabel):
             self.histogram_pixel_left.emit()
         super().leaveEvent(event)
 
+    # -- external file drop (empty-project placeholder only) --------------
+    def set_accept_file_drops(self, enabled: bool) -> None:
+        """Only armed while the canvas is showing its empty-project
+        placeholder (see CanvasWidget.clear_image/set_image_rgb/
+        set_image_gray) - once a real image is shown, this same area is
+        already used for align-drag/crop-drag/eyedropper interactions, so
+        a generic file drop isn't offered there anymore."""
+        self._accept_file_drops = enabled
+        self.setAcceptDrops(enabled)
+
+    def dragEnterEvent(self, event) -> None:
+        if self._accept_file_drops and _local_image_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if self._accept_file_drops and _local_image_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        paths = _local_image_paths(event.mimeData()) if self._accept_file_drops else []
+        if paths:
+            self.files_dropped.emit(paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
     def wheelEvent(self, event) -> None:
         modifiers = event.modifiers()
         if self.align_enabled and (modifiers & Qt.ShiftModifier):
@@ -357,6 +403,7 @@ class CanvasWidget(QScrollArea):
         self.film_base_pick_requested = self.image_label.film_base_pick_requested
         self.histogram_pixel_hovered = self.image_label.histogram_pixel_hovered
         self.histogram_pixel_left = self.image_label.histogram_pixel_left
+        self.files_dropped = self.image_label.files_dropped
         self.image_label.zoom_delta.connect(self._on_zoom_delta)
 
         self.zoom = 1.0
@@ -409,6 +456,7 @@ class CanvasWidget(QScrollArea):
         if self._showing_placeholder:
             self.setWidgetResizable(False)
         self._showing_placeholder = False
+        self.image_label.set_accept_file_drops(False)
         rgb_uint8 = np.ascontiguousarray(rgb_uint8)
         h, w, _ = rgb_uint8.shape
         qimg = QImage(rgb_uint8.data, w, h, w * 3, QImage.Format_RGB888).copy()
@@ -419,6 +467,7 @@ class CanvasWidget(QScrollArea):
         if self._showing_placeholder:
             self.setWidgetResizable(False)
         self._showing_placeholder = False
+        self.image_label.set_accept_file_drops(False)
         gray_uint8 = np.ascontiguousarray(gray_uint8)
         h, w = gray_uint8.shape
         qimg = QImage(gray_uint8.data, w, h, w, QImage.Format_Grayscale8).copy()
@@ -427,6 +476,7 @@ class CanvasWidget(QScrollArea):
 
     def clear_image(self) -> None:
         self._showing_placeholder = True
+        self.image_label.set_accept_file_drops(True)
         self._qimage = None
         self.image_label.setPixmap(QPixmap())
         self.image_label.setWordWrap(True)

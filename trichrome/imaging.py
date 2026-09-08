@@ -15,12 +15,15 @@ MAX_PREVIEW_DIM = 1400
 _EXIF_DATETIME_ORIGINAL = 36867
 _EXIF_DATETIME = 306
 
+# Extensions load_grayscale/load_color decode via plain PIL.
+RASTER_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
+
 # Extensions load_grayscale/load_color hand to rawpy (LibRaw) instead of
 # PIL. Not exhaustive of everything LibRaw can open - just the common
 # formats worth recognizing by extension; .raf (Fuji) is listed first
 # since the X-T3 is the one camera actually confirmed working with this
 # app's Scan tool so far.
-_RAW_EXTENSIONS = {
+RAW_EXTENSIONS = (
     ".raf",
     ".cr2", ".cr3",
     ".nef", ".nrw",
@@ -30,13 +33,29 @@ _RAW_EXTENSIONS = {
     ".rw2",
     ".pef",
     ".raw",
-}
+)
+
+# Every extension load_grayscale/load_color can actually open - the one
+# shared source of truth for every file picker / drag-and-drop filter /
+# batch-import filename matcher in the app, instead of each keeping its
+# own separately-typed-out copy (which is how RAW support ended up scoped
+# to only the Scan tool at first - nothing else recognized these
+# extensions at all). A plain tuple, not a set, so it also works directly
+# with str.endswith(), which several call sites already rely on.
+IMPORTABLE_EXTENSIONS = RASTER_EXTENSIONS + RAW_EXTENSIONS
 
 
 def is_raw_path(path: str) -> bool:
     """True if ``path``'s extension is one load_grayscale/load_color will
     decode via rawpy/LibRaw instead of PIL."""
-    return os.path.splitext(path)[1].lower() in _RAW_EXTENSIONS
+    return os.path.splitext(path)[1].lower() in RAW_EXTENSIONS
+
+
+def qt_image_name_filter_patterns() -> str:
+    """Space-joined ``*.ext`` glob patterns for every extension
+    load_grayscale/load_color can open - for a QFileDialog name filter,
+    e.g. ``f"Images ({qt_image_name_filter_patterns()})"``."""
+    return " ".join(f"*{ext}" for ext in IMPORTABLE_EXTENSIONS)
 
 
 def _load_raw_rgb_uint16(path: str) -> np.ndarray:

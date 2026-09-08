@@ -127,6 +127,18 @@ _DUPLICATE_SUFFIX_RE = re.compile(r"^(.*) \((\d+)\)$")
 # cost (not this timer) becomes the limiting factor regardless.
 _CURVE_RECOMPUTE_THROTTLE_MS = 16
 
+# HQ Preview (2026-09-08): the live preview always composites from the
+# ~1400px-capped imaging.make_preview() arrays (see MAX_PREVIEW_DIM in
+# imaging.py) - fast enough to stay live on every slider tick, but visibly
+# soft once zoomed in or in fullscreen. Recomposing at full resolution on
+# every tick would defeat that whole point, so HQ Preview mode instead
+# waits for a short idle gap after the last edit (see _arm_hq_preview_if_enabled/
+# _recompute_hq_preview) before swapping in one full-res pass - same
+# "fast while moving, sharp once still" tradeoff as the Curves tool's own
+# throttle above, just a settle-delay (restarted on every edit) rather than
+# a throttle (fires at most once per burst).
+_HQ_PREVIEW_IDLE_MS = 400
+
 # The block system (2026-09-04): every side-panel block (Files/Channels on
 # the left; Histogram/Light/Color/Crop on the right; Scan can live on
 # either) has its own side, position, visibility and collapsed state -
@@ -246,6 +258,13 @@ class MainWindow(QMainWindow):
         self._curve_recompute_timer = QTimer(self)
         self._curve_recompute_timer.setSingleShot(True)
         self._curve_recompute_timer.timeout.connect(lambda: self.recompute_preview(update_curve_reference=False))
+        # HQ Preview toggle (see _HQ_PREVIEW_IDLE_MS above) - not persisted
+        # across launches, same as Compare/Crop-active, since it's an
+        # in-the-moment display choice rather than a saved preference.
+        self.hq_preview_enabled = False
+        self._hq_idle_timer = QTimer(self)
+        self._hq_idle_timer.setSingleShot(True)
+        self._hq_idle_timer.timeout.connect(self._recompute_hq_preview)
         # The exact array last handed to canvas.set_image_rgb/set_image_gray
         # and histogram.set_image - the histogram pixel-pick tool samples
         # from this on hover instead of recomposing anything itself.
@@ -400,6 +419,7 @@ class MainWindow(QMainWindow):
         self.zoom_in_btn.setToolTip(i18n.tr("zoom_in"))
         self.zoom_fit_btn.setToolTip(i18n.tr("zoom_fit_tooltip"))
         self.zoom_100_btn.setToolTip(i18n.tr("zoom_100"))
+        self.hq_preview_btn.setToolTip(i18n.tr("hq_preview_tooltip"))
         self.rotate_left_btn.setToolTip(i18n.tr("rotate_left_tooltip"))
         self.rotate_right_btn.setToolTip(i18n.tr("rotate_right_tooltip"))
         self.compare_btn.setToolTip(i18n.tr("compare_tooltip"))
@@ -664,6 +684,13 @@ class MainWindow(QMainWindow):
         help_shortcut = QShortcut(QKeySequence("F1"), self)
         help_shortcut.activated.connect(self.show_quickstart_dialog)
 
+        zoom_in_shortcut = QShortcut(QKeySequence.ZoomIn, self)
+        zoom_in_shortcut.activated.connect(self.on_zoom_in_clicked)
+        zoom_in_shortcut_eq = QShortcut(QKeySequence("Ctrl+="), self)
+        zoom_in_shortcut_eq.activated.connect(self.on_zoom_in_clicked)
+        zoom_out_shortcut = QShortcut(QKeySequence.ZoomOut, self)
+        zoom_out_shortcut.activated.connect(self.on_zoom_out_clicked)
+
         self._build_top_toolbar()
 
         self.import_panel = ImportPanel()
@@ -774,6 +801,9 @@ class MainWindow(QMainWindow):
         self.zoom_fit_btn.clicked.connect(self.canvas.zoom_fit)
         self.zoom_100_btn.clicked.connect(self.canvas.zoom_100)
 
+        self.hq_preview_btn = SvgCheckableToolButton("Filmstrip/high_quality.svg")
+        self.hq_preview_btn.toggled.connect(self.on_hq_preview_toggled)
+
         self.rotate_left_btn = RotateLeftButton()
         self.rotate_left_btn.clicked.connect(self.on_rotate_left)
 
@@ -828,7 +858,8 @@ class MainWindow(QMainWindow):
         bottom_bar = QWidget()
         bottom_bar_layout = QHBoxLayout(bottom_bar)
         bottom_bar_layout.setContentsMargins(6, 4, 6, 4)
-        for btn in (self.zoom_out_btn, self.zoom_in_btn, self.zoom_fit_btn, self.zoom_100_btn):
+        for btn in (self.zoom_out_btn, self.zoom_in_btn, self.zoom_fit_btn, self.zoom_100_btn,
+                    self.hq_preview_btn):
             bottom_bar_layout.addWidget(btn)
         bottom_bar_layout.addStretch(1)
         bottom_bar_layout.addWidget(self.compare_indicator)
@@ -856,6 +887,7 @@ class MainWindow(QMainWindow):
         self.carousel.duplicate_requested.connect(self.duplicate_batch_item)
         self.carousel.reordered.connect(self.on_carousel_reordered)
         self.carousel.files_dropped.connect(self.on_carousel_files_dropped)
+        self.canvas.files_dropped.connect(self.on_carousel_files_dropped)
         self.scan_panel.add_to_session_requested.connect(self.on_scan_add_to_session_requested)
         self.scan_panel.pick_film_base_from_photo_toggled.connect(self.on_pick_film_base_from_photo_toggled)
         self.scan_panel.apply_film_base_requested.connect(self.on_apply_film_base_requested)
@@ -2093,7 +2125,7 @@ class MainWindow(QMainWindow):
         self.canvas.zoom_fit()
 
     def load_normal_image(self) -> None:
-        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
+        name_filter = f"Images ({imaging.qt_image_name_filter_patterns()});;" + i18n.tr("file_filter_all")
         settings = QSettings(ORG_NAME, APP_NAME)
         start_dir = settings.value("last_import_dir", "")
         path, _ = QFileDialog.getOpenFileName(
@@ -2149,11 +2181,14 @@ class MainWindow(QMainWindow):
         return True
 
     def on_carousel_files_dropped(self, paths: list[str]) -> None:
-        """Photos dragged in from Finder directly onto the thumbnail strip -
-        each becomes its own new Normal-mode photo, appended at the end
-        (per the user's explicit spec: dropped files show up at the end of
-        the filmstrip, treated as Normal mode by default). One unreadable
-        file among several doesn't abort the rest."""
+        """Photos dragged in from Finder directly onto the thumbnail strip,
+        the grid view, or the preview canvas itself while it's showing its
+        empty-project placeholder (CanvasWidget.files_dropped, only armed
+        while there's nothing to show) - each becomes its own new
+        Normal-mode photo, appended at the end (per the user's explicit
+        spec: dropped files show up at the end of the filmstrip, treated
+        as Normal mode by default). One unreadable file among several
+        doesn't abort the rest."""
         new_items = []
         failed = []
         for path in paths:
@@ -2292,6 +2327,17 @@ class MainWindow(QMainWindow):
             show_alert(self, i18n.tr("dialog_load_error_title"),
                        i18n.tr("dialog_drop_photos_failed_text", files=", ".join(failed)))
 
+    @staticmethod
+    def _is_batch_item_empty(item) -> bool:
+        """True if ``item`` has no image data or path in any of its 3
+        trichrome channels nor its normal_layer - i.e. still the
+        untouched placeholder a fresh session/New Session starts with,
+        never a real photo whose channels just failed to load. Same
+        "genuinely empty" criterion the session-restore paths
+        (_legacy_restore_session/_build_restored_items_from_data) already
+        use to drop such an item on load."""
+        return not any(l.path for l in item.layers) and not item.normal_layer.path
+
     def _append_new_batch_items(self, items: list) -> None:
         """Shared tail for dropping files onto the carousel
         (on_carousel_files_dropped) and adding Scan tool captures
@@ -2301,6 +2347,13 @@ class MainWindow(QMainWindow):
         duplicate_batch_item's own carousel-update sequence."""
         if not items:
             return
+        if self.batch_items and all(self._is_batch_item_empty(it) for it in self.batch_items):
+            # These are the very first real photo(s) ever added to this
+            # project - the existing batch is nothing but untouched empty
+            # placeholder(s) (a fresh session's own default item), so drop
+            # them instead of leaving a stray "empty" thumbnail sitting
+            # alongside the real photo(s) being added.
+            self.batch_items = []
         self.batch_items.extend(items)
         new_index = len(self.batch_items) - 1
         added_ids = {id(it) for it in items}
@@ -2705,7 +2758,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def load_image(self, index: int) -> None:
         channel = i18n.channel_name(index)
-        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
+        name_filter = f"Images ({imaging.qt_image_name_filter_patterns()});;" + i18n.tr("file_filter_all")
         settings = QSettings(ORG_NAME, APP_NAME)
         start_dir = settings.value("last_import_dir", "")
         path, _ = QFileDialog.getOpenFileName(
@@ -2934,7 +2987,7 @@ class MainWindow(QMainWindow):
 
         settings = QSettings(ORG_NAME, APP_NAME)
         start_dir = os.path.dirname(layer.path) if layer.path else settings.value("last_import_dir", "")
-        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
+        name_filter = f"Images ({imaging.qt_image_name_filter_patterns()});;" + i18n.tr("file_filter_all")
         path, _ = QFileDialog.getOpenFileName(
             self, i18n.tr("missing_files_relink_dialog_title"), start_dir, name_filter)
         if not path:
@@ -4763,6 +4816,7 @@ class MainWindow(QMainWindow):
             self.canvas.clear_image()
             self.histogram.clear()
             self._last_preview_rgb_u8 = None
+            self._hq_idle_timer.stop()
             return
 
         canvas_h, canvas_w = ref.image_preview.shape[:2]
@@ -4774,6 +4828,7 @@ class MainWindow(QMainWindow):
                 self.canvas.clear_image()
                 self.histogram.clear()
                 self._last_preview_rgb_u8 = None
+                self._hq_idle_timer.stop()
                 return
             warped, pre_curve_toned, gcurve = self._warp_and_tone(solo_layer, canvas_size, ref)
             mask = imaging.warp_coverage_mask(
@@ -4805,20 +4860,16 @@ class MainWindow(QMainWindow):
                 pre_curve_gray_u8 = imaging.to_uint8(pre_curve_toned)
                 pre_curve_rgb_u8 = np.repeat(pre_curve_gray_u8[:, :, None], 3, axis=2)
                 self.curves_panel.set_reference_histogram(pre_curve_rgb_u8, valid_mask=mask > 0.5)
+            # No full-res path for Solo preview (see _recompute_hq_preview) -
+            # make sure a HQ pass queued from before Solo was toggled on
+            # doesn't fire and silently replace this with the composed RGB.
+            self._hq_idle_timer.stop()
             return
 
         images = [l.image_preview if l.has_image() else None for l in self.layers]
         geo_params = [(l.dx, l.dy, l.scale, l.rotation) for l in self.layers]
-        if self._compare_active:
-            tone_params = [(*_NEUTRAL_TONE, l.invert) for l in self.layers]
-            global_params = _NEUTRAL_GLOBAL
-        else:
-            tone_params = [(l.black_point, l.white_point, l.gamma, l.exposure, l.brightness, l.contrast,
-                            l.shadows, l.highlights, l.invert) for l in self.layers]
-            gc = self.global_corr
-            global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
-                              gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
-                              {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
+        tone_params = self._current_tone_params()
+        global_params = self._current_global_params()
         # Split what compose_trichrome would otherwise do as one call, so
         # the pre-curve intermediate is available for the Curves tool's own
         # reference histogram without warping the 3 channels a second time.
@@ -4857,6 +4908,8 @@ class MainWindow(QMainWindow):
         if 0 <= self.batch_current_index < len(self.batch_items):
             self._update_carousel_thumbnail(self.batch_current_index, rgb_u8)
 
+        self._arm_hq_preview_if_enabled()
+
     def _recompute_preview_normal(self, update_curve_reference: bool) -> None:
         """Normal-mode counterpart of the main recompute_preview body above -
         no warp/alignment/harris-shutter/trichrome-recompose step, since
@@ -4870,16 +4923,11 @@ class MainWindow(QMainWindow):
             self.canvas.clear_image()
             self.histogram.clear()
             self._last_preview_rgb_u8 = None
+            self._hq_idle_timer.stop()
             return
 
         image = imaging.apply_invert(layer.image_preview, layer.invert)
-        if self._compare_active:
-            global_params = _NEUTRAL_GLOBAL
-        else:
-            gc = self.global_corr
-            global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
-                              gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
-                              {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
+        global_params = self._current_global_params()
         (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
          gsat, gtemp, gtint, gcurves, gbw) = global_params
         pre_curve_rgb = imaging.apply_global_correction_before_curves(
@@ -4908,6 +4956,27 @@ class MainWindow(QMainWindow):
 
         if 0 <= self.batch_current_index < len(self.batch_items):
             self._update_carousel_thumbnail(self.batch_current_index, rgb_u8)
+
+        self._arm_hq_preview_if_enabled()
+
+    def _current_tone_params(self):
+        """Per-layer tone tuples for the active edit state - shared by the
+        low-res live preview and the HQ full-res pass (_recompute_hq_preview)
+        so the two can never drift apart."""
+        if self._compare_active:
+            return [(*_NEUTRAL_TONE, l.invert) for l in self.layers]
+        return [(l.black_point, l.white_point, l.gamma, l.exposure, l.brightness, l.contrast,
+                 l.shadows, l.highlights, l.invert) for l in self.layers]
+
+    def _current_global_params(self):
+        """Global Light/Color/Curves/B&W tuple for the active edit state -
+        same sharing rationale as _current_tone_params above."""
+        if self._compare_active:
+            return _NEUTRAL_GLOBAL
+        gc = self.global_corr
+        return (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
+                gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
+                {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
 
     def _warp_and_tone(self, layer, canvas_size, ref):
         h, w = layer.image_preview.shape[:2]
@@ -4997,6 +5066,116 @@ class MainWindow(QMainWindow):
         if layer.quarter_turns:
             full = np.ascontiguousarray(np.rot90(full, layer.quarter_turns))
         return full
+
+    def _full_res_image_cached(self, layer) -> np.ndarray:
+        """Like _full_res_image, but also stashes the result on
+        layer.image_full so a *later* HQ pass on this same photo (another
+        slider tweak, still the active photo) reuses the already-decoded
+        array instead of re-reading/re-decoding from disk every single
+        time - the real cost for a batch-imported RAW source, where
+        rawpy's postprocess() can take a second or more per channel.
+        Deliberately not folded into _full_res_image itself, since
+        BatchExportWorker calls that one too and must NOT retain every
+        processed item's full-res array in memory during a big batch
+        export (see _full_res_image's own docstring)."""
+        full = self._full_res_image(layer)
+        if layer.image_full is None:
+            layer.image_full = full
+        return full
+
+    def _full_res_color_image_cached(self, layer) -> np.ndarray:
+        """Normal-mode counterpart of _full_res_image_cached - same caching
+        rationale, see that method's docstring."""
+        full = self._full_res_color_image(layer)
+        if layer.image_full is None:
+            layer.image_full = full
+        return full
+
+    # ------------------------------------------------------------------
+    # HQ Preview (on-demand full-resolution display pass)
+    # ------------------------------------------------------------------
+    def on_hq_preview_toggled(self, checked: bool) -> None:
+        self.hq_preview_enabled = checked
+        if checked:
+            self._arm_hq_preview_if_enabled()
+        else:
+            self._hq_idle_timer.stop()
+            # Revert to the fast low-res frame right away rather than
+            # leaving whatever HQ frame is on screen until the next edit
+            # happens to call recompute_preview() anyway.
+            self.recompute_preview()
+
+    def _arm_hq_preview_if_enabled(self) -> None:
+        """(Re)start the idle countdown to a full-res HQ pass - called from
+        every recompute_preview()/_recompute_preview_normal() exit that just
+        pushed a fresh low-res frame, so a HQ pass always follows once edits
+        actually stop. QTimer.start() on an already-running single-shot
+        timer restarts its countdown, so calling this on every edit is what
+        turns it into a settle-delay (fires N ms after the *last* edit)
+        rather than the Curves throttle's fire-at-most-once-per-burst
+        behavior. No-op outside HQ Preview mode, in Solo mode (no full-res
+        path exists for it - see _recompute_hq_preview), or in Compare mode
+        (a transient before/after view, not worth a full-res pass)."""
+        if not self.hq_preview_enabled:
+            return
+        if any(l.solo for l in self.layers) or self._compare_active:
+            return
+        self._hq_idle_timer.start(_HQ_PREVIEW_IDLE_MS)
+
+    def _recompute_hq_preview(self) -> None:
+        """The idle timer's target - recomposes the active photo at full
+        resolution and swaps it into the canvas in place of the ~1400px
+        preview frame. Reuses imaging.compose_trichrome/compose_normal, the
+        same resolution-agnostic entry points export_worker.py calls for a
+        real export, so this is guaranteed to match the live preview's own
+        look, just sharper. Runs synchronously (with a wait cursor) rather
+        than in a background thread - simpler, and acceptable since it only
+        ever fires once after the user stops editing, never on every tick.
+        A batch-imported item's full-res source (reloaded from disk via
+        _full_res_image_cached/_full_res_color_image_cached, since only a
+        preview is normally kept for those) can make the *first* HQ pass on
+        a given photo noticeably slow - a RAW file's rawpy decode in
+        particular - but that decode is then cached onto the layer, so
+        every further tweak on the same photo only re-runs the (fast, pure
+        numpy) compose/crop step below, not the disk read."""
+        if not self.hq_preview_enabled:
+            return
+        if any(l.solo for l in self.layers) or self._compare_active:
+            return
+        is_normal_mode = (0 <= self.batch_current_index < len(self.batch_items)
+                           and self.batch_items[self.batch_current_index].mode == "normal")
+        if is_normal_mode:
+            if not self.normal_layer.has_image():
+                return
+        else:
+            ref = self._reference_layer()
+            if ref is None or not ref.has_image():
+                return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            if is_normal_mode:
+                layer = self.normal_layer
+                image = imaging.apply_invert(self._full_res_color_image_cached(layer), layer.invert)
+                rgb = imaging.compose_normal(image, self._current_global_params())
+            else:
+                images = [self._full_res_image_cached(l) if l.has_image() else None for l in self.layers]
+                geo_params = [self._full_res_params(l, ref) for l in self.layers]
+                rgb = imaging.compose_trichrome(
+                    images, geo_params, self._current_tone_params(), ref.color_index,
+                    self._current_global_params())
+            if self._crop_active:
+                # Same "show the full frame while cropping" exception as the
+                # live preview - see the matching comment in recompute_preview.
+                rgb = imaging.apply_straighten_mirror(
+                    rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
+            else:
+                rgb = imaging.apply_crop(
+                    rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v,
+                    self.crop.x, self.crop.y, self.crop.width, self.crop.height)
+            self.canvas.set_image_rgb(imaging.to_uint8(rgb))
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _current_export_base_name(self) -> str:
         if 0 <= self.batch_current_index < len(self.batch_items):
