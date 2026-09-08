@@ -96,12 +96,15 @@ def load_grayscale(path: str, channel: Optional[str] = None) -> np.ndarray:
     source that's already single-channel has no channels to pick from
     either way, so it's used as-is regardless of ``channel``.
     """
-    pil_img = Image.open(path)
-    pil_img = _apply_exif_orientation(pil_img)
-    is_single_channel = pil_img.mode in ("L", "I", "I;16", "F")
-    if not is_single_channel:
-        pil_img = pil_img.convert("RGB") if channel else pil_img.convert("L")
-    arr = np.asarray(pil_img)
+    if is_raw_path(path):
+        arr = _load_raw_rgb_uint16(path)
+    else:
+        pil_img = Image.open(path)
+        pil_img = _apply_exif_orientation(pil_img)
+        is_single_channel = pil_img.mode in ("L", "I", "I;16", "F")
+        if not is_single_channel:
+            pil_img = pil_img.convert("RGB") if channel else pil_img.convert("L")
+        arr = np.asarray(pil_img)
 
     if arr.dtype == np.uint8:
         arr = arr.astype(np.float32) / 255.0
@@ -128,10 +131,13 @@ def load_color(path: str) -> np.ndarray:
     photo (as opposed to this app's core case of 3 separate B&W-through-
     filter exposures), e.g. the scan tool's single-shot Color/Color Reversal
     processing preview."""
-    pil_img = Image.open(path)
-    pil_img = _apply_exif_orientation(pil_img)
-    pil_img = pil_img.convert("RGB")
-    arr = np.asarray(pil_img)
+    if is_raw_path(path):
+        arr = _load_raw_rgb_uint16(path)
+    else:
+        pil_img = Image.open(path)
+        pil_img = _apply_exif_orientation(pil_img)
+        pil_img = pil_img.convert("RGB")
+        arr = np.asarray(pil_img)
 
     if arr.dtype == np.uint8:
         arr = arr.astype(np.float32) / 255.0

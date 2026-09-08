@@ -7,7 +7,7 @@ block_cipher = None
 datas = [("resources/icons", "resources/icons")]
 binaries = []
 hiddenimports = ["PySide6.QtSvg"]
-for pkg in ("cv2",):
+for pkg in ("cv2", "rawpy"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

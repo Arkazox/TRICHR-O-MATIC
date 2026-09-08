@@ -783,20 +783,47 @@ picked up/finished rather than reorganizing it per release.
   derived info), where it lives in the UI, whether it's per-channel or
   per-composite, read-only or editable. Don't start without a real
   functional spec.
-- **RAW file support** — not started. Natural integration point:
+- **RAW file support** — first slice landed 2026-09-08, not yet tested
+  against a real camera file (none available in this environment).
   `imaging.py`'s `load_grayscale`/`load_color` (the sole choke points
-  every caller already goes through), decoding via `rawpy` (LibRaw
-  wrapper) into the same float32 array shape those functions already
-  return. `trichrome.spec` already bundles `cv2`'s native binaries via
-  `collect_all()` — the same mechanism would cover `rawpy`'s bundled
-  LibRaw. Open decisions before starting: decode color space (linear vs.
-  sRGB-gamma, to stay consistent with how JPEG/TIFF input is already
-  treated), import/preview performance for a full RAW demosaic, EXIF/
-  capture-date extraction needs a RAW-aware fallback, and X-Trans
-  demosaic quality/speed on the Fuji X-T3 specifically (the one camera
-  confirmed working over gphoto2 tethering so far). Recommended first
-  slice: scope to the Scan tool's own capture/import path rather than
-  opening arbitrary RAW files through the general Import window.
+  every caller already goes through) now branch on `is_raw_path()` (a
+  module-level `_RAW_EXTENSIONS` set — `.raf`/`.cr2`/`.cr3`/`.nef`/`.nrw`/
+  `.arw`/`.srf`/`.sr2`/`.dng`/`.orf`/`.rw2`/`.pef`/`.raw`) and decode via
+  `_load_raw_rgb_uint16()` (`rawpy.imread(...).postprocess(use_camera_wb=True,
+  no_auto_bright=True, output_bps=16)` — sRGB output, not linear, so a RAW
+  source converges into the exact same uint16-normalization/channel-
+  collapse tail the PIL path already had) instead of `PIL.Image.open()`.
+  `requirements.txt` gained `rawpy>=0.21`; `trichrome.spec`'s existing
+  `collect_all()` loop (previously `cv2`-only) now also bundles `rawpy` —
+  confirmed a prebuilt macOS arm64/cp312 wheel exists and bundles
+  `libraw_r.dylib` + its own deps inside the wheel itself, same
+  self-contained shape as the `opencv-python-headless` wheel already
+  bundled here, so no extra system dependency. Verified so far: extension
+  detection, a full headless app boot with `rawpy` imported, pyflakes
+  clean — **not** a real pixel-level decode (no `.RAF` sample in this
+  environment).
+  **Deliberately still scoped narrow**: the general Import window/batch
+  import/Finder drag-and-drop still filter on the older, PNG/JPEG/TIFF/
+  BMP-only `IMAGE_EXTENSIONS` (duplicated in `batch.py`/
+  `carousel_widget.py`/`batch_window.py`), so a RAW file dropped there is
+  still rejected before ever reaching `imaging.py` — untouched on
+  purpose. The Scan tool's own capture path has **no such filter** — it
+  hands whatever path gphoto2 downloaded straight to `load_grayscale`/
+  `load_color` (`scan_panel.py`'s film-base sampling,
+  `scan_tool/process.py`'s preview compose) — so if the camera is set to
+  RAW format, that path should already work end-to-end today, without
+  any further Scan-tool code changes, once verified against a real `.RAF`.
+  Still open: real-hardware verification (a genuine capture with the
+  X-T3 set to RAW, confirming decode correctness and demosaic
+  quality/speed on its X-Trans sensor specifically), and whether/when to
+  widen the general Import window to RAW too (a separate, larger
+  decision — `IMAGE_EXTENSIONS` is currently duplicated 3× (`batch.py`/
+  `carousel_widget.py`/`batch_window.py`) plus repeated inline in several
+  file-dialog name filters, worth consolidating into one shared constant
+  before extending it rather than adding RAW extensions in 3+ places
+  independently). `extract_capture_date()` needed no change — its
+  existing PIL-open-with-fallback-to-mtime already degrades gracefully
+  on a RAW file it can't parse, just without a real EXIF date.
 
 **Smaller items:**
 
