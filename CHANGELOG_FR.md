@@ -21,46 +21,90 @@ pas seulement d'historique.
 
 ## Non publié
 
+### Tâches restantes pour les prochaines versions
+- **v0.6.0** : un **panneau de métadonnées** - pas encore spécifié.
+- **Prise en charge des fichiers RAW** - pas encore commencée ; cadrée en
+  discussion, pas encore prototypée.
+- Quelques anciennes fenêtres d'erreur (erreur de chargement d'image,
+  échec de l'alignement automatique, erreurs de chargement de session)
+  utilisent encore l'ancien style de fenêtre système et n'ont pas encore
+  été basculées vers le style d'alerte propre à l'application.
+
+---
+
+## v0.5.0 — 2026-09-08
+
 ### Ajouté
+- **Un sélecteur de Mode clair** pour chaque photo (bloc Fichiers) :
+  **Solo** (une seule photo déjà composée, éditée telle quelle),
+  **Trichromie N&B** (le cas classique - 3 clichés noir et blanc
+  recomposés en couleur), ou **Trichromie Couleur** (3 vraies photos
+  couleur, chacune conservant son propre canal R/V/B, pour un véritable
+  effet « Harris Shutter ») - chacun avec sa propre icône. La fenêtre
+  d'Import par lot dispose désormais du même choix à 3 options pour
+  importer plusieurs photos à la fois, avec un vocabulaire plus clair dans
+  toute la fenêtre (sections renommées, et boutons d'info « ? »
+  expliquant précisément comment fonctionne l'appariement automatique des
+  fichiers).
+- **Glissez-déposez des photos depuis le Finder** directement sur le
+  bandeau de vignettes - chacune est ajoutée à la session comme une
+  nouvelle photo Solo.
 - **Courbes** : un nouveau bloc outil pour retoucher directement le ton de
-  l'image via une courbe, avec des courbes Y (globale), R, G et B
+  l'image via une courbe, avec des courbes Y (globale), R, V et B
   indépendantes - cliquez sur la ligne diagonale pour ajouter un point,
-  glissez-le pour redessiner la courbe (y compris les deux extrémités,
-  pour définir un point noir/blanc), double-cliquez sur un point pour le
-  supprimer. Masqué par défaut ; affichez-le depuis le menu Outils ou en
-  le glissant dans un panneau comme n'importe quel autre bloc. La ligne de
+  glissez-le pour redessiner la courbe (y compris les deux extrémités, qui
+  peuvent désormais se déplacer dans les deux sens pour un vrai point
+  noir/blanc), double-cliquez sur un point pour le supprimer. La ligne de
   la courbe ainsi qu'un histogramme en transparence affiché derrière elle
   correspondent tous deux au canal en cours d'édition ; cet histogramme
   montre toujours l'image *avant* vos modifications de courbe, pour que
   vous voyiez exactement votre point de départ - le panneau Histogramme
   principal continue d'afficher le résultat final, corrigé.
-- **Scan** : un nouveau bloc outil pour la capture avec un appareil photo
-  relié par câble - statut de connexion en direct, 3 modes de capture
-  (Noir et Blanc / Couleur / Couleur Inversible), un rétroéclairage à
-  l'écran en option (avec une séquence automatique de 3 prises rouge/vert/
-  bleu pour scanner directement un triplet trichrome), un emplacement
-  d'enregistrement et une numérotation de bobine configurables, et un
-  aperçu JPG traité en option pour chaque capture. Masqué par défaut,
-  comme tous les autres blocs. L'import direct des photos capturées dans
-  la session en cours n'est pas encore implémenté - les captures sont
-  enregistrées sur le disque et journalisées dans l'historique du bloc
-  pour l'instant.
+- **L'outil Scan intégré à l'application** comme un bloc à part entière,
+  aux côtés de Traitement Trichrome/Lumière/Couleur/Recadrage/Courbes -
+  capture avec un appareil photo relié par câble, statut de connexion en
+  direct, 3 types de film (Noir et Blanc / Couleur / Couleur Inversible),
+  un rétroéclairage RVB à l'écran en option (avec une séquence
+  automatique de 3 prises rouge/vert/bleu pour scanner directement un
+  triplet trichrome), et une **correction de la couleur de base du
+  film** pour les négatifs couleur (échantillonnez la base transparente
+  du film, ou pointez-la directement sur une photo déjà importée, pour
+  supprimer le masque de couleur orange). Les captures terminées sont
+  désormais ajoutées automatiquement à la session en cours - plus besoin
+  de l'étape manuelle « Ajouter à la session ».
+- **Un vrai bouton Noir et Blanc** dans le panneau Couleur - une véritable
+  conversion en niveaux de gris pondérée par la luminance, disponible dans
+  tous les modes, plutôt qu'une simple mise à zéro de la saturation (qui
+  pouvait faire lire des couleurs différentes à la même luminosité comme
+  la même nuance de gris).
+- Tous les boutons d'info « ? » de l'application s'ouvrent désormais aussi
+  après une demi-seconde de survol, pas seulement au clic.
 
 ### Modifié
 - Les deux graphiques d'histogramme (le panneau Histogramme et l'aperçu
   de l'outil Courbes) affichent désormais la hauteur des barres sur une
-  échelle linéaire plutôt que compressée - les pics hauts et bas
-  reflètent leurs tailles relatives réelles. Un pic très dominant (par
-  exemple une grande zone en noir ou blanc pur) peut toujours écraser le
-  reste du graphique - les petites barres d'avertissement d'écrêtage sur
-  les bords du graphique sont justement là pour signaler ce cas.
+  échelle linéaire - les pics hauts et bas reflètent leurs tailles
+  relatives réelles. Un pic très dominant (par exemple une grande zone en
+  noir ou blanc pur) peut toujours écraser le reste du graphique - les
+  petites barres d'avertissement d'écrêtage sur les bords du graphique
+  sont justement là pour signaler ce cas.
+- « Canaux RVB » renommé **Traitement Trichrome**, et ce bloc (avec
+  l'Alignement automatique et la Position verrouillée, désormais à
+  l'intérieur) grise désormais complètement avec un message clair
+  lorsqu'il ne s'applique pas à la photo active (mode Solo) - comme tous
+  les autres blocs outils lorsqu'ils ne sont pas utilisables, plutôt que
+  de simplement désactiver discrètement quelques contrôles.
+- Dans la fenêtre d'Import par lot, la section « Options avancées »
+  renommée **Règles d'Import**, « Dossier d'entrée » renommé
+  **Sélection des fichiers**, et « Semi-automatique » renommé
+  **Séquentiel** ; la liste des fichiers non appariés est désormais un
+  simple compteur avec la liste complète disponible au survol, au lieu
+  d'une longue ligne de noms de fichiers toujours affichée.
 
-### Tâches restantes pour les prochaines versions
-- **v0.6.0** : un **panneau de métadonnées** - pas encore spécifié.
-- Quelques anciennes fenêtres d'erreur (erreur de chargement d'image,
-  échec de l'alignement automatique, erreurs de chargement de session)
-  utilisent encore l'ancien style de fenêtre système et n'ont pas encore
-  été basculées vers le style d'alerte propre à l'application.
+### Retiré
+- L'option de test webcam/iPhone temporaire de l'outil Scan, qui ne
+  servait qu'à remplacer un véritable appareil photo relié par câble
+  pendant le développement.
 
 ---
 

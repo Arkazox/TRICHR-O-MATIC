@@ -4,18 +4,21 @@ variant) or a single photo (Solo). Auto Align and Lock Layer Position moved
 to the top of the "Trichrome Process" block (main_window.py's
 independent_channels_group) - 2026-09-04.
 
-Negative (invert) moved here, above the mode selector, 2026-09-07 - it's
-per-photo source-interpretation state (which polarity this specific
-photo's files were loaded under), not a "correction" applied afterward, so
-it belongs with the rest of this block's load/mode concerns rather than in
-Light (Negative used to live in LightPanel's header).
+Negative (invert) briefly lived here (2026-09-07) before moving back to
+LightPanel's header the same day, once the user settled on a clearer
+overall split: Negative reads as a Light-adjacent tonal concept to a user,
+even though it's technically per-photo source state - see global_panel.py
+for where it lives now.
 
 Mode selector, unified 2026-09-07 from what used to be two separate
 controls: a plain Normal/Trichrome toggle here, plus an independent
 "Harris Shutter Effect" checkbox down in the Trichrome Process block. Both
 described the same underlying thing - how this photo's files should be
 interpreted - so they're now one 3-way choice, styled like the Crop tool's
-own aspect-ratio selector (icon + label + combo + a "?" info button):
+own aspect-ratio selector (label + combo + a "?" info button - the combo's
+own per-item icon folded the separate icon label the first pass had into
+the combo itself later the same day, once Qt's own item-icon support made
+that redundant):
 **Solo** (BatchItem.mode == "normal" - a single already-composed photo),
 **B&W Trichrome** (mode == "trichrome", ChannelLayer.harris_shutter ==
 False - the classic case, 3 B&W photos through color filters), **Color
@@ -24,26 +27,73 @@ photos, each keeping its own R/G/B channel). See CLAUDE.md's Harris
 Shutter Effect section for the full processing-difference explanation."""
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSize, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget,
+    QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
 from .. import i18n
+from ..paths import icon_path
 from .block_header_bar import finish_block_chrome, start_block_chrome
 from .channel_panel import CHANNEL_COLORS, CHANNEL_KEY
 from .controls import ElidingLabel
-from .info_bubble import show_info_bubble
-from .svg_icons import (
-    HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgCheckableToolButton, SvgColorCheckableToolButton,
-    SvgIconLabel, SvgToolButton,
-)
+from .info_bubble import InfoButton
+from .svg_icons import raw_svg_icon
 
-# Color Film button's fixed "on" tint - deliberately not one of
-# channel_panel.CHANNEL_COLORS (which are reserved for R/G/B) and, per the
-# user's own thematic choice, echoes color negative film's own orange base/
-# mask.
-_COLOR_FILM_TINT = "#e67e22"
+# Size the combo's own item icons are rendered at - matches the 18px
+# default SvgIconLabel used before the Mode row folded its separate icon
+# label into the combo itself (2026-09-07, "un menu déroulant mieux
+# intégré... avec les icones qui s'affichent dans le menu déroulant").
+_MODE_COMBO_ICON_SIZE = 18
+
+# Flat/borderless-at-rest styling so the combo reads as part of the
+# block's own surface rather than a separate native control sitting on
+# top of it (2026-09-07, user's own ask: "un dropdown menu plus sobre et
+# intégré à l'interface... qui se fond plus dans le bloc"). Applying any
+# stylesheet at all switches Qt from native platform chrome to its own
+# QStyleSheetStyle rendering for this one widget - deliberately scoped to
+# just this combo, not a blanket app-wide QComboBox rule, since no other
+# combo in the app (crop_panel.py's aspect-ratio/grid pickers) was asked
+# for this treatment. The dropdown arrow reuses the same
+# General/chevron-down.svg glyph every block's own collapse chevron
+# already uses (already a plain white stroke, so no re-tinting needed -
+# confirmed by rendering it as a QComboBox::down-arrow image, which Qt's
+# QSS engine renders as a real vector cheveron, not a broken image).
+# selection-background-color reuses #5b9bd5, the one accent blue already
+# established elsewhere in the app (the block drag-reorder insertion line).
+_MODE_COMBO_STYLE = f"""
+QComboBox {{
+    background: rgba(255, 255, 255, 14);
+    border: 1px solid rgba(255, 255, 255, 35);
+    border-radius: 4px;
+    padding: 3px 4px 3px 6px;
+    color: #f0f0f0;
+}}
+QComboBox:hover {{
+    background: rgba(255, 255, 255, 24);
+    border: 1px solid rgba(255, 255, 255, 60);
+}}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    border: none;
+    width: 20px;
+}}
+QComboBox::down-arrow {{
+    image: url({icon_path("General/chevron-down.svg")});
+    width: 12px;
+    height: 12px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: #2b2b2b;
+    color: #f0f0f0;
+    border: 1px solid rgba(255, 255, 255, 40);
+    outline: none;
+    selection-background-color: rgba(91, 155, 213, 90);
+    selection-color: #ffffff;
+}}
+"""
+
 
 # Order matches the combo's own item order. Icons are rendered "raw" (their
 # own embedded colors, not the usual single-tint convention - see
@@ -65,13 +115,13 @@ _COLOR_FILM_TINT = "#e67e22"
 # through) with the *middle* card filled instead - the old outline-based
 # General/layers-mode-solo.svg is left on disk, unreferenced, same
 # leave-it-there convention as every other superseded icon in this project.
-_MODE_KEYS = ("solo", "bw_trichrome", "color_trichrome")
-_MODE_ICONS = {
+MODE_KEYS = ("solo", "bw_trichrome", "color_trichrome")
+MODE_ICONS = {
     "solo": "General/stack-middle.svg",
     "bw_trichrome": "General/layers-mode-bw.svg",
     "color_trichrome": "General/layers-mode-color.svg",
 }
-_MODE_LABEL_KEYS = {
+MODE_LABEL_KEYS = {
     "solo": "mode_solo_option",
     "bw_trichrome": "mode_bw_trichrome_option",
     "color_trichrome": "mode_color_trichrome_option",
@@ -91,8 +141,6 @@ class ImportPanel(QGroupBox):
     # actual outcome afterward (including a reverted/cancelled switch).
     mode_change_requested = Signal(str)
     load_normal_requested = Signal()
-    add_photo_requested = Signal()
-    invert_toggled = Signal(bool)
     harris_shutter_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None):
@@ -108,67 +156,41 @@ class ImportPanel(QGroupBox):
         # same-panel included.
         outer, header_row, self.title_label = start_block_chrome(self, "files", "import_panel_title")
         header_row.addStretch(1)
-        # "Add Photo" - appends a new photo to the carousel, same header-
-        # action-button convention as every other block's Reset (companion
-        # size, trailing edge) - see MainWindow.on_add_photo_clicked for
-        # what it actually does per mode.
-        self.add_photo_button = SvgToolButton(
-            "Toolbar/image-plus.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
-        self.add_photo_button.clicked.connect(self.add_photo_requested.emit)
-        header_row.addWidget(self.add_photo_button)
         self.body, root, self.collapse_button, self.close_button = finish_block_chrome(outer, header_row)
 
-        # --- Mode: Solo / B&W Trichrome / Color Trichrome - same visual
-        # recipe as CropPanel's own aspect-ratio row (icon, label, combo,
-        # trailing button), see the module docstring for what each choice
-        # actually means underneath.
+        # --- Mode row: the Solo/B&W Trichrome/Color Trichrome combo, its
+        # "?" info button, and the 3 quick per-photo toggles (B&W Film,
+        # Color Film, Negative) all on one line (2026-09-07, user's own
+        # ask: "retire le mot 'Mode'... mets les boutons... sur la même
+        # ligne"). The standalone "Mode" label is gone entirely - the
+        # combo's own icon (see below) already identifies what the control
+        # is without needing a text label next to it, same reasoning any
+        # icon-only toolbar button in this app already relies on.
+        # AdjustToContents sizes the combo to its *widest* item
+        # ("Color Trichrome"/"Trichromie Couleur"), not just whichever one
+        # happens to be selected - confirmed empirically stable across
+        # every selection - which is what leaves room for the 3 toggle
+        # buttons on the same line without the combo eating all the
+        # available width the way its previous stretch=1 did.
         mode_row = QHBoxLayout()
-        self.mode_icon = SvgIconLabel(_MODE_ICONS["bw_trichrome"])
-        mode_row.addWidget(self.mode_icon)
-        self.mode_select_label = QLabel()
-        mode_row.addWidget(self.mode_select_label)
         self.mode_combo = QComboBox()
+        self.mode_combo.setStyleSheet(_MODE_COMBO_STYLE)
+        self.mode_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.mode_combo.setIconSize(QSize(_MODE_COMBO_ICON_SIZE, _MODE_COMBO_ICON_SIZE))
         self.mode_combo.currentIndexChanged.connect(lambda _i: self._on_mode_combo_changed())
-        mode_row.addWidget(self.mode_combo, stretch=1)
-        self.mode_info_button = QToolButton()
-        self.mode_info_button.setText("?")
-        self.mode_info_button.setFixedSize(18, 18)
-        self.mode_info_button.setStyleSheet("QToolButton { border-radius: 9px; }")
-        self.mode_info_button.clicked.connect(
-            lambda: show_info_bubble(i18n.tr("mode_select_info"), self.mode_info_button))
+        mode_row.addWidget(self.mode_combo)
+        self.mode_info_button = InfoButton("mode_select_info")
         mode_row.addWidget(self.mode_info_button)
+        # The quicker "B&W Film"/"Color Film" shortcut buttons that used
+        # to sit here (duplicating the combo's own B&W/Color Trichrome
+        # entries, and driving the old Solo-N&B cosmetic mechanism) were
+        # removed 2026-09-07 - now fully redundant once Trichrome's B&W/
+        # Color choice is only ever made via this combo, and Solo's own
+        # cosmetic B&W toggle lives in ColorPanel instead (see
+        # global_panel.py's black_white_button). See CLAUDE.md's "Mode
+        # selector" section for the full reasoning.
+        mode_row.addStretch(1)
         root.addLayout(mode_row)
-
-        # --- Below Mode: a quicker, at-a-glance way to set the same
-        # B&W/Color Trichrome choice the combo's last 2 entries already
-        # cover (Film Roll icon, colored by which one's active - gray/white
-        # for B&W, orange/grayed-orange for Color, per the user's explicit
-        # spec), plus Negative (invert) - per-photo source state, not a
-        # correction applied afterward, grouped here rather than living
-        # anywhere else in the app.
-        film_row = QHBoxLayout()
-        self.bw_film_button = SvgCheckableToolButton(
-            "Scan/film.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
-        self.bw_film_button.setCheckable(True)
-        self.bw_film_button.clicked.connect(lambda: self._on_film_type_clicked(False))
-        film_row.addWidget(self.bw_film_button)
-        self.color_film_button = SvgColorCheckableToolButton(
-            "Scan/film.svg", _COLOR_FILM_TINT,
-            size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
-        self.color_film_button.clicked.connect(lambda: self._on_film_type_clicked(True))
-        film_row.addWidget(self.color_film_button)
-        # Not a QButtonGroup - both buttons stay independently clickable
-        # (clicking either always re-applies its own film type, same
-        # re-click-still-applies convention as the Mode combo/default
-        # layout buttons elsewhere in this app) and both can read
-        # unchecked at once (Solo mode - see set_mode_selection), which an
-        # exclusive QButtonGroup can't represent.
-        self.invert_button = SvgCheckableToolButton(
-            "Preview/invert.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
-        self.invert_button.toggled.connect(self.invert_toggled.emit)
-        film_row.addWidget(self.invert_button)
-        film_row.addStretch(1)
-        root.addLayout(film_row)
 
         # --- Trichrome mode: the 3 channel rows + auto-align + lock ---
         self.trichrome_container = QWidget()
@@ -237,25 +259,19 @@ class ImportPanel(QGroupBox):
         self.load_normal_button.setText(
             i18n.tr("change_image_button") if text else i18n.tr("load_image_button"))
 
-    def set_invert(self, checked: bool) -> None:
-        self.invert_button.blockSignals(True)
-        self.invert_button.setChecked(checked)
-        self.invert_button.blockSignals(False)
-
     def is_harris_shutter_active(self) -> bool:
         """Whether the combo's current selection is Color Trichrome - the
         replacement for what used to be a standalone checkbox's
         isChecked(), read by MainWindow at load time (single manual load,
         batch import) to decide luminance vs. real-channel extraction."""
         idx = self.mode_combo.currentIndex()
-        return 0 <= idx < len(_MODE_KEYS) and _MODE_KEYS[idx] == "color_trichrome"
+        return 0 <= idx < len(MODE_KEYS) and MODE_KEYS[idx] == "color_trichrome"
 
     def _on_mode_combo_changed(self) -> None:
         idx = self.mode_combo.currentIndex()
         if idx < 0:
             return
-        key = _MODE_KEYS[idx]
-        self.mode_icon.set_icon_raw(_MODE_ICONS[key])
+        key = MODE_KEYS[idx]
         if key == "solo":
             self.mode_change_requested.emit("normal")
         else:
@@ -267,71 +283,34 @@ class ImportPanel(QGroupBox):
             self.mode_change_requested.emit("trichrome")
             self.harris_shutter_toggled.emit(key == "color_trichrome")
 
-    def _on_film_type_clicked(self, is_color: bool) -> None:
-        """Deliberately never touches mode_change_requested - the film
-        buttons only ever set harris_shutter, in *every* mode, per the
-        user's explicit spec (see CLAUDE.md's "Film type" section): in
-        Trichrome mode this flips which Trichrome variant is active
-        without leaving Trichrome; in Solo mode it stays in Solo and only
-        changes whether this single photo is treated as color or B&W
-        (MainWindow.on_harris_shutter_toggled forces Saturation to 0 and
-        disables the Color block for that case). Uses .clicked (not
-        .toggled) so re-clicking an already-active film button still
-        re-applies it, same "re-click still applies" convention as the
-        built-in default-layout toolbar buttons elsewhere in this app -
-        relevant since these 2 buttons aren't in an exclusive
-        QButtonGroup (see film_row's own construction comment), so a
-        second click on the already-checked one wouldn't otherwise change
-        its checked state at all. Doesn't touch the combo/icon/button
-        checked-state directly - MainWindow round-trips
-        harris_shutter_toggled back into set_mode_selection() below,
-        which resyncs the combo, its icon, and both film buttons together
-        from the model's own state, same as every other per-photo control
-        here."""
-        self.harris_shutter_toggled.emit(is_color)
-
     def set_mode_selection(self, mode: str, harris_shutter: bool) -> None:
-        """Programmatic sync of the Mode combo and the 2 film-type buttons
-        below it (activating a different photo, session restore, undo/
-        redo, a reverted/cancelled mode switch, or a film button's own
-        click round-tripping back here) - blocks signals so this never
-        re-emits mode_change_requested/harris_shutter_toggled.
+        """Programmatic sync of the Mode combo (activating a different
+        photo, session restore, undo/redo, a reverted/cancelled mode
+        switch) - blocks signals so this never re-emits
+        mode_change_requested/harris_shutter_toggled.
 
         ``harris_shutter`` is the *mode-appropriate* value - MainWindow
-        passes self.normal_layer.harris_shutter while in Solo mode (Solo
-        Couleur/Solo N&B) or self.layers[0].harris_shutter otherwise
-        (B&W/Color Trichrome) - two independent per-item flags that both
-        happen to drive the same 2 buttons, one at a time depending on
-        the active mode (see _sync_import_and_channels_ui in
-        main_window.py). Unlike the first pass, the film buttons are no
-        longer forced unchecked in Solo mode - exactly one of them always
-        reflects the current selection, in every mode."""
+        passes self.normal_layer.harris_shutter while in Solo mode or
+        self.layers[0].harris_shutter otherwise (B&W/Color Trichrome) -
+        only the latter actually affects which combo entry is shown
+        (Solo has no B&W/Color Trichrome distinction of its own)."""
         is_normal = mode == "normal"
         key = "solo" if is_normal else ("color_trichrome" if harris_shutter else "bw_trichrome")
         self.mode_combo.blockSignals(True)
-        self.mode_combo.setCurrentIndex(_MODE_KEYS.index(key))
+        self.mode_combo.setCurrentIndex(MODE_KEYS.index(key))
         self.mode_combo.blockSignals(False)
-        self.mode_icon.set_icon_raw(_MODE_ICONS[key])
         self.trichrome_container.setVisible(not is_normal)
         self.normal_container.setVisible(is_normal)
-        self.bw_film_button.blockSignals(True)
-        self.bw_film_button.setChecked(not harris_shutter)
-        self.bw_film_button.blockSignals(False)
-        self.color_film_button.blockSignals(True)
-        self.color_film_button.setChecked(harris_shutter)
-        self.color_film_button.blockSignals(False)
 
     def retranslate_ui(self) -> None:
         self.title_label.setText(i18n.tr("import_panel_title"))
-        self.bw_film_button.setToolTip(i18n.tr("bw_film_button_tooltip"))
-        self.color_film_button.setToolTip(i18n.tr("color_film_button_tooltip"))
-        self.invert_button.setToolTip(i18n.tr("invert_checkbox_tooltip"))
-        self.mode_select_label.setText(i18n.tr("mode_select_label"))
         current = self.mode_combo.currentIndex()
+        dpr = self.mode_combo.devicePixelRatioF() or 1.0
         self.mode_combo.blockSignals(True)
         self.mode_combo.clear()
-        for key in _MODE_KEYS:
-            self.mode_combo.addItem(i18n.tr(_MODE_LABEL_KEYS[key]))
+        for key in MODE_KEYS:
+            icon = raw_svg_icon(MODE_ICONS[key], _MODE_COMBO_ICON_SIZE, dpr)
+            self.mode_combo.addItem(icon, i18n.tr(MODE_LABEL_KEYS[key]))
         self.mode_combo.setCurrentIndex(max(0, current))
         self.mode_combo.blockSignals(False)
         for i, label in enumerate(("R", "G", "B")):
@@ -344,4 +323,3 @@ class ImportPanel(QGroupBox):
             i18n.tr("change_image_button") if self._has_normal_image else i18n.tr("load_image_button"))
         if not self._has_normal_image:
             self.normal_filename_label.setText(i18n.tr("no_image_loaded"))
-        self.add_photo_button.setToolTip(i18n.tr("add_photo_tooltip"))

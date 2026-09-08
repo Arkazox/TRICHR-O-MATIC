@@ -4,12 +4,12 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox, QGroupBox, QHBoxLayout, QPushButton,
-    QToolButton, QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget,
 )
 
 from .. import i18n
 from .controls import CollapsibleSection, SliderSpin
-from .info_bubble import show_info_bubble
+from .info_bubble import InfoButton
 
 CHANNEL_COLORS = {"R": "#e05555", "G": "#3fae4a", "B": "#4a7fe0"}
 CHANNEL_KEY = {"R": "channel_r", "G": "channel_g", "B": "channel_b"}
@@ -48,12 +48,7 @@ class ChannelPanel(QGroupBox):
 
         self.active_checkbox = QCheckBox()
         self.active_checkbox.toggled.connect(self.active_toggled.emit)
-        self.active_info_button = QToolButton()
-        self.active_info_button.setText("?")
-        self.active_info_button.setFixedSize(18, 18)
-        self.active_info_button.setStyleSheet("QToolButton { border-radius: 9px; }")
-        self.active_info_button.clicked.connect(
-            lambda: show_info_bubble(i18n.tr("active_layer_info"), self.active_info_button))
+        self.active_info_button = InfoButton("active_layer_info")
 
         # --- alignment section (collapsible via disclosure arrow, collapsed by default) ---
         self.align_box = CollapsibleSection()

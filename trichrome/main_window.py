@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPalette,
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QApplication, QButtonGroup, QDialog, QFileDialog, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QPushButton, QSizePolicy, QSplitter, QStatusBar,
+    QMainWindow, QMenu, QMessageBox, QPushButton, QSizePolicy, QSplitter, QStackedWidget, QStatusBar,
     QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -43,7 +43,7 @@ from .widgets.global_panel import ColorPanel, LightPanel
 from .widgets.histogram_widget import HistogramPanel
 from .widgets.alert_dialog import show_alert
 from .widgets.import_panel import ImportPanel
-from .widgets.info_bubble import show_info_bubble
+from .widgets.info_bubble import InfoButton
 from .widgets.missing_files_banner import MissingFilesBanner
 from .widgets.mode_switch_dialog import ModeSwitchDialog
 from .widgets.rotate_toggle_button import RotateLeftButton, RotateRightButton
@@ -64,7 +64,10 @@ _NEUTRAL_TONE = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 _IDENTITY_CURVE = ((0.0, 0.0), (1.0, 1.0))
 _CURVE_CHANNELS = ("Y", "R", "G", "B")
 _IDENTITY_CURVES = {ch: _IDENTITY_CURVE for ch in _CURVE_CHANNELS}
-_NEUTRAL_GLOBAL = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, _IDENTITY_CURVES)
+_NEUTRAL_GLOBAL = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, _IDENTITY_CURVES, False)
+
+# Carousel/grid thumbnail source resolution - see _update_carousel_thumbnail.
+_THUMBNAIL_MAX_DIM = 480
 
 
 def _decode_curves(raw: str) -> dict[str, list[tuple[float, float]]]:
@@ -384,8 +387,6 @@ class MainWindow(QMainWindow):
             panel.retranslate_ui()
         self.light_panel.retranslate_ui()
         self.color_panel.retranslate_ui()
-        if not self.color_panel.color_disabled_label.isHidden():
-            self.color_panel.set_disabled_message(i18n.tr("color_disabled_bw_film"))
         self.crop_panel.retranslate_ui()
         self.curves_panel.retranslate_ui()
         self.histogram_title_label.setText(i18n.tr("menu_tools_histogram"))
@@ -412,6 +413,7 @@ class MainWindow(QMainWindow):
         self.sort_action_import_order.setText(i18n.tr("sort_by_import_order"))
         self.sort_action_custom.setText(i18n.tr("sort_by_custom"))
         self.sort_action_reversed.setText(i18n.tr("sort_reverse_order"))
+        self.grid_view_toggle_btn.setToolTip(i18n.tr("grid_view_toggle_tooltip"))
         self.carousel_toggle_btn.setToolTip(i18n.tr("carousel_toggle_tooltip"))
 
         self.new_session_toolbar_btn.setToolTip(i18n.tr("menu_new_session"))
@@ -668,8 +670,6 @@ class MainWindow(QMainWindow):
         self.import_panel.load_requested.connect(self.load_image)
         self.import_panel.mode_change_requested.connect(self.on_import_mode_change_requested)
         self.import_panel.load_normal_requested.connect(self.load_normal_image)
-        self.import_panel.add_photo_requested.connect(self.on_add_photo_clicked)
-        self.import_panel.invert_toggled.connect(self.on_invert_toggled)
         self.import_panel.harris_shutter_toggled.connect(self.on_harris_shutter_toggled)
 
         self.channel_panels = [ChannelPanel(layer.label) for layer in self.layers]
@@ -680,12 +680,7 @@ class MainWindow(QMainWindow):
         # scope_info_button (2026-09-04, added here per the user's
         # explicit request - "ajoute le même bouton pour l'outil RGB
         # Channels").
-        self.channels_scope_info_button = QToolButton()
-        self.channels_scope_info_button.setText("?")
-        self.channels_scope_info_button.setFixedSize(18, 18)
-        self.channels_scope_info_button.setStyleSheet("QToolButton { border-radius: 9px; }")
-        self.channels_scope_info_button.clicked.connect(
-            lambda: show_info_bubble(i18n.tr("channels_scope_info"), self.channels_scope_info_button))
+        self.channels_scope_info_button = InfoButton("channels_scope_info")
         independent_channels_header.addWidget(self.channels_scope_info_button)
         independent_channels_header.addStretch(1)
         self.reset_all_alignment_button = SvgToolButton(
@@ -731,12 +726,7 @@ class MainWindow(QMainWindow):
             lock_row.addWidget(btn)
             self.lock_buttons.append(btn)
         lock_row.addStretch(1)
-        self.lock_info_button = QToolButton()
-        self.lock_info_button.setText("?")
-        self.lock_info_button.setFixedSize(18, 18)
-        self.lock_info_button.setStyleSheet("QToolButton { border-radius: 9px; }")
-        self.lock_info_button.clicked.connect(
-            lambda: show_info_bubble(i18n.tr("lock_layer_position_info"), self.lock_info_button))
+        self.lock_info_button = InfoButton("lock_layer_position_info")
         lock_row.addWidget(self.lock_info_button)
         independent_channels_layout.addLayout(lock_row)
 
@@ -779,8 +769,8 @@ class MainWindow(QMainWindow):
         self.zoom_in_btn = SvgToolButton("Preview/zoom_in.svg")
         self.zoom_fit_btn = SvgToolButton("Preview/fit_screen.svg")
         self.zoom_100_btn = SvgToolButton("Preview/view_real_size.svg")
-        self.zoom_out_btn.clicked.connect(self.canvas.zoom_out)
-        self.zoom_in_btn.clicked.connect(self.canvas.zoom_in)
+        self.zoom_out_btn.clicked.connect(self.on_zoom_out_clicked)
+        self.zoom_in_btn.clicked.connect(self.on_zoom_in_clicked)
         self.zoom_fit_btn.clicked.connect(self.canvas.zoom_fit)
         self.zoom_100_btn.clicked.connect(self.canvas.zoom_100)
 
@@ -819,6 +809,9 @@ class MainWindow(QMainWindow):
         self.sort_menu.addAction(self.sort_action_reversed)
         self.sort_btn.setMenu(self.sort_menu)
 
+        self.grid_view_toggle_btn = SvgCheckableToolButton("General/grid-3x3.svg", icon_size=14)
+        self.grid_view_toggle_btn.toggled.connect(self.on_grid_view_toggled)
+
         self.carousel_toggle_btn = FilmstripToggleButton()
         self.carousel_toggle_btn.toggled.connect(self._on_carousel_toggle_btn)
 
@@ -848,6 +841,7 @@ class MainWindow(QMainWindow):
         bottom_bar_layout.addSpacing(4)
         bottom_bar_layout.addWidget(self.fullscreen_btn)
         bottom_bar_layout.addWidget(self.sort_btn)
+        bottom_bar_layout.addWidget(self.grid_view_toggle_btn)
         bottom_bar_layout.addWidget(self.carousel_toggle_btn)
 
         self.carousel = CarouselWidget()
@@ -869,15 +863,31 @@ class MainWindow(QMainWindow):
         self.missing_files_banner = MissingFilesBanner()
         self.missing_files_banner.locate_clicked.connect(self.on_locate_missing_files)
 
+        # Grid mode (the "Grid" toolbar button) reparents self.carousel
+        # itself into preview_stack, in place of self.canvas, instead of
+        # using a second widget - see on_grid_view_toggled(). Only
+        # self.canvas lives here at construction time; self.carousel is
+        # added/removed dynamically as its mode toggles.
+        self.preview_stack = QStackedWidget()
+        self.preview_stack.addWidget(self.canvas)
+
         canvas_container = QWidget()
         canvas_layout = QVBoxLayout(canvas_container)
         canvas_layout.setContentsMargins(0, 0, 0, 0)
         canvas_layout.setSpacing(0)
         canvas_layout.addWidget(self.missing_files_banner)
-        canvas_layout.addWidget(self.canvas, stretch=1)
-        canvas_layout.addWidget(bottom_bar)
+        canvas_layout.addWidget(self.preview_stack, stretch=1)
+        # self.carousel sits ABOVE bottom_bar (not below it) so bottom_bar -
+        # zoom/rotate/compare/fullscreen/sort/grid/thumbnails-toggle - stays
+        # pinned to the true bottom edge of the preview window at all times,
+        # regardless of whether the filmstrip strip is shown/hidden below
+        # it. on_grid_view_toggled() must preserve this order when it
+        # reparents self.carousel back out of preview_stack.
         canvas_layout.addWidget(self.carousel)
+        canvas_layout.addWidget(bottom_bar)
         self.canvas_container = canvas_container
+        self.canvas_layout = canvas_layout
+        self.bottom_bar = bottom_bar
 
         # Title added 2026-09-04 (had been left off on purpose in earlier
         # passes - the user changed their mind and asked for it back).
@@ -1464,9 +1474,11 @@ class MainWindow(QMainWindow):
 
         self.light_panel.changed.connect(self.on_global_changed)
         self.light_panel.reset_requested.connect(self.on_reset_light)
+        self.light_panel.invert_toggled.connect(self.on_invert_toggled)
         self.color_panel.changed.connect(self.on_global_changed)
         self.color_panel.reset_requested.connect(self.on_reset_white_balance)
         self.color_panel.pick_white_balance_toggled.connect(self.on_pick_white_balance_toggled)
+        self.color_panel.black_white_toggled.connect(self.on_black_white_toggled)
         self.canvas.white_balance_pick_requested.connect(self.on_white_balance_picked)
         self.canvas.film_base_pick_requested.connect(self.on_film_base_pick_requested)
         self.histogram.pick_toggled.connect(self.canvas.set_histogram_pick_enabled)
@@ -1519,15 +1531,58 @@ class MainWindow(QMainWindow):
         self.recompute_preview()
 
     def _on_carousel_toggle_btn(self, checked: bool) -> None:
-        self.carousel.setVisible(checked and len(self.batch_items) >= 2)
+        self._update_carousel_visibility()
+
+    # ------------------------------------------------------------------
+    # Grid view - the filmstrip's own "fullscreen" mode: the exact same
+    # CarouselWidget instance, just reparented into preview_stack (in
+    # place of the canvas) and switched into its grid layout
+    # (CarouselWidget.set_grid_mode) instead of the bottom "bande" strip -
+    # so every filmstrip feature (drag-to-reorder, right-click menu,
+    # selection) keeps working unchanged, there's nothing separate to
+    # keep in sync. There's no need for the bottom strip to also show
+    # while this is up, so it's simply moved rather than duplicated.
+    # ------------------------------------------------------------------
+    def on_grid_view_toggled(self, checked: bool) -> None:
+        if checked:
+            self.canvas_layout.removeWidget(self.carousel)
+            self.preview_stack.addWidget(self.carousel)
+            self.preview_stack.setCurrentWidget(self.carousel)
+            self.carousel.set_grid_mode(True)
+        else:
+            self.preview_stack.removeWidget(self.carousel)
+            self.preview_stack.setCurrentWidget(self.canvas)
+            self.carousel.set_grid_mode(False)
+            # Insert back right before bottom_bar (not appended at the
+            # layout's end), so bottom_bar stays the last/bottom-most item.
+            self.canvas_layout.insertWidget(self.canvas_layout.indexOf(self.bottom_bar), self.carousel)
+        self.zoom_fit_btn.setEnabled(not checked)
+        self.zoom_100_btn.setEnabled(not checked)
+        self._update_carousel_visibility()
+
+    def on_zoom_in_clicked(self) -> None:
+        if self.grid_view_toggle_btn.isChecked():
+            self.carousel.zoom_in()
+        else:
+            self.canvas.zoom_in()
+
+    def on_zoom_out_clicked(self) -> None:
+        if self.grid_view_toggle_btn.isChecked():
+            self.carousel.zoom_out()
+        else:
+            self.canvas.zoom_out()
 
     def _update_carousel_visibility(self, force_show: bool = False) -> None:
         multi = len(self.batch_items) >= 2
-        self.carousel_toggle_btn.setEnabled(multi)
-        self.window_thumbnails_action.setEnabled(multi)
-        if force_show and multi:
+        grid_active = self.grid_view_toggle_btn.isChecked()
+        self.carousel_toggle_btn.setEnabled(multi and not grid_active)
+        self.window_thumbnails_action.setEnabled(multi and not grid_active)
+        if force_show and multi and not grid_active:
             self.carousel_toggle_btn.setChecked(True)
-        self.carousel.setVisible(multi and self.carousel_toggle_btn.isChecked())
+        if grid_active:
+            self.carousel.setVisible(True)
+        else:
+            self.carousel.setVisible(multi and self.carousel_toggle_btn.isChecked())
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape and self._is_focus_mode:
@@ -1543,6 +1598,11 @@ class MainWindow(QMainWindow):
             # deliberately does NOT hide the Crop block/change layout
             # (2026-09-04), unlike a plain set_block_visible("crop", False).
             self._set_crop_active(False)
+            event.accept()
+            return
+
+        if event.key() == Qt.Key_Escape and self.grid_view_toggle_btn.isChecked():
+            self.grid_view_toggle_btn.setChecked(False)
             event.accept()
             return
 
@@ -1587,6 +1647,12 @@ class MainWindow(QMainWindow):
                 and event.modifiers() == Qt.NoModifier
                 and self.carousel_toggle_btn.isEnabled()):
             self.carousel_toggle_btn.toggle()
+            event.accept()
+            return
+
+        if (not text_editing and event.key() == Qt.Key_G
+                and event.modifiers() == Qt.NoModifier):
+            self.grid_view_toggle_btn.toggle()
             event.accept()
             return
 
@@ -1703,7 +1769,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Batch import (background load of many triplets into independent items)
     # ------------------------------------------------------------------
-    def start_batch_import(self, triplets, ref_letter: str, auto_align: bool, replace: bool) -> None:
+    def start_batch_import(
+        self, triplets, ref_letter: str, auto_align: bool, replace: bool, harris_shutter: bool,
+    ) -> None:
+        """``harris_shutter`` is now an explicit parameter (2026-09-07) -
+        the only caller, BatchWindow.start_import(), derives it from its
+        own Processing Mode radios (B&W/Color Trichrome) rather than this
+        reaching into self.import_panel.is_harris_shutter_active(), which
+        used to silently read whatever the *main window's currently active
+        photo* happened to have set, regardless of what's actually being
+        batch-imported."""
         self._import_replace = replace
         self._import_pending = [None] * len(triplets)
         self.statusBar().showMessage(i18n.tr("batch_import_status_running", i=0, n=len(triplets)))
@@ -1713,7 +1788,7 @@ class MainWindow(QMainWindow):
             triplets=triplets,
             ref_letter=ref_letter,
             auto_align=auto_align,
-            harris_shutter=self.import_panel.is_harris_shutter_active(),
+            harris_shutter=harris_shutter,
         )
         self._import_worker.moveToThread(self._import_thread)
         self._import_thread.started.connect(self._import_worker.run)
@@ -1855,7 +1930,7 @@ class MainWindow(QMainWindow):
             gc = item.global_corr
             global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
                               gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
-                              {ch: tuple(pts) for ch, pts in gc.curves.items()})
+                              {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
             rgb = imaging.compose_normal(image, global_params)
             self._update_carousel_thumbnail(index, imaging.to_uint8(rgb))
             return
@@ -1869,12 +1944,17 @@ class MainWindow(QMainWindow):
         gc = item.global_corr
         global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
                           gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
-                          {ch: tuple(pts) for ch, pts in gc.curves.items()})
+                          {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
         rgb = imaging.compose_trichrome(images, geo_params, tone_params, ref.color_index, global_params)
         self._update_carousel_thumbnail(index, imaging.to_uint8(rgb))
 
     def _update_carousel_thumbnail(self, index: int, rgb_u8: np.ndarray) -> None:
-        small, _ = imaging.make_preview(rgb_u8, max_dim=110)
+        # max_dim is well above the filmstrip's own small on-screen size
+        # (THUMB_W/THUMB_H, ~96px) on purpose - the same pixmap is reused,
+        # scaled up, for grid-mode cells (see CarouselWidget._reflow_grid),
+        # which can display much larger than the filmstrip - a 110px source
+        # (the old value) read as visibly pixelated once enlarged there.
+        small, _ = imaging.make_preview(rgb_u8, max_dim=_THUMBNAIL_MAX_DIM)
         small = np.ascontiguousarray(small)
         h, w = small.shape[:2]
         qimg = QImage(small.data, w, h, w * 3, QImage.Format_RGB888).copy()
@@ -1889,22 +1969,6 @@ class MainWindow(QMainWindow):
     # recompute_preview's mode branch), only the RGB Channels tool (which
     # only makes sense for the 3-channel case) becomes unavailable.
     # ------------------------------------------------------------------
-    def _solo_bw_active(self) -> bool:
-        """True while the active photo is Solo mode with the B&W film type
-        selected (normal_layer.harris_shutter False) - the one state that
-        disables the whole Color block (see set_disabled_message below).
-        Shared between _sync_channels_panel_availability (drives the
-        disable itself) and recompute_preview (must not let its own
-        has_color_correction()-driven reset_button sync re-enable it - a
-        real bug caught 2026-09-07: editing Light triggered a
-        recompute_preview that unconditionally overwrote
-        color_panel.reset_button.setEnabled(...), silently reactivating it
-        while Color was still supposed to be fully disabled)."""
-        if not (0 <= self.batch_current_index < len(self.batch_items)):
-            return False
-        return (self.batch_items[self.batch_current_index].mode == "normal"
-                and not self.normal_layer.harris_shutter)
-
     def _sync_channels_panel_availability(self, mode: str) -> None:
         is_normal = mode == "normal"
         # Grays out and disables the whole block (channel_panels/lock row/
@@ -1924,14 +1988,6 @@ class MainWindow(QMainWindow):
         # so ChannelPanel.set_frame_disabled grays them explicitly.
         for panel in self.channel_panels:
             panel.set_frame_disabled(is_normal)
-        # "Solo N&B" (Solo mode, B&W film selected - normal_layer.harris_shutter
-        # False) disables the Color block's own tools, with an explanatory
-        # message in place of the sliders - see the "Film type" section in
-        # CLAUDE.md for the full mode x film-type behavior matrix this is
-        # one cell of. Every other combination (Solo Couleur, either
-        # Trichrome variant) leaves Color fully active.
-        solo_bw = self._solo_bw_active()
-        self.color_panel.set_disabled_message(i18n.tr("color_disabled_bw_film") if solo_bw else None)
 
     def _sync_import_and_channels_ui(self) -> None:
         """Shared tail, called any time the active item's mode, its Harris
@@ -2031,17 +2087,8 @@ class MainWindow(QMainWindow):
 
     def _switch_to_trichrome_mode(self, item) -> None:
         self.push_undo()
-        # Leaving a "Solo N&B" selection (see on_harris_shutter_toggled)
-        # restores whatever saturation was set to before it got forced to
-        # 0.0 - the same restore the film buttons do when switching back
-        # to "Solo Couleur" directly, just reached via the Mode combo
-        # instead.
-        if item.saturation_before_bw is not None:
-            item.global_corr.saturation = item.saturation_before_bw
-            item.saturation_before_bw = None
         item.mode = "trichrome"
         self._sync_import_and_channels_ui()
-        self._sync_global_panel_from_model()
         self.recompute_preview()
         self.canvas.zoom_fit()
 
@@ -2101,44 +2148,6 @@ class MainWindow(QMainWindow):
         self.canvas.zoom_fit()
         return True
 
-    def on_add_photo_clicked(self) -> None:
-        """Files block header button ("Add Photo") - appends a brand-new
-        photo to the carousel, rather than loading into the active one.
-        Normal mode: picks one file and adds it directly, already loaded.
-        Trichrome mode: adds an empty trichrome item, ready for its 3 R/G/B
-        channels to be loaded via the Files block as usual."""
-        is_normal = (0 <= self.batch_current_index < len(self.batch_items)
-                     and self.batch_items[self.batch_current_index].mode == "normal")
-        if is_normal:
-            self._add_normal_photo()
-        else:
-            self._add_trichrome_photo()
-
-    def _add_normal_photo(self) -> None:
-        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
-        settings = QSettings(ORG_NAME, APP_NAME)
-        start_dir = settings.value("last_import_dir", "")
-        path, _ = QFileDialog.getOpenFileName(
-            self, i18n.tr("load_normal_dialog_title"), start_dir, name_filter)
-        if not path:
-            return
-        settings.setValue("last_import_dir", os.path.dirname(path))
-        try:
-            new_item = self._build_normal_batch_item(path)
-        except Exception as exc:
-            QMessageBox.critical(self, i18n.tr("dialog_load_error_title"),
-                                  i18n.tr("dialog_load_error_text", error=exc))
-            return
-        self.push_undo()
-        self._append_new_batch_items([new_item])
-
-    def _add_trichrome_photo(self) -> None:
-        new_item = BatchItem(
-            base="", paths={}, layers=new_project_layers(),
-            global_corr=GlobalCorrection(), mode="trichrome", selected=True)
-        self.push_undo()
-        self._append_new_batch_items([new_item])
-
     def on_carousel_files_dropped(self, paths: list[str]) -> None:
         """Photos dragged in from Finder directly onto the thumbnail strip -
         each becomes its own new Normal-mode photo, appended at the end
@@ -2161,10 +2170,10 @@ class MainWindow(QMainWindow):
 
     def _build_normal_batch_item(self, path: str, film_base: dict | None = None) -> BatchItem:
         """Loads ``path`` as a fresh Normal-mode BatchItem, ready to append -
-        shared by _add_normal_photo (file picker), on_carousel_files_dropped
-        (drag-and-drop from Finder), and on_scan_add_to_session_requested
-        (Scan tool captures). Raises whatever imaging.load_color raises on
-        a bad/unreadable file - callers decide how to surface that.
+        shared by on_carousel_files_dropped (drag-and-drop from Finder) and
+        on_scan_add_to_session_requested (Scan tool captures). Raises
+        whatever imaging.load_color raises on a bad/unreadable file -
+        callers decide how to surface that.
 
         ``film_base`` (optional {"R"/"G"/"B": float}) is stored on the
         layer *and* applied to the loaded pixel data - see
@@ -2196,9 +2205,9 @@ class MainWindow(QMainWindow):
         paths (currently only the Scan tool's RGB Light triplet - see
         on_scan_add_to_session_requested) - same load/layer shape as
         BatchImportWorker._build_item (import_worker.py), minus auto-align:
-        left at identity, same as _add_trichrome_photo's empty item, since
-        the Trichrome Process block's own Auto Align button is right there
-        to run afterward rather than guessing whether the user wants it.
+        left at identity, since the Trichrome Process block's own Auto
+        Align button is right there to run afterward rather than guessing
+        whether the user wants it.
         ``invert`` is applied uniformly to all 3 layers, same invariant
         on_invert_toggled maintains elsewhere. Raises whatever
         imaging.load_grayscale raises on a bad/unreadable file - the caller
@@ -2231,6 +2240,11 @@ class MainWindow(QMainWindow):
             layer.is_reference = (letter == "G")
             layer.invert = invert
             layer.film_base = film_base
+            # Explicit, not just relying on ChannelLayer's own default -
+            # an RGB Light triplet is always recomposed as Standard (B&W)
+            # Trichrome, never Color Trichrome, per the user's own
+            # "RGB Light = Standard Trichrome" mapping (2026-09-08).
+            layer.harris_shutter = False
             layers.append(layer)
         item_base = os.path.splitext(os.path.basename(paths_by_channel["G"]))[0]
         capture_date = imaging.extract_capture_date(paths_by_channel["G"])
@@ -2244,7 +2258,18 @@ class MainWindow(QMainWindow):
         RGB Light triplet), each already resolved to real file path(s) and
         the invert value the Scan tool's own Film mode implies. Mirrors
         on_carousel_files_dropped's "load what you can, report the rest"
-        convention: one bad file among several doesn't block the others."""
+        convention: one bad file among several doesn't block the others.
+
+        ``black_white`` (2026-09-08) is the Film mode's own "force this
+        composite to true neutral gray" flag (True only for B&W) - applied
+        here, uniformly across both kinds, onto the freshly-built item's
+        GlobalCorrection.black_white_active, per the user's "en fonction
+        des films" auto-processing spec (see ScanPanel._auto_add_to_session's
+        own docstring for the full mapping). The Light-mode half of that
+        same spec ("External/White = Solo, RGB Light = Standard Trichrome")
+        needs no extra code here - it's already exactly what ``kind``
+        ("normal" vs "trichrome") and _build_trichrome_batch_item_from_paths's
+        own explicit harris_shutter=False already produce."""
         new_items = []
         failed = []
         for g in groups:
@@ -2256,6 +2281,7 @@ class MainWindow(QMainWindow):
                 else:
                     item = self._build_trichrome_batch_item_from_paths(
                         g["paths"], g["invert"], g.get("film_base"))
+                item.global_corr.black_white_active = g.get("black_white", False)
                 new_items.append(item)
             except Exception:
                 failed.append(os.path.basename(label) if label else "?")
@@ -2267,11 +2293,12 @@ class MainWindow(QMainWindow):
                        i18n.tr("dialog_drop_photos_failed_text", files=", ".join(failed)))
 
     def _append_new_batch_items(self, items: list) -> None:
-        """Shared tail for "Add Photo" (both modes) and dropping files onto
-        the carousel - appends ``items`` at the end of batch_items, makes
-        them the sole selection, activates the last one, and refreshes the
-        carousel/thumbnails. Mirrors duplicate_batch_item's own carousel-
-        update sequence."""
+        """Shared tail for dropping files onto the carousel
+        (on_carousel_files_dropped) and adding Scan tool captures
+        (on_scan_add_to_session_requested) - appends ``items`` at the end
+        of batch_items, makes them the sole selection, activates the last
+        one, and refreshes the carousel/thumbnails. Mirrors
+        duplicate_batch_item's own carousel-update sequence."""
         if not items:
             return
         self.batch_items.extend(items)
@@ -2320,7 +2347,7 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.import_panel.set_invert(self._active_invert_state())
+        self.light_panel.set_invert(self._active_invert_state())
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
         self._sync_import_and_channels_ui()
@@ -2362,6 +2389,7 @@ class MainWindow(QMainWindow):
             "highlights": gc.highlights, "saturation": gc.saturation,
             "temperature": gc.temperature, "tint": gc.tint,
             "curves": {ch: list(pts) for ch, pts in gc.curves.items()},
+            "black_white_active": gc.black_white_active,
         }
         # Crop rides along in every copy (like color, unlike alignment), but
         # deliberately isn't restored by the regular Paste below - only the
@@ -2408,11 +2436,12 @@ class MainWindow(QMainWindow):
             gc.saturation = gdata["saturation"]
             gc.temperature, gc.tint = gdata["temperature"], gdata["tint"]
             gc.curves = {ch: list(pts) for ch, pts in gdata["curves"].items()}
+            gc.black_white_active = gdata.get("black_white_active", False)
 
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.import_panel.set_invert(self._active_invert_state())
+            self.light_panel.set_invert(self._active_invert_state())
             self._sync_import_and_channels_ui()
             self._sync_global_panel_from_model()
             self.recompute_preview()
@@ -2497,13 +2526,12 @@ class MainWindow(QMainWindow):
                 layer.invert = False
             item.normal_layer.invert = False
             item.global_corr.reset()
-            item.saturation_before_bw = None
             item.crop.reset()
 
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.import_panel.set_invert(self._active_invert_state())
+            self.light_panel.set_invert(self._active_invert_state())
             self._sync_import_and_channels_ui()
             self._sync_global_panel_from_model()
             if self.block_visible.get("crop", False):
@@ -2544,7 +2572,6 @@ class MainWindow(QMainWindow):
             layers=[copy.copy(l) for l in src.layers],
             global_corr=copy.copy(src.global_corr),
             mode=src.mode, normal_layer=copy.copy(src.normal_layer),
-            saturation_before_bw=src.saturation_before_bw,
             selected=False,
             capture_date=src.capture_date,
         )
@@ -2571,7 +2598,6 @@ class MainWindow(QMainWindow):
                     global_corr=copy.copy(it.global_corr),
                     crop=copy.copy(it.crop),
                     mode=it.mode, normal_layer=copy.copy(it.normal_layer),
-                    saturation_before_bw=it.saturation_before_bw,
                     selected=it.selected, uid=it.uid,
                     capture_date=it.capture_date, custom_order=it.custom_order,
                 ) for it in self.batch_items
@@ -2608,7 +2634,7 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.import_panel.set_invert(self._active_invert_state())
+        self.light_panel.set_invert(self._active_invert_state())
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
         self._sync_import_and_channels_ui()
@@ -3095,6 +3121,7 @@ class MainWindow(QMainWindow):
             gc.temperature = settings.value("g_temperature", 0.0, type=float)
             gc.tint = settings.value("g_tint", 0.0, type=float)
             gc.curves = _decode_curves(settings.value("g_curves", "", type=str))
+            gc.black_white_active = settings.value("g_black_white_active", False, type=bool)
 
             cr = CropSettings()
             cr.x = settings.value("crop_x", 0.0, type=float)
@@ -3241,7 +3268,7 @@ class MainWindow(QMainWindow):
             layer = self.layers[i]
             self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
             self._sync_panel_from_layer(i)
-        self.import_panel.set_invert(self._active_invert_state())
+        self.light_panel.set_invert(self._active_invert_state())
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
         self._sync_import_and_channels_ui()
@@ -3293,6 +3320,7 @@ class MainWindow(QMainWindow):
                     "shadows": gc.shadows, "highlights": gc.highlights,
                     "saturation": gc.saturation, "temperature": gc.temperature, "tint": gc.tint,
                     "curves": {ch: [[x, y] for x, y in pts] for ch, pts in gc.curves.items()},
+                    "black_white_active": gc.black_white_active,
                 },
                 "crop": {
                     "x": cr.x, "y": cr.y, "width": cr.width, "height": cr.height,
@@ -3423,6 +3451,7 @@ class MainWindow(QMainWindow):
                 else [tuple(p) for p in _IDENTITY_CURVE]
                 for ch in _CURVE_CHANNELS
             }
+            gc.black_white_active = g.get("black_white_active", False)
 
             cr = CropSettings()
             c = item_data.get("crop", {})
@@ -3595,6 +3624,10 @@ class MainWindow(QMainWindow):
         # CurveEditor.set_points() doesn't emit `changed` itself (only real
         # mouse interaction does), so no blockSignals dance needed here.
         self.curves_panel.set_curves(gc.curves)
+        # set_black_white_active() has its own blockSignals for the toggle
+        # itself and also drives the sliders/WB/Reset disabled state - not
+        # folded into the block_signals_all()/set_value() dance above.
+        cp.set_black_white_active(gc.black_white_active)
 
     def _save_session_state(self) -> None:
         """Persist every batch item (photos + their alignment/color settings)
@@ -3667,6 +3700,7 @@ class MainWindow(QMainWindow):
             settings.setValue("g_temperature", gc.temperature)
             settings.setValue("g_tint", gc.tint)
             settings.setValue("g_curves", json.dumps({ch: list(pts) for ch, pts in gc.curves.items()}))
+            settings.setValue("g_black_white_active", gc.black_white_active)
 
             cr = item.crop
             settings.setValue("crop_x", cr.x)
@@ -3865,7 +3899,7 @@ class MainWindow(QMainWindow):
         # Re-derive from the active photo's actual (possibly unchanged, if
         # it wasn't among targets) state, rather than trusting `checked`
         # blindly - keeps the button honest in that edge case.
-        self.import_panel.set_invert(self._active_invert_state())
+        self.light_panel.set_invert(self._active_invert_state())
 
     def on_active_toggled(self, index: int, checked: bool) -> None:
         if checked:
@@ -3889,6 +3923,60 @@ class MainWindow(QMainWindow):
                 and self.batch_items[self.batch_current_index].mode == "normal"):
             return self.normal_layer.invert
         return self.layers[0].invert
+
+    def on_black_white_toggled(self, checked: bool) -> None:
+        """ColorPanel's Black & White toggle - purely cosmetic, mode-
+        agnostic (works the same on Solo or either Trichrome photo, since
+        it only ever touches the final composited/corrected image, never
+        how the source was decoded - see global_panel.py's module
+        docstring). Applies to every currently-selected photo at once,
+        falling back to the active one (_target_batch_indices, same
+        convention as on_invert_toggled/on_harris_shutter_toggled) -
+        always sets the explicit new `checked` state rather than toggling
+        each photo against its own prior state, so a mixed-state
+        selection converges on one result.
+
+        Originally implemented (2026-09-07) by forcing
+        GlobalCorrection.saturation to 0.0 - replaced the same day with a
+        real grayscale conversion (imaging.apply_black_white, applied as
+        the pipeline's very last step in recompute_preview/
+        compose_trichrome/compose_normal) once the user asked what the
+        actual difference was: this app's saturation slider works in HSV
+        space, so saturation=0 only grays a pixel to HSV's V
+        (max(R,G,B)), not a true perceptually-weighted luminance - a
+        saturated red and a saturated blue at the same V would read as
+        identical grays, which a real B&W conversion (and the human eye)
+        wouldn't. `saturation` itself is now left completely untouched by
+        this toggle; only `GlobalCorrection.black_white_active` changes.
+
+        The old "Solo N&B" mechanism this once coexisted with (Files'
+        bw_film_button/color_film_button forcing saturation via
+        on_harris_shutter_toggled, and ColorPanel.set_disabled_message's
+        full-block disable) was retired entirely 2026-09-07, once the
+        user settled on this toggle as the *only* way to make a photo
+        read as B&W, in any mode - see CLAUDE.md's "Mode selector"
+        section for the full history. This method and its field
+        (GlobalCorrection.black_white_active) are now the sole
+        mechanism, with nothing left to coexist with."""
+        targets = self._target_batch_indices()
+        if not targets:
+            return
+        self.push_undo()
+        for idx in targets:
+            gc = self.batch_items[idx].global_corr
+            if gc.black_white_active == checked:
+                continue
+            gc.black_white_active = checked
+            if idx != self.batch_current_index:
+                self._refresh_carousel_thumbnail_for_item(idx)
+        if self.batch_current_index in targets:
+            self._sync_global_panel_from_model()
+            self.recompute_preview()
+        else:
+            # The active photo wasn't targeted - keep the button honest
+            # against whatever it actually holds, rather than the clicked
+            # state.
+            self.color_panel.set_black_white_active(self.global_corr.black_white_active)
 
     # ------------------------------------------------------------------
     # Alignment / tone parameter changes from the panels
@@ -3965,35 +4053,32 @@ class MainWindow(QMainWindow):
         self.recompute_preview()
 
     def on_harris_shutter_toggled(self, checked: bool) -> None:
-        """Harris Shutter/film-type is per-item state now (ChannelLayer.harris_shutter,
-        kept identical across a photo's 3 Trichrome channels - see the
-        field's own docstring in model.py), not one session-wide flag - so
-        this applies to every currently-selected photo at once, falling
-        back to just the active one (_target_batch_indices, same
-        convention as on_locate_missing_files/on_invert_toggled). Always
-        sets the explicit new `checked` value, never toggles against prior
-        state, so a selection with mixed harris_shutter states converges
-        on one state instead of each photo flipping independently.
+        """Harris Shutter/Trichrome decode strategy is per-item state
+        (ChannelLayer.harris_shutter, kept identical across a photo's 3
+        Trichrome channels - see the field's own docstring in model.py),
+        not one session-wide flag - so this applies to every currently-
+        selected photo at once, falling back to just the active one
+        (_target_batch_indices, same convention as
+        on_locate_missing_files/on_invert_toggled). Always sets the
+        explicit new `checked` value, never toggles against prior state,
+        so a selection with mixed harris_shutter states converges on one
+        state instead of each photo flipping independently.
 
-        **Deliberately branches on each targeted item's own current mode -
-        unlike invert, this does NOT write both layers[0].harris_shutter
-        and normal_layer.harris_shutter unconditionally.** The two
-        represent genuinely independent choices (which Trichrome variant,
-        vs. Solo Couleur/N&B - see the "Film type" section in CLAUDE.md
-        for the full behavior matrix), each remembered on its own across
-        mode switches - a real bug caught by testing exactly that
-        (switching Solo→B&W Trichrome→Solo lost the Solo-specific
-        selection, because an earlier version of this method wrote
-        normal_layer.harris_shutter unconditionally every time, clobbering
-        it whenever a Trichrome-variant pick happened to also flow through
-        here). For a Trichrome item: reloads each channel that has a real
-        loaded image from disk under the new interpretation (luminance vs.
-        its own R/G/B channel - see imaging.load_grayscale). For a Solo
-        item: forces GlobalCorrection.saturation to 0.0 when switching to
-        B&W (Color Trichrome, and re-selecting Color, don't touch
-        saturation at all - only the Solo+B&W transition does). Future
-        loads (single manual load or batch import) pick up the new
-        Trichrome mode automatically since they all read
+        **Trichrome-only, Solo items in the target selection are skipped
+        entirely (2026-09-07).** This used to also drive a "Solo N&B"
+        cosmetic mechanism (forcing GlobalCorrection.saturation to 0 via
+        Files' now-removed bw_film_button/color_film_button) - retired per
+        the user's own explicit direction: the Mode combo is now the only
+        indicator of whether Trichrome photos should be processed as B&W
+        or Color (Harris Shutter Effect); Solo's own cosmetic B&W concept
+        lives entirely in ColorPanel.black_white_button/
+        MainWindow.on_black_white_toggled now, fully independent of this
+        method - see CLAUDE.md's "Mode selector" section for the full
+        history. Reloads each channel that has a real loaded image from
+        disk under the new interpretation (luminance vs. its own R/G/B
+        channel - see imaging.load_grayscale). Future loads (single
+        manual load or batch import) pick up the new Trichrome mode
+        automatically since they all read
         ImportPanel.is_harris_shutter_active() at load time."""
         targets = self._target_batch_indices()
         if not targets:
@@ -4002,23 +4087,6 @@ class MainWindow(QMainWindow):
         for idx in targets:
             item = self.batch_items[idx]
             if item.mode == "normal":
-                was_color = item.normal_layer.harris_shutter
-                item.normal_layer.harris_shutter = checked
-                saturation_changed = False
-                if not checked and was_color:
-                    # Genuine Couleur -> N&B transition - remember the
-                    # current saturation so leaving B&W can restore it,
-                    # rather than re-saving 0.0 on a re-click while
-                    # already in B&W.
-                    item.saturation_before_bw = item.global_corr.saturation
-                    item.global_corr.saturation = 0.0
-                    saturation_changed = True
-                elif checked and not was_color and item.saturation_before_bw is not None:
-                    item.global_corr.saturation = item.saturation_before_bw
-                    item.saturation_before_bw = None
-                    saturation_changed = True
-                if saturation_changed and idx != self.batch_current_index:
-                    self._refresh_carousel_thumbnail_for_item(idx)
                 continue
             item_reloaded = False
             for ci, layer in enumerate(item.layers):
@@ -4142,7 +4210,7 @@ class MainWindow(QMainWindow):
         gc = self.global_corr
         global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
                           gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
-                          {ch: tuple(pts) for ch, pts in gc.curves.items()})
+                          {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
         is_normal = (0 <= self.batch_current_index < len(self.batch_items)
                      and self.batch_items[self.batch_current_index].mode == "normal")
         if is_normal:
@@ -4647,13 +4715,13 @@ class MainWindow(QMainWindow):
         also avoids paying for a second straighten/crop/to_uint8 pass that
         would just get thrown away unused."""
         self.light_panel.reset_button.setEnabled(self.global_corr.has_light_correction())
-        # Never re-enable Color's own Reset while the whole Color block is
-        # disabled (Solo N&B) - has_color_correction() doesn't know about
+        # Never re-enable Color's own Reset while the B&W toggle has it
+        # partially disabled - has_color_correction() doesn't know about
         # that state, so left unguarded this would silently reactivate the
         # button the moment any *other* edit (e.g. a Light slider) called
-        # recompute_preview, even though set_disabled_message already
-        # turned the whole block off.
-        if not self._solo_bw_active():
+        # recompute_preview, even though set_black_white_active already
+        # turned it off.
+        if not self.global_corr.black_white_active:
             self.color_panel.reset_button.setEnabled(self.global_corr.has_color_correction())
         self.crop_panel.reset_button.setEnabled(self.crop.has_crop())
         self.curves_panel.reset_button.setEnabled(self.global_corr.has_curve_correction())
@@ -4750,18 +4818,20 @@ class MainWindow(QMainWindow):
             gc = self.global_corr
             global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
                               gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
-                              {ch: tuple(pts) for ch, pts in gc.curves.items()})
+                              {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
         # Split what compose_trichrome would otherwise do as one call, so
         # the pre-curve intermediate is available for the Curves tool's own
         # reference histogram without warping the 3 channels a second time.
         rgb0 = imaging.compose_rgb_from_channels(images, geo_params, tone_params, ref.color_index)
         mask = imaging.compose_coverage_mask(images, geo_params, ref.color_index)
         (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-         gsat, gtemp, gtint, gcurves) = global_params
+         gsat, gtemp, gtint, gcurves, gbw) = global_params
         pre_curve_rgb = imaging.apply_global_correction_before_curves(
             rgb0, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
             gsat, gtemp, gtint)
         rgb = imaging.apply_curves(pre_curve_rgb, gcurves)
+        if gbw:
+            rgb = imaging.apply_black_white(rgb)
         rgb = np.clip(rgb, 0.0, 1.0)
 
         rgb = imaging.apply_straighten_mirror(rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
@@ -4809,13 +4879,15 @@ class MainWindow(QMainWindow):
             gc = self.global_corr
             global_params = (gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
                               gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
-                              {ch: tuple(pts) for ch, pts in gc.curves.items()})
+                              {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
         (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-         gsat, gtemp, gtint, gcurves) = global_params
+         gsat, gtemp, gtint, gcurves, gbw) = global_params
         pre_curve_rgb = imaging.apply_global_correction_before_curves(
             image, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
             gsat, gtemp, gtint)
         rgb = imaging.apply_curves(pre_curve_rgb, gcurves)
+        if gbw:
+            rgb = imaging.apply_black_white(rgb)
         rgb = np.clip(rgb, 0.0, 1.0)
 
         rgb = imaging.apply_straighten_mirror(rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)

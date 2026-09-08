@@ -18,40 +18,76 @@ next — so it doubles as a short roadmap snapshot, not just a history.
 
 ## Unreleased
 
-### Added
-- **Curves**: a new tool block for direct tone-curve editing, with
-  independent Y (master), R, G, and B curves - click the diagonal line to
-  add a point, drag it to reshape the curve (including the two endpoints,
-  for a black/white point), double-click a point to remove it. Hidden by
-  default; show it from the Tools menu or by dragging it into a panel like
-  any other block. The curve line and a translucent histogram behind it
-  both match whichever channel you're editing; that background histogram
-  always shows the image *before* your curve edits, so you can see exactly
-  what you're starting from - the main Histogram panel still shows the
-  final, corrected result.
-- **Scan**: a new tool block for tethered capture from a connected camera -
-  live connect/disconnect status, 3 capture modes (Black & White / Color /
-  Color Reversal), an optional on-screen backlight (including an automatic
-  red/green/blue 3-shot sequence for scanning straight into a trichrome
-  triplet), configurable save location and roll numbering, and an optional
-  processed JPG preview alongside each capture. Hidden by default, like
-  every other block. Importing captured photos directly into the current
-  session isn't built yet - captures are saved to disk and logged in the
-  block's own history for now.
-
-### Changed
-- Both histogram charts (the Histogram panel and the Curves tool's own
-  overlay) now plot bin height on a plain linear scale instead of a
-  compressed one - tall and short peaks read at their real relative sizes.
-  A single very dominant spike (e.g. a large pure-black or pure-white
-  area) can still dwarf the rest of the chart - the small clip-warning
-  bars at the chart's edges are there for exactly that case.
-
 ### Remaining tasks for future versions
 - **v0.6.0**: a **metadata panel** - not yet specified.
+- **RAW file support** - not started; scoped in conversation, not yet
+  prototyped.
 - A handful of older error dialogs (image load errors, auto-align
   failure, session-load errors) still use the old system-dialog look and
   haven't been switched over to the app's own alert style yet.
+
+---
+
+## v0.5.0 — 2026-09-08
+
+### Added
+- **A clear Mode selector** for every photo (Files block): **Solo** (a
+  single already-composed photo, edited as-is), **B&W Trichrome** (the
+  classic case - 3 black & white shots recomposed into color), or **Color
+  Trichrome** (3 real color photos, each keeping its own R/G/B channel, for
+  a genuine "Harris Shutter" look) - each with its own icon. The Batch
+  Import window gained the same 3-way choice for importing many photos at
+  once, alongside clearer wording throughout (renamed sections, and "?"
+  info buttons explaining exactly how automatic file matching works).
+- **Drag and drop photos from Finder** straight onto the thumbnail strip -
+  each one is added to the session as a new Solo photo.
+- **Curves**: a new tool block for direct tone-curve editing, with
+  independent Y (master), R, G, and B curves - click the diagonal line to
+  add a point, drag it to reshape the curve (including the two endpoints,
+  which can now move both directions for a real black/white point),
+  double-click a point to remove it. The curve line and a translucent
+  histogram behind it both match whichever channel you're editing; that
+  background histogram always shows the image *before* your curve edits,
+  so you can see exactly what you're starting from - the main Histogram
+  panel still shows the final, corrected result.
+- **Scan tool integrated into the app** as a regular block, alongside
+  Trichrome Process/Light/Color/Crop/Curves - tethered capture from a
+  connected camera, live connect/disconnect status, 3 film types (Black &
+  White / Color / Color Reversal), an optional on-screen RGB backlight
+  (including an automatic red/green/blue 3-shot sequence for scanning
+  straight into a trichrome triplet), and **film-base color correction**
+  for color negatives (sample the film's clear base, or pick it directly
+  from an already-imported photo, to remove the orange-mask color cast).
+  Finished captures are now added to the current session automatically -
+  no more manual "Add to Session" step.
+- **A real Black & White toggle** in the Color panel - a genuine
+  luminance-weighted grayscale conversion, available in every mode, rather
+  than just zeroing out saturation (which could make different colors of
+  the same brightness read as the same shade of gray).
+- Every "?" info button in the app now also opens after hovering for half
+  a second, not just on click.
+
+### Changed
+- Both histogram charts (the Histogram panel and the Curves tool's own
+  overlay) now plot bin height on a plain linear scale - tall and short
+  peaks read at their real relative sizes. A single very dominant spike
+  (e.g. a large pure-black or pure-white area) can still dwarf the rest of
+  the chart - the small clip-warning bars at the chart's edges are there
+  for exactly that case.
+- "RGB Channels" renamed **Trichrome Process**, and it (along with Auto
+  Align and Lock Layer Position, now living inside it) visibly grays out
+  with a clear message whenever it doesn't apply to the active photo
+  (Solo mode) - matching how every other tool block behaves when it's not
+  usable, instead of just disabling a few controls quietly.
+- The Batch Import window's "Advanced Options" section renamed **Import
+  Rules**, "Input folder" renamed **File Selection**, and "Semi-automatic"
+  renamed **Sequential**; its unmatched-files list is now a compact count
+  with the full list available on hover instead of a long, always-visible
+  line of filenames.
+
+### Removed
+- The temporary webcam/iPhone testing option for the Scan tool, only ever
+  meant to stand in for a real tethered camera during development.
 
 ---
 

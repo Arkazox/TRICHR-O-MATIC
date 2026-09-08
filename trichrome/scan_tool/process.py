@@ -32,8 +32,10 @@ _NEUTRAL_TONE = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 # compose_trichrome's positional unpack would raise
 # "not enough values to unpack" on every RGB-triplet recompose - a real
 # latent bug this integration pass caught, since nothing had exercised
-# process_rgb_triplet since curves were added.
-_NEUTRAL_GLOBAL = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, {})
+# process_rgb_triplet since curves were added. 13th element (added
+# 2026-09-07, same reason) is ColorPanel's Black & White toggle -
+# False here means the neutral/identity value, same convention.
+_NEUTRAL_GLOBAL = (0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, {}, False)
 _REF_INDEX = 1  # "G" - matches the main app's default reference channel.
 
 

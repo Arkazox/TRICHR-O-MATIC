@@ -126,6 +126,7 @@ EN = {
     "dialog_locate_failed_column_photo": "Photo",
     "dialog_locate_failed_column_channel": "Channel",
 
+    "black_white_button_tooltip": "Black & White",
     "pick_white_balance_tooltip": "Pick White Balance (W) - click a point in the preview that should be neutral gray",
     "reset_white_balance_tooltip": "Reset Color (Temperature, Tint, Saturation)",
     "reset_light_tooltip": "Reset Light (Brightness, Contrast, Highlights, Shadows, Whites, Blacks, Gamma)",
@@ -179,7 +180,6 @@ EN = {
 
     "independent_channels_group_title": "Trichrome Process",
     "import_panel_title": "Files",
-    "mode_select_label": "Mode",
     "mode_solo_option": "Solo",
     "mode_bw_trichrome_option": "B&W Trichrome",
     "mode_color_trichrome_option": "Color Trichrome",
@@ -196,16 +196,12 @@ EN = {
         "<span style=\"color:#9a9a9a;\">Simulates RGB filters from 3 color photos, each keeping "
         "its own real channel, to create a &quot;Harris Shutter Effect&quot;</span>"
     ),
-    "bw_film_button_tooltip": "B&W Film (Black & White Trichrome)",
-    "color_film_button_tooltip": "Color Film (Color Trichrome)",
     "load_normal_dialog_title": "Load Image",
-    "add_photo_tooltip": "Add Photo",
     "status_photo_added": "Photo added",
     "status_photos_added": "{n} photo(s) added",
     "dialog_drop_photos_failed_text": "Could not load the following file(s):\n{files}",
     "normal_photo_label": "Photo",
-    "channels_disabled_normal_mode": "Tool available only in Trichrome mode",
-    "color_disabled_bw_film": "Tool Disabled: Black & White Film Selected",
+    "channels_disabled_normal_mode": "This tool is only available for trichrome photographs",
     "mode_switch_dialog_title": "Trichrome Photo",
     "mode_switch_dialog_text": (
         "Are you sure you want to switch back to Normal mode? Choose which "
@@ -230,6 +226,7 @@ EN = {
     "batch_import_status_done": "{n} photo(s) imported.",
     "carousel_empty_hint": "No photos imported yet — use the “Import…” button at the top of the sidebar.",
     "carousel_toggle_tooltip": "Show/hide thumbnails",
+    "grid_view_toggle_tooltip": "Grid view (G)",
     "sort_button_tooltip": "Sort thumbnails",
     "sort_by_filename": "By Filename",
     "sort_by_capture_date": "By Capture Date",
@@ -244,22 +241,44 @@ EN = {
     "export_no_items": "No photo to export.",
     "close_button": "Close",
     "batch_mode_auto_radio": "Automatic",
-    "batch_mode_semi_radio": "Semi-automatic",
+    "batch_mode_semi_radio": "Sequential",
     "batch_mode_manual_radio": "Manual",
     "batch_mode_info": (
         "<b>Automatic</b> — files are grouped by a filter marker found in their name (Red, Green, "
         "Blue, Yellow or Infrared - any position, case-insensitive). Which filter fills which R/G/B "
-        "channel depends on the mode picked in <b>Advanced Options</b> below (Classic, IR Trichrome, "
+        "channel depends on the mode picked in <b>Import Rules</b> below (Classic, IR Trichrome, "
         "Aerochrome…). Files sharing an identical name once that marker is removed form one triplet; "
         "otherwise, a plain numbered sequence (Image1, Image2, Image3…) is grouped 3 relevant files "
         "at a time, in order.<br><br>"
-        "<b>Semi-automatic</b> — select a batch of images at once, already in R, G, B, R, G, B… "
+        "<b>Sequential</b> — select a batch of images at once, already in R, G, B, R, G, B… "
         "order (drag to reorder if needed): the first 3 form one triplet, the next 3 the next one, "
         "and so on.<br><br>"
         "<b>Manual</b> — pick the files for the R, G and B columns independently, useful when "
         "filenames don't follow any pattern at all. Row N of each column forms one triplet."
     ),
-    "batch_advanced_options_title": "Advanced Options",
+    "batch_advanced_options_title": "Import Rules",
+    "batch_auto_import_rules_info": (
+        "<b>Auto-Import Rules</b><br>"
+        "<span style=\"color:#9a9a9a;\">Define the automatic file-detection settings and how they "
+        "get assigned to the R/G/B Channels</span>"
+    ),
+    "batch_advanced_options_info": (
+        "<b>Classic Trichrome</b><br>"
+        "<span style=\"color:#9a9a9a;\">Standard mapping - the R, G and B filtered photos fill "
+        "the R, G and B channels directly</span>"
+        "<br><br>"
+        "<b>IR Trichrome</b><br>"
+        "<span style=\"color:#9a9a9a;\">The Red channel is filled by an infrared-filtered photo "
+        "instead - Green and Blue stay standard</span>"
+        "<br><br>"
+        "<b>Aerochrome</b><br>"
+        "<span style=\"color:#9a9a9a;\">Simulates Kodak Aerochrome's shifted mapping - Red channel "
+        "from Infrared, Green channel from Red, Blue channel from Green</span>"
+        "<br><br>"
+        "<b>Custom</b><br>"
+        "<span style=\"color:#9a9a9a;\">Freely assign which filter feeds each channel, using the "
+        "filters defined below</span>"
+    ),
     "batch_advanced_mode_classic": "Classic Trichrome",
     "batch_advanced_mode_ir": "IR Trichrome",
     "batch_advanced_mode_aerochrome": "Aerochrome",
@@ -288,14 +307,22 @@ EN = {
                            "to reorder them — row N of each column forms one triplet."),
     "batch_manual_mismatch_warning": "Columns have different counts (R: {r}, G: {g}, B: {b}) — only the first {n} will be paired.",
     "batch_select_files_title": "Select the {channel} images",
-    "batch_input_group": "Input folder",
+    "batch_processing_mode_group": "Processing Mode",
+    "batch_solo_group": "Photos",
+    "batch_solo_select_images_button": "Select Image(s)…",
+    "batch_solo_select_folder_button": "Select Folder…",
+    "batch_solo_select_images_title": "Select photos to import",
+    "batch_solo_select_folder_title": "Select a folder of photos to import",
+    "batch_solo_count": "{n} photo(s) queued",
+    "batch_solo_no_photos": "No photos selected to import.",
+    "batch_input_group": "File Selection",
     "batch_browse_button": "Browse…",
     "batch_rescan_button": "Rescan",
     "batch_no_folder": "No folder selected",
     "batch_select_input_title": "Select the input folder",
     "batch_select_output_title": "Select the output folder",
     "batch_triplets_found": "{n} matched triplets",
-    "batch_unmatched_label": "{n} unmatched files (ignored):",
+    "batch_unmatched_label": "{n} unmatched files (ignored)",
     "batch_align_auto_checkbox": ("Auto-align each image individually (otherwise, layers stay at "
                                    "their default position)"),
     "batch_output_folder_label": "Output folder:",
@@ -348,54 +375,94 @@ EN = {
 
     "help_quickstart_title": "Quick Start",
     "help_quickstart_content": """
-<h3>Simple mode (one photo)</h3>
+<h3>Choose a mode for each photo</h3>
+<p>The <b>Files</b> block's <b>Mode</b> selector decides how a photo is processed:</p>
+<ul>
+<li><b>Solo</b> — a single, already-composed photo (color or B&amp;W), loaded and edited
+as-is — no channel recomposition.</li>
+<li><b>B&amp;W Trichrome</b> — the classic case: 3 black &amp; white shots taken through
+Red/Green/Blue (or IR/custom) filters, recomposed into one color image.</li>
+<li><b>Color Trichrome</b> — 3 real color photos, each keeping its own R, G or B channel
+(a "Harris Shutter" look), instead of being flattened to grayscale.</li>
+</ul>
+<p>Loading photos and Auto Align/Lock Layer Position live in the
+<b>Trichrome Process</b> block (Trichrome modes only) — Solo mode instead shows a single
+"Load Image" button in Files. You can also just drag image files from Finder onto the
+thumbnail strip; each one is added as a new Solo photo.</p>
+<h3>Editing tools</h3>
+<ul>
+<li><b>Trichrome Process</b> — per-channel alignment/tone controls (drag directly on the
+canvas, Shift+scroll to scale, Alt/Option+scroll to rotate, or use the sliders), plus
+<b>Auto Align</b> and <b>Lock Layer Position</b>.</li>
+<li><b>Light</b> and <b>Color</b> — the overall look of the composed image: exposure,
+brightness, contrast, highlights/shadows/whites/blacks, gamma, negative (Light); and
+temperature, tint, saturation, white balance eyedropper, and a <b>Black &amp; White</b>
+toggle for a true luminance-weighted grayscale conversion (Color).</li>
+<li><b>Crop</b> — pick an aspect ratio, straighten, mirror, choose a grid overlay, then
+click <b>Activate</b> to drag/resize the crop rectangle directly on the canvas. Press
+<b>Enter</b> to apply it, or <b>Esc</b> to cancel without changing anything.</li>
+<li><b>Curves</b> — a classic tone-curve editor with independent Y (master), R, G and B
+curves: click the diagonal line to add a point, drag it to reshape the curve (including
+the two endpoints, for a real black/white point), double-click a point to remove it.</li>
+<li><b>Scan</b> — tethered capture from a connected camera: live connect/disconnect
+status, 3 film types (Black &amp; White / Color / Color Reversal), an optional on-screen
+backlight (including an automatic red/green/blue 3-shot sequence for scanning straight
+into a trichrome triplet), and film-base color correction for color negatives. Finished
+captures are added to the current session automatically.</li>
+</ul>
+<p>Every one of these lives in its own movable <b>block</b> — see "Customizing your
+layout" below. A small icon button at the bottom of each block resets just that part
+(hover it for details), and each block's own Reset button greys out once there's
+nothing left to reset.</p>
+<h3>Customizing your layout</h3>
+<ul>
+<li>Drag any block by its grip handle to reorder it, move it to the other side panel, or
+drop it near another block to slot it in above/below (a blue dashed line shows where it
+will land).</li>
+<li>Each block can be <b>collapsed</b> to just its header, or <b>closed</b> entirely — use
+the <b>Tools</b> menu to bring a closed block back.</li>
+<li>The toolbar's <b>Trichrome / Color Correction / Crop / Scan</b> buttons (and their
+<b>T / E / C / S</b> shortcuts) jump straight to your own saved layout for that task —
+save your current arrangement under one of those names from
+<b>Window ▸ Layout Preset ▸ Save Layout as Preset…</b> to customize what each one shows.
+You can also save any number of your own named layouts the same way.</li>
+<li><b>Window ▸ Reset Layout</b> restores the app's original default arrangement.</li>
+</ul>
+<h3>Importing many photos at once (Batch Import)</h3>
 <ol>
-<li>Load the Red, Green and Blue shots from the <b>Current Picture</b> panel on the
-left (or the File menu).</li>
-<li>As soon as all three are loaded, the other two channels are <b>auto-aligned</b>
-against the locked channel automatically (or click <b>Auto Align</b> in the
-<b>Current Picture</b> panel to redo it anytime).</li>
-<li>Pick a different locked channel anytime with the <b>R / G / B</b> buttons under
-<b>Lock layer position</b>, in the <b>Current Picture</b> panel — it defines the canvas
-size and orientation (Green by default).</li>
-<li>Fine-tune alignment and color correction per channel (left), and the overall look —
-including <b>Negative</b>, <b>Highlights/Shadows/Whites/Blacks</b> and
-<b>Temperature/Tint</b> — in <b>Global Correction</b> (right). The small icon
-buttons at the bottom of each panel reset just that part (hover them for details).</li>
-<li>Click <b>Export…</b> to choose an output folder/format and save the result.</li>
+<li>Click the <b>Import Images…</b> button at the top of the sidebar (or press Cmd+I).</li>
+<li>Choose a <b>Processing Mode</b> — Solo, B&amp;W Trichrome, or Color Trichrome — for the
+whole batch.</li>
+<li>In Trichrome mode, pick how files are matched: <b>Automatic</b> (by filename),
+<b>Sequential</b> (select files already in R, G, B order), or <b>Manual</b> (pick each
+column yourself) — click the <b>?</b> buttons for details, including the <b>Import
+Rules</b> that decide which filter feeds which channel (Classic, IR, Aerochrome, or a
+fully custom mapping). In Solo mode, just select individual images or a whole folder.</li>
+<li>Click <b>Import</b> — the new photos are added to the filmstrip after the current
+selection.</li>
 </ol>
-<h3>Batch mode (many photos)</h3>
-<ol>
-<li>Click the <b>Import…</b> button at the top of the sidebar (or press Cmd+I).</li>
-<li>Pick how files are matched: <b>Automatic</b> (by filename), <b>Semi-automatic</b>
-(select files already in R, G, B order), or <b>Manual</b> (pick each column yourself) —
-click the <b>?</b> on the right for the difference between them.</li>
-<li>Check <b>Auto-align each image</b> to have every photo aligned individually on import
-(otherwise its layers stay at their default position), then click <b>Import</b> — the
-new photos are added after the current selection (remove unwanted ones from the
-Filmstrip anytime with Cmd+Delete).</li>
-<li>The photos appear in a <b>Filmstrip</b> under the preview (it shows itself
-automatically once there's more than one photo). Click a thumbnail (or use
-<b>←/→</b>) to edit that photo's alignment and color independently of the others.</li>
-<li>Build a selection with <b>Cmd+click</b> or <b>Cmd+A</b>, then use
-<b>Export…</b> (Cmd+E) to export the <i>current</i>, <i>selected</i>, or
-<i>all</i> photos at once.</li>
-<li>Right-click a thumbnail for <b>Copy</b> / <b>Paste</b> / <b>Reset All</b> /
-<b>Duplicate</b> / <b>Delete</b> (Copy/Paste/Delete are also Cmd+C / Cmd+V /
-Cmd+Delete). <b>Reset All</b> clears that photo's alignment, color and negative back
-to defaults; <b>Duplicate</b> makes a numbered copy — e.g. “(2)” — to try a
-different edit side by side.</li>
-</ol>
+<h3>Working with multiple photos</h3>
+<ul>
+<li>Imported photos appear in a <b>filmstrip</b> under the preview (it shows itself
+automatically once there's more than one). Click a thumbnail (or use <b>←/→</b>) to
+edit that photo's own settings independently of the others, or press <b>G</b> for a
+grid view of every thumbnail at once.</li>
+<li>Build a selection with <b>Cmd+click</b> or <b>Cmd+A</b>, then use <b>Export…</b>
+(Cmd+E) to export the <i>current</i>, <i>selected</i>, or <i>all</i> photos at once.</li>
+<li>Right-click a thumbnail for <b>Copy</b> / <b>Paste</b> / <b>Paste Crop</b> /
+<b>Reset All</b> / <b>Duplicate</b> / <b>Delete</b> (Copy/Paste/Delete are also Cmd+C /
+Cmd+V / Cmd+Delete). <b>Reset All</b> clears that photo's alignment, color and crop back
+to defaults; <b>Duplicate</b> makes a numbered copy — e.g. "(2)" — to try a different
+edit side by side.</li>
+</ul>
 <h3>Sessions</h3>
 <ul>
-<li>Everything you're working on — every imported photo and its settings — is one
-<b>session</b>. <b>File ▸ Save Session</b> (Cmd+S) writes it to a portable
-<b>.trirgb</b> file you can reopen later or move to another machine;
+<li>Everything you're working on — every imported photo, its settings, and your current
+layout — is one <b>session</b>. <b>File ▸ Save Session</b> (Cmd+S) writes it to a
+portable <b>.trirgb</b> file you can reopen later or move to another machine;
 <b>Save Session As…</b> (Cmd+Shift+S) saves a copy under a new name.</li>
 <li><b>File ▸ Open Session…</b> (Cmd+O) loads one back; <b>New Session</b> (Cmd+N)
 starts over with a single blank photo.</li>
-<li>Relaunching the app automatically reopens whichever session file you had open
-last, so you pick up right where you left off.</li>
 <li>The current session's name is shown at the bottom-right of the status bar. With
 unsaved changes, closing the app, opening another session, or starting a new one
 will ask whether to save first.</li>
@@ -404,10 +471,10 @@ will ask whether to save first.</li>
 <ul>
 <li>The preview opens at <b>fit-to-window</b> zoom automatically, on launch and after
 every import.</li>
-<li>The small arrow-and-squares button next to <b>Fullscreen</b> shows or hides the
-Filmstrip.</li>
 <li>The <b>Fullscreen</b> button (Cmd+F) hides the side panels for a distraction-free
 preview (press Esc to leave).</li>
+<li>If a session's original source photos have been moved or renamed, the preview shows
+exactly which file(s) are missing with a <b>Locate…</b> button to relink them.</li>
 <li>Almost every change can be undone with <b>Cmd+Z</b> (<b>Cmd+Shift+Z</b> to redo).</li>
 </ul>
 """,
@@ -420,13 +487,17 @@ preview (press Esc to leave).</li>
 <li><b>Cmd+O</b> — Open Session</li>
 <li><b>Cmd+S</b> — Save Session</li>
 <li><b>Cmd+Shift+S</b> — Save Session As</li>
-<li><b>Cmd+I</b> — Import menu</li>
+<li><b>Cmd+I</b> — Import Images…</li>
 <li><b>Cmd+E</b> — Export (Enter/Return in that window starts the export)</li>
 <li><b>Cmd+Z</b> / <b>Cmd+Shift+Z</b> — Undo / Redo</li>
 <li><b>Cmd+R</b> / <b>Cmd+L</b> — rotate the current photo 90° right/left</li>
-<li><b>E</b> — show Global Correction</li>
-<li><b>C</b> — show the Crop tool</li>
+<li><b>T / E / C / S</b> — jump to your saved Trichrome / Color Correction / Crop / Scan
+layout (see Window ▸ Layout Preset)</li>
+<li><b>I</b> / <b>O</b> — show/hide the left/right side panel</li>
+<li><b>P</b> — show/hide the thumbnail filmstrip</li>
+<li><b>G</b> — toggle the thumbnail grid view</li>
 <li><b>Cmd+F</b> — toggle fullscreen (Esc to exit)</li>
+<li><b>Cmd+W</b> — close the active window</li>
 <li><b>F1</b> — Quick Start</li>
 <li><b>Cmd+Q</b> — quit</li>
 </ul>
@@ -435,6 +506,8 @@ preview (press Esc to leave).</li>
 <li><b>←</b> / <b>→</b> — go to the previous/next photo (hold <b>Shift</b> to extend
 the export selection instead)</li>
 <li><b>Drag</b> a thumbnail — reorders photos (switches to Custom sort order)</li>
+<li><b>Drag</b> image files from Finder onto the filmstrip — adds them as new Solo
+photos</li>
 <li><b>Cmd+click</b> a thumbnail — add/remove it from the export selection</li>
 <li><b>Cmd+A</b> — select all photos, or deselect all if every photo is already
 selected</li>
@@ -444,20 +517,22 @@ the selected photos</li>
 </ul>
 <h3>Preview</h3>
 <p>The <i>active</i> channel is the one that reacts to dragging and scrolling
-directly on the preview.</p>
+directly on the preview (Trichrome modes only).</p>
 <ul>
-<li><b>Drag</b> — moves the active channel</li>
+<li><b>Drag</b> — moves the active channel, or the crop rectangle while Crop is active</li>
 <li><b>Shift + scroll</b> — scales the active channel</li>
 <li><b>Alt/Option + scroll</b> — rotates the active channel</li>
 <li><b>Ctrl + scroll</b>, or a trackpad <b>pinch</b> — zooms the preview</li>
 <li><b>Two-finger scroll</b> on the trackpad — pans the preview once zoomed in</li>
 <li><b>F</b> / <b>Z</b> — jump to Fit / 100% zoom (or use the toolbar buttons)</li>
+<li><b>Enter</b> — apply the crop rectangle while Crop is active</li>
 <li><b>:</b> — toggle Compare, showing the unedited original</li>
 <li><b>W</b> — toggle the White Balance eyedropper</li>
 </ul>
-<h3>Sliders</h3>
+<h3>Sliders and blocks</h3>
 <ul>
 <li><b>Double-click</b> any slider — resets it to its default value</li>
+<li><b>Drag</b> a block's grip handle — reorders it or moves it to the other side panel</li>
 </ul>
 """,
 
@@ -473,10 +548,13 @@ directly on the preview.</p>
     "scan_mode_color_reversal": "Color Reversal",
     "scan_mode_invert_note": "Invert will be applied automatically on import for this mode.",
     "scan_mode_no_invert_note": "No invert needed on import for this mode (already positive).",
+    "scan_mode_note_bw": "Invert and Black & White will be applied automatically on import.",
+    "scan_mode_note_color": "Invert will be applied automatically on import.",
+    "scan_mode_note_color_reversal": "Photo will be imported without changes.",
     "scan_light_group": "Scan Light",
-    "scan_light_external": "External Light",
-    "scan_light_white": "White Light",
-    "scan_light_rgb": "RGB Light",
+    "scan_light_external": "External",
+    "scan_light_white": "White",
+    "scan_light_rgb": "RGB",
     "scan_light_rgb_note": "Capture will automatically take 3 shots in sequence - red, green, then blue light - and return to white light afterward. All 3 share the same number, suffixed _R/_G/_B.",
     "scan_light_window_title": "Scan Backlight",
     "scan_sample_base_button": "Sample Film Base",
@@ -504,7 +582,7 @@ directly on the preview.</p>
     "scan_process_tooltip": "Saves an extra JPG copy in a \"processed\" subfolder: grayscale + inverted for Black & White, inverted for Color, as-is for Color Reversal. For an RGB Light triplet, recomposes the 3 shots into one trichrome image using the app's own auto-align + compose algorithm.",
     "scan_processing_status": "Processing…",
     "scan_processed_label": "Processed",
-    "scan_location_group": "Save Location",
+    "scan_location_group": "Files Settings",
     "scan_base_folder_label": "Folder",
     "scan_base_folder_browse": "Browse…",
     "scan_subfolder_label": "Subfolder",
@@ -655,6 +733,7 @@ FR = {
     "dialog_locate_failed_column_photo": "Photo",
     "dialog_locate_failed_column_channel": "Canal",
 
+    "black_white_button_tooltip": "Noir et Blanc",
     "pick_white_balance_tooltip": "Balance des blancs à la pipette (W) - cliquez un point de l'aperçu qui devrait être gris neutre",
     "reset_white_balance_tooltip": "Réinitialiser la couleur (Température, Teinte, Saturation)",
     "reset_light_tooltip": "Réinitialiser la lumière (Luminosité, Contraste, Hautes lumières, Ombres, Blancs, Noirs, Gamma)",
@@ -708,7 +787,6 @@ FR = {
 
     "independent_channels_group_title": "Traitement Trichrome",
     "import_panel_title": "Fichiers",
-    "mode_select_label": "Mode",
     "mode_solo_option": "Solo",
     "mode_bw_trichrome_option": "Trichromie N&B",
     "mode_color_trichrome_option": "Trichromie Couleur",
@@ -725,16 +803,12 @@ FR = {
         "<span style=\"color:#9a9a9a;\">Simule des filtres RGB à partir de 3 photos couleur, "
         "chacune gardant son propre canal réel, pour créer un &quot;Harris Shutter Effect&quot;</span>"
     ),
-    "bw_film_button_tooltip": "Film N&B (Trichromie Noir et Blanc)",
-    "color_film_button_tooltip": "Film Couleur (Trichromie Couleur)",
     "load_normal_dialog_title": "Charger l'image",
-    "add_photo_tooltip": "Ajouter une photo",
     "status_photo_added": "Photo ajoutée",
     "status_photos_added": "{n} photo(s) ajoutée(s)",
     "dialog_drop_photos_failed_text": "Impossible de charger le(s) fichier(s) suivant(s) :\n{files}",
     "normal_photo_label": "Photo",
-    "channels_disabled_normal_mode": "Outil disponible uniquement en mode trichrome",
-    "color_disabled_bw_film": "Outil Désactivé : Film Noir et Blanc Sélectionné",
+    "channels_disabled_normal_mode": "Cet outil est disponible uniquement pour les photographies trichrome",
     "mode_switch_dialog_title": "Photo Trichrome",
     "mode_switch_dialog_text": (
         "Êtes-vous sûr de vouloir repasser en mode Normal ? Choisissez le "
@@ -760,6 +834,7 @@ FR = {
     "batch_import_status_done": "{n} photo(s) importée(s).",
     "carousel_empty_hint": "Aucune photo importée — utilisez le bouton « Importer… » en haut de la barre latérale.",
     "carousel_toggle_tooltip": "Afficher/masquer les vignettes",
+    "grid_view_toggle_tooltip": "Vue en grille (G)",
     "sort_button_tooltip": "Trier les vignettes",
     "sort_by_filename": "Par nom de fichier",
     "sort_by_capture_date": "Par date de capture",
@@ -774,24 +849,46 @@ FR = {
     "export_no_items": "Aucune photo à exporter.",
     "close_button": "Fermer",
     "batch_mode_auto_radio": "Automatique",
-    "batch_mode_semi_radio": "Semi-automatique",
+    "batch_mode_semi_radio": "Séquentiel",
     "batch_mode_manual_radio": "Manuelle",
     "batch_mode_info": (
         "<b>Automatique</b> — les fichiers sont regroupés grâce à un indicateur de filtre présent "
         "dans leur nom (Rouge, Vert, Bleu, Jaune ou Infrarouge - à n'importe quelle position, sans "
         "tenir compte de la casse). Le filtre qui remplit chaque canal R/V/B dépend du mode choisi "
-        "dans <b>Options avancées</b> ci-dessous (Classique, Trichrome IR, Aerochrome…). Les fichiers "
+        "dans <b>Règles d'Import</b> ci-dessous (Classique, Trichrome IR, Aerochrome…). Les fichiers "
         "partageant un nom identique une fois cet indicateur retiré forment un triplet ; sinon, une "
         "séquence numérotée simple (Image1, Image2, Image3…) est regroupée 3 fichiers pertinents à "
         "la fois, dans l'ordre.<br><br>"
-        "<b>Semi-automatique</b> — sélectionnez un lot d'images en une fois, déjà dans l'ordre R, V, "
+        "<b>Séquentiel</b> — sélectionnez un lot d'images en une fois, déjà dans l'ordre R, V, "
         "B, R, V, B… (glissez pour réordonner si besoin) : les 3 premières forment un triplet, les 3 "
         "suivantes le triplet suivant, etc.<br><br>"
         "<b>Manuelle</b> — choisissez les fichiers des colonnes R, V et B indépendamment, utile quand "
         "les noms de fichiers ne suivent aucune convention. La ligne N de chaque colonne forme un "
         "triplet."
     ),
-    "batch_advanced_options_title": "Options avancées",
+    "batch_advanced_options_title": "Règles d'Import",
+    "batch_auto_import_rules_info": (
+        "<b>Règles d'Auto-Import</b><br>"
+        "<span style=\"color:#9a9a9a;\">Permet de définir les paramètres de détection automatique "
+        "des fichiers et leur attribution dans les Canaux RVB</span>"
+    ),
+    "batch_advanced_options_info": (
+        "<b>Trichrome classique</b><br>"
+        "<span style=\"color:#9a9a9a;\">Correspondance standard - les photos filtrées R, V et B "
+        "remplissent directement les canaux R, V et B</span>"
+        "<br><br>"
+        "<b>Trichrome IR</b><br>"
+        "<span style=\"color:#9a9a9a;\">Le canal Rouge est rempli par une photo filtrée infrarouge "
+        "à la place - le Vert et le Bleu restent standards</span>"
+        "<br><br>"
+        "<b>Aerochrome</b><br>"
+        "<span style=\"color:#9a9a9a;\">Simule la correspondance décalée du film Kodak Aerochrome - "
+        "canal Rouge depuis l'Infrarouge, Vert depuis le Rouge, Bleu depuis le Vert</span>"
+        "<br><br>"
+        "<b>Personnalisé</b><br>"
+        "<span style=\"color:#9a9a9a;\">Assignez librement quel filtre alimente chaque canal, à "
+        "partir des filtres définis ci-dessous</span>"
+    ),
     "batch_advanced_mode_classic": "Trichrome classique",
     "batch_advanced_mode_ir": "Trichrome IR",
     "batch_advanced_mode_aerochrome": "Aerochrome",
@@ -822,14 +919,22 @@ FR = {
                            "colonne forme un triplet."),
     "batch_manual_mismatch_warning": "Les colonnes ont des tailles différentes (R : {r}, V : {g}, B : {b}) — seules les {n} premières seront appariées.",
     "batch_select_files_title": "Sélectionner les images {channel}",
-    "batch_input_group": "Dossier d'entrée",
+    "batch_processing_mode_group": "Mode de traitement",
+    "batch_solo_group": "Photos",
+    "batch_solo_select_images_button": "Sélectionner des photos…",
+    "batch_solo_select_folder_button": "Sélectionner un dossier…",
+    "batch_solo_select_images_title": "Sélectionner les photos à importer",
+    "batch_solo_select_folder_title": "Sélectionner un dossier de photos à importer",
+    "batch_solo_count": "{n} photo(s) en attente",
+    "batch_solo_no_photos": "Aucune photo sélectionnée à importer.",
+    "batch_input_group": "Sélection des fichiers",
     "batch_browse_button": "Parcourir…",
     "batch_rescan_button": "Réanalyser",
     "batch_no_folder": "Aucun dossier sélectionné",
     "batch_select_input_title": "Sélectionner le dossier d'entrée",
     "batch_select_output_title": "Sélectionner le dossier de sortie",
     "batch_triplets_found": "{n} triplets appariés",
-    "batch_unmatched_label": "{n} fichiers non appariés (ignorés) :",
+    "batch_unmatched_label": "{n} fichiers non appariés (ignorés)",
     "batch_align_auto_checkbox": ("Aligner automatiquement chaque image (sinon, les calques restent "
                                    "à leur position par défaut)"),
     "batch_output_folder_label": "Dossier de sortie :",
@@ -882,61 +987,110 @@ FR = {
 
     "help_quickstart_title": "Prise en main",
     "help_quickstart_content": """
-<h3>Mode simple (une seule photo)</h3>
+<h3>Choisir un mode pour chaque photo</h3>
+<p>Le sélecteur <b>Mode</b> du bloc <b>Fichiers</b> détermine comment une photo est
+traitée :</p>
+<ul>
+<li><b>Solo</b> — une seule photo déjà composée (couleur ou N&amp;B), chargée et éditée
+telle quelle - aucune recomposition de canaux.</li>
+<li><b>Trichromie N&amp;B</b> — le cas classique : 3 clichés noir et blanc pris à travers
+des filtres Rouge/Vert/Bleu (ou IR/personnalisés), recomposés en une image couleur.</li>
+<li><b>Trichromie Couleur</b> — 3 vraies photos couleur, chacune conservant son propre
+canal R, V ou B (effet « Harris Shutter »), au lieu d'être aplaties en niveaux de
+gris.</li>
+</ul>
+<p>Le chargement des photos ainsi que l'Alignement automatique/la Position verrouillée
+se trouvent dans le bloc <b>Traitement Trichrome</b> (modes Trichromie uniquement) - le
+mode Solo affiche à la place un simple bouton « Charger l'image » dans Fichiers. Vous
+pouvez aussi simplement glisser des fichiers image depuis le Finder sur le bandeau de
+vignettes ; chacun est ajouté comme une nouvelle photo Solo.</p>
+<h3>Outils d'édition</h3>
+<ul>
+<li><b>Traitement Trichrome</b> — alignement et tonalité par canal (glissez directement
+sur le canevas, Maj+molette pour l'échelle, Alt+molette pour la rotation, ou utilisez
+les curseurs), plus <b>Alignement automatique</b> et <b>Position verrouillée</b>.</li>
+<li><b>Lumière</b> et <b>Couleur</b> — le rendu global de l'image composée : exposition,
+luminosité, contraste, hautes lumières/ombres/blancs/noirs, gamma, négatif (Lumière) ;
+et température, teinte, saturation, pipette de balance des blancs, et un bouton
+<b>Noir et Blanc</b> pour une vraie conversion en niveaux de gris pondérée par la
+luminance (Couleur).</li>
+<li><b>Recadrage</b> — choisissez un ratio d'aspect, redressez, mettez en miroir,
+choisissez une grille, puis cliquez sur <b>Activer</b> pour glisser/redimensionner le
+rectangle de recadrage directement sur le canevas. Appuyez sur <b>Entrée</b> pour
+l'appliquer, ou <b>Échap</b> pour annuler sans rien changer.</li>
+<li><b>Courbes</b> — un éditeur de courbe de ton classique avec des courbes Y (globale),
+R, V et B indépendantes : cliquez sur la ligne diagonale pour ajouter un point,
+glissez-le pour redessiner la courbe (y compris les deux extrémités, pour un vrai point
+noir/blanc), double-cliquez sur un point pour le supprimer.</li>
+<li><b>Scan</b> — capture avec un appareil photo relié par câble : statut de connexion en
+direct, 3 types de film (Noir et Blanc / Couleur / Couleur Inversible), un
+rétroéclairage à l'écran en option (avec une séquence automatique de 3 prises
+rouge/vert/bleu pour scanner directement un triplet trichrome), et une correction de la
+couleur de base du film pour les négatifs couleur. Les captures terminées sont ajoutées
+automatiquement à la session en cours.</li>
+</ul>
+<p>Chacun de ces outils vit dans son propre <b>bloc</b> déplaçable - voir « Personnaliser
+sa disposition » ci-dessous. Une petite icône en bas de chaque bloc réinitialise
+uniquement cette partie (survolez-la pour plus de détails), et le bouton
+Réinitialiser de chaque bloc grise dès qu'il n'y a plus rien à réinitialiser.</p>
+<h3>Personnaliser sa disposition</h3>
+<ul>
+<li>Glissez n'importe quel bloc par sa poignée pour le réordonner, le déplacer vers
+l'autre panneau latéral, ou le déposer près d'un autre bloc pour l'insérer au-dessus/
+en-dessous (un trait bleu en pointillés indique où il atterrira).</li>
+<li>Chaque bloc peut être <b>réduit</b> à son seul en-tête, ou <b>fermé</b> entièrement -
+utilisez le menu <b>Outils</b> pour faire réapparaître un bloc fermé.</li>
+<li>Les boutons <b>Trichrome / Correction Couleur / Recadrage / Scan</b> de la barre
+d'outils (et leurs raccourcis <b>T / E / C / S</b>) basculent directement vers votre
+propre disposition enregistrée pour cette tâche - enregistrez votre arrangement actuel
+sous l'un de ces noms depuis <b>Window ▸ Préréglage de disposition ▸ Enregistrer la
+disposition comme préréglage…</b> pour personnaliser ce que chacun affiche. Vous pouvez
+aussi enregistrer autant de dispositions personnalisées que vous voulez de la même
+façon.</li>
+<li><b>Window ▸ Réinitialiser la disposition</b> restaure l'arrangement par défaut
+d'origine de l'application.</li>
+</ul>
+<h3>Importer plusieurs photos à la fois (Import par lot)</h3>
 <ol>
-<li>Chargez les clichés Rouge, Vert et Bleu depuis le panneau <b>Photo actuelle</b> à
-gauche (ou le menu Fichier).</li>
-<li>Dès que les 3 sont chargés, les deux autres calques sont <b>alignés
-automatiquement</b> sur la couche verrouillée (ou cliquez sur <b>Alignement
-automatique</b> dans le panneau <b>Photo actuelle</b> pour le refaire à tout moment).</li>
-<li>Changez de couche verrouillée à tout moment avec les boutons <b>R / V / B</b> sous
-<b>Position verrouillée</b>, dans le panneau <b>Photo actuelle</b> — elle définit la
-taille et l'orientation du canevas (Vert par défaut).</li>
-<li>Affinez l'alignement et l'étalonnage de chaque calque (à gauche), et le rendu
-global — dont <b>Négatif</b>, <b>Hautes lumières/Ombres/Blancs/Noirs</b> et
-<b>Température/Teinte</b> — dans <b>Correction Globale</b> (à droite). Les petites
-icônes en bas de chaque panneau réinitialisent uniquement cette partie (survolez-les
-pour plus de détails).</li>
-<li>Cliquez sur <b>Exporter…</b> pour choisir un dossier/format de sortie et
-enregistrer le résultat.</li>
+<li>Cliquez sur le bouton <b>Import Images…</b> en haut de la barre latérale (ou appuyez
+sur Cmd+I).</li>
+<li>Choisissez un <b>Mode de traitement</b> - Solo, Trichromie N&amp;B, ou Trichromie
+Couleur - pour tout le lot.</li>
+<li>En mode Trichromie, choisissez comment les fichiers sont appariés : <b>Automatique</b>
+(par nom de fichier), <b>Séquentiel</b> (fichiers déjà dans l'ordre R, V, B) ou
+<b>Manuelle</b> (vous choisissez chaque colonne) — cliquez sur les boutons <b>?</b> pour
+les détails, y compris les <b>Règles d'Import</b> qui déterminent quel filtre alimente
+quel canal (Classique, IR, Aerochrome, ou une correspondance entièrement personnalisée).
+En mode Solo, sélectionnez simplement des images individuelles ou un dossier entier.</li>
+<li>Cliquez sur <b>Importer</b> — les nouvelles photos sont ajoutées au bandeau de
+vignettes à la suite de la sélection actuelle.</li>
 </ol>
-<h3>Mode batch (plusieurs photos)</h3>
-<ol>
-<li>Cliquez sur le bouton <b>Importer…</b> en haut de la barre latérale (ou appuyez sur
-Cmd+I).</li>
-<li>Choisissez comment les fichiers sont appariés : <b>Automatique</b> (par nom de
-fichier), <b>Semi-automatique</b> (fichiers déjà dans l'ordre R, V, B) ou <b>Manuelle</b>
-(vous choisissez chaque colonne) — cliquez sur le <b>?</b> à droite pour connaître la
-différence entre elles.</li>
-<li>Cochez <b>Aligner automatiquement chaque image</b> pour que chaque photo soit alignée
-individuellement à l'import (sinon ses calques restent à leur position par défaut), puis
-cliquez sur <b>Importer</b> — les nouvelles photos sont ajoutées à la suite de la
-sélection actuelle (retirez celles dont vous ne voulez pas du carrousel à tout moment
-avec Cmd+Suppr).</li>
-<li>Les photos apparaissent dans un <b>carrousel</b> sous l'aperçu (il s'affiche
-automatiquement dès qu'il y a plus d'une photo). Cliquez sur une vignette (ou utilisez
-<b>←/→</b>) pour modifier l'alignement et la couleur de cette photo indépendamment des
-autres.</li>
+<h3>Travailler avec plusieurs photos</h3>
+<ul>
+<li>Les photos importées apparaissent dans un <b>bandeau de vignettes</b> sous l'aperçu
+(il s'affiche automatiquement dès qu'il y a plus d'une photo). Cliquez sur une vignette
+(ou utilisez <b>←/→</b>) pour modifier les réglages de cette photo indépendamment des
+autres, ou appuyez sur <b>G</b> pour une vue en grille de toutes les vignettes à la
+fois.</li>
 <li>Constituez une sélection avec <b>Cmd+clic</b> ou <b>Cmd+A</b>, puis utilisez
 <b>Exporter…</b> (Cmd+E) pour exporter la photo <i>actuelle</i>, la
 <i>sélection</i>, ou <i>toutes</i> les photos en une fois.</li>
-<li>Clic droit sur une vignette pour <b>Copier</b> / <b>Coller</b> / <b>Tout
-réinitialiser</b> / <b>Dupliquer</b> / <b>Supprimer</b> (Copier/Coller/Supprimer sont
-aussi Cmd+C / Cmd+V / Cmd+Suppr). <b>Tout réinitialiser</b> remet l'alignement, la
-couleur et le négatif de cette photo à zéro ; <b>Dupliquer</b> en crée une copie
-numérotée — par ex. « (2) » — pour essayer un autre réglage en parallèle.</li>
-</ol>
+<li>Clic droit sur une vignette pour <b>Copier</b> / <b>Coller</b> / <b>Coller le
+recadrage</b> / <b>Tout réinitialiser</b> / <b>Dupliquer</b> / <b>Supprimer</b>
+(Copier/Coller/Supprimer sont aussi Cmd+C / Cmd+V / Cmd+Suppr). <b>Tout réinitialiser</b>
+remet l'alignement, la couleur et le recadrage de cette photo à zéro ; <b>Dupliquer</b>
+en crée une copie numérotée — par ex. « (2) » — pour essayer un autre réglage en
+parallèle.</li>
+</ul>
 <h3>Sessions</h3>
 <ul>
-<li>Tout votre travail en cours — chaque photo importée et ses réglages — forme une
-<b>session</b>. <b>Fichier ▸ Enregistrer la session</b> (Cmd+S) l'écrit dans un
-fichier portable <b>.trirgb</b> que vous pouvez rouvrir plus tard ou déplacer sur une
-autre machine ; <b>Enregistrer la session sous…</b> (Cmd+Maj+S) en enregistre une
-copie sous un nouveau nom.</li>
+<li>Tout votre travail en cours — chaque photo importée, ses réglages, et votre
+disposition actuelle — forme une <b>session</b>. <b>Fichier ▸ Enregistrer la
+session</b> (Cmd+S) l'écrit dans un fichier portable <b>.trirgb</b> que vous pouvez
+rouvrir plus tard ou déplacer sur une autre machine ; <b>Enregistrer la session
+sous…</b> (Cmd+Maj+S) en enregistre une copie sous un nouveau nom.</li>
 <li><b>Fichier ▸ Ouvrir une session…</b> (Cmd+O) en recharge une ;
 <b>Nouvelle session</b> (Cmd+N) repart d'une seule photo vierge.</li>
-<li>Relancer l'application rouvre automatiquement la dernière session ouverte, pour
-reprendre exactement là où vous en étiez.</li>
 <li>Le nom de la session en cours s'affiche en bas à droite de la barre d'état. En
 cas de modifications non enregistrées, fermer l'application, ouvrir une autre
 session ou en créer une nouvelle proposera d'abord de les enregistrer.</li>
@@ -945,10 +1099,11 @@ session ou en créer une nouvelle proposera d'abord de les enregistrer.</li>
 <ul>
 <li>L'aperçu s'ouvre automatiquement en zoom <b>ajusté à la fenêtre</b>, au lancement et
 après chaque import.</li>
-<li>Le petit bouton flèche + carrés à côté de <b>Plein écran</b> affiche ou masque le
-carrousel.</li>
 <li>Le bouton <b>Plein écran</b> (Cmd+F) masque les panneaux latéraux pour un aperçu sans
 distraction (Échap pour quitter).</li>
+<li>Si les fichiers source d'origine d'une session ont été déplacés ou renommés,
+l'aperçu affiche précisément quel(s) fichier(s) manque(nt), avec un bouton
+<b>Localiser…</b> pour les relier à nouveau.</li>
 <li>Presque toutes les modifications peuvent être annulées avec <b>Cmd+Z</b>
 (<b>Cmd+Maj+Z</b> pour rétablir).</li>
 </ul>
@@ -962,13 +1117,17 @@ distraction (Échap pour quitter).</li>
 <li><b>Cmd+O</b> — Ouvrir une session</li>
 <li><b>Cmd+S</b> — Enregistrer la session</li>
 <li><b>Cmd+Maj+S</b> — Enregistrer la session sous</li>
-<li><b>Cmd+I</b> — Menu Import</li>
+<li><b>Cmd+I</b> — Import Images…</li>
 <li><b>Cmd+E</b> — Exporter (Entrée dans cette fenêtre lance l'export)</li>
 <li><b>Cmd+Z</b> / <b>Cmd+Maj+Z</b> — Annuler / Rétablir</li>
 <li><b>Cmd+R</b> / <b>Cmd+L</b> — fait pivoter la photo actuelle de 90° à droite/gauche</li>
-<li><b>E</b> — affiche l'étalonnage global</li>
-<li><b>C</b> — affiche l'outil de recadrage</li>
+<li><b>T / E / C / S</b> — bascule vers votre disposition enregistrée Trichrome /
+Correction Couleur / Recadrage / Scan (voir Window ▸ Préréglage de disposition)</li>
+<li><b>I</b> / <b>O</b> — affiche/masque le panneau latéral gauche/droit</li>
+<li><b>P</b> — affiche/masque le bandeau de vignettes</li>
+<li><b>G</b> — bascule la vue en grille des vignettes</li>
 <li><b>Cmd+F</b> — bascule le plein écran (Échap pour quitter)</li>
+<li><b>Cmd+W</b> — ferme la fenêtre active</li>
 <li><b>F1</b> — Prise en main</li>
 <li><b>Cmd+Q</b> — quitter</li>
 </ul>
@@ -978,6 +1137,8 @@ distraction (Échap pour quitter).</li>
 étendre la sélection d'export au lieu de simplement naviguer)</li>
 <li><b>Glisser</b> une vignette — réorganise les photos (bascule sur l'ordre
 personnalisé)</li>
+<li><b>Glisser</b> des fichiers image depuis le Finder sur le bandeau — les ajoute comme
+nouvelles photos Solo</li>
 <li><b>Cmd+clic</b> sur une vignette — ajoute/retire de la sélection d'export</li>
 <li><b>Cmd+A</b> — sélectionne toutes les photos, ou les désélectionne toutes si elles
 le sont déjà</li>
@@ -987,21 +1148,26 @@ les photos sélectionnées</li>
 </ul>
 <h3>Aperçu</h3>
 <p>Le calque <i>actif</i> est celui qui réagit quand on glisse ou qu'on utilise la
-molette directement sur l'aperçu.</p>
+molette directement sur l'aperçu (modes Trichromie uniquement).</p>
 <ul>
-<li><b>Glisser</b> — déplace le calque actif</li>
+<li><b>Glisser</b> — déplace le calque actif, ou le rectangle de recadrage pendant que
+le Recadrage est actif</li>
 <li><b>Maj + molette</b> — met à l'échelle le calque actif</li>
 <li><b>Alt + molette</b> — fait pivoter le calque actif</li>
 <li><b>Ctrl + molette</b>, ou <b>pincer</b> sur le trackpad — zoome l'aperçu</li>
 <li><b>Glisser à deux doigts</b> sur le trackpad — déplace la vue une fois zoomée</li>
 <li><b>F</b> / <b>Z</b> — passe directement au zoom Ajuster / 100% (ou utilisez les
 boutons de la barre d'outils)</li>
+<li><b>Entrée</b> — applique le rectangle de recadrage pendant que le Recadrage est
+actif</li>
 <li><b>:</b> — bascule Comparer, affiche l'original non modifié</li>
 <li><b>W</b> — bascule la pipette de balance des blancs</li>
 </ul>
-<h3>Curseurs</h3>
+<h3>Curseurs et blocs</h3>
 <ul>
 <li><b>Double-clic</b> sur un curseur — le réinitialise à sa valeur par défaut</li>
+<li><b>Glisser</b> la poignée d'un bloc — le réordonne ou le déplace vers l'autre
+panneau latéral</li>
 </ul>
 """,
 
@@ -1017,10 +1183,13 @@ boutons de la barre d'outils)</li>
     "scan_mode_color_reversal": "Couleur Inversible",
     "scan_mode_invert_note": "L'inversion sera appliquée automatiquement à l'import pour ce mode.",
     "scan_mode_no_invert_note": "Aucune inversion nécessaire à l'import pour ce mode (déjà positif).",
+    "scan_mode_note_bw": "Inversion et Noir et Blanc appliqués automatiquement à l'import.",
+    "scan_mode_note_color": "Inversion appliquée automatiquement à l'import.",
+    "scan_mode_note_color_reversal": "Photo importée sans changement.",
     "scan_light_group": "Lumière de scan",
-    "scan_light_external": "Lumière externe",
-    "scan_light_white": "Lumière blanche",
-    "scan_light_rgb": "Lumière RVB",
+    "scan_light_external": "Externe",
+    "scan_light_white": "Blanche",
+    "scan_light_rgb": "RVB",
     "scan_light_rgb_note": "La capture prendra automatiquement 3 photos en séquence - lumière rouge, verte, puis bleue - et reviendra à la lumière blanche ensuite. Les 3 partagent le même numéro, avec le suffixe _R/_G/_B.",
     "scan_light_window_title": "Rétroéclairage de scan",
     "scan_sample_base_button": "Échantillonner la base du film",
@@ -1050,7 +1219,7 @@ boutons de la barre d'outils)</li>
     "scan_process_tooltip": "Enregistre une copie JPG supplémentaire dans un sous-dossier « processed » : noir et blanc + inversé pour Noir et Blanc, inversé pour Couleur, tel quel pour Couleur Inversible. Pour un triplet en Lumière RVB, recompose les 3 photos en une seule image trichrome avec l'algorithme d'auto-alignement et de composition de l'application.",
     "scan_processing_status": "Traitement…",
     "scan_processed_label": "Traité",
-    "scan_location_group": "Emplacement d'enregistrement",
+    "scan_location_group": "Paramètres des fichiers",
     "scan_base_folder_label": "Dossier",
     "scan_base_folder_browse": "Parcourir…",
     "scan_subfolder_label": "Sous-dossier",

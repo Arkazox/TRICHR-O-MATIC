@@ -4687,6 +4687,1388 @@ rest of the block (sliders, "?" button, the block's own header Reset via
   correction present) still correctly re-enables Color's Reset once the
   block itself is re-enabled.
 
+**Follow-up, 2026-09-07 - Mode combo now shows a per-item icon, folding
+the separate icon label into the combo itself.** The user asked whether a
+"cleaner" selector was possible - a dropdown "mieux intégré à
+l'interface" with icons shown inside the dropdown itself, rather than the
+existing icon-label-next-to-a-plain-text-combo layout. `QComboBox` items
+natively carry a `QIcon` (Qt paints it in both the closed box and the
+popup list on its own), so this collapsed to a small refactor rather than
+a new widget:
+- **`svg_icons.raw_svg_icon(svg_name, size, dpr) -> QIcon`** (new) - a
+  thin `QIcon(raw_svg_pixmap(...))` wrapper, since a combo/action/etc.
+  needs a `QIcon` for Qt's own item-view chrome to paint, not a raw
+  pixmap this app paints itself the way `SvgIconLabel`/`SvgToolButton` do.
+- **`import_panel.py`**: `self.mode_icon` (the standalone `SvgIconLabel`
+  that used to sit to the combo's left, manually kept in sync on every
+  selection change via `set_icon_raw`) is gone entirely - `mode_combo.setIconSize(QSize(18,
+  18))` plus building each item with `mode_combo.addItem(raw_svg_icon(...),
+  text)` (in `retranslate_ui`, where items are already rebuilt) means Qt
+  shows the right icon automatically for whichever item is current, with
+  nothing left to sync by hand - the 2 explicit `self.mode_icon.set_icon_raw(_MODE_ICONS[key])`
+  call sites in `_on_mode_combo_changed`/`set_mode_selection` were simply
+  deleted, not replaced.
+- **Deliberately no custom `QComboBox`/popup stylesheet** - grep confirmed
+  no `QComboBox` styling exists anywhere else in this app (both
+  `crop_panel.py`'s aspect-ratio/grid combos are plain native ones too),
+  so this stays native/OS-drawn for visual consistency with them rather
+  than introducing the app's first custom combo look. Flagged to the user
+  up front as the one real tradeoff of this approach: macOS's native
+  combo popup is partly OS-chrome, so it won't be pixel-identical to this
+  app's fully custom widgets (the Crop ratio row's `SvgIconLabel`, block
+  headers, etc.) - accepted as reasonable since it still shows the icons
+  requested and matches every other combo in the app.
+- Verified headlessly: all 3 items have a non-null icon at construction
+  and after a French retranslation (`mode_combo.clear()`/`addItem()`
+  rebuild, confirmed the icon survives that round-trip); `iconSize()` is
+  18×18; `import_panel` no longer has a `mode_icon` attribute at all;
+  selecting Solo mode still correctly drives `currentIndex()` to 0 with
+  its icon intact; the panel renders via `QWidget.grab()` without error.
+  **Not verified here**: the real visual read of the combo/dropdown at
+  actual size/DPI in the running app - needs the user's own pass, same as
+  any visual/interactive change.
+
+**Follow-up, 2026-09-07 - "Mode" label removed, combo width fixed to its
+widest item, and the B&W Film/Color Film/Negative buttons merged onto the
+same row.** User's own spec: "retire le mot 'Mode', adapte la sélection
+de mode en largeur au plus long texte, et mets les boutons... sur la même
+ligne (tu peux réduire la taille de ces 3 boutons si besoin)." All in
+`import_panel.py`:
+- **`mode_select_label`** (the standalone "Mode"/"Mode" `QLabel`) removed
+  entirely - the combo's own per-item icon (added the same day, see
+  above) already identifies the control without a text label next to it.
+  The now-dead `mode_select_label` i18n key was removed from both EN/FR
+  blocks (confirmed zero remaining references via grep first, per this
+  project's usual dead-key convention).
+- **`mode_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)`** replaces
+  the old `stretch=1` - confirmed empirically (not just assumed from the
+  Qt docs) that this policy sizes the combo to its *widest* item
+  regardless of which one is currently selected (tested `sizeHint()`
+  across all 3 selections, identical width every time) - exactly "adapte
+  au plus long texte," not a policy that would jitter width as the
+  selection changes.
+- **`bw_film_button`/`color_film_button`/`invert_button` moved from their
+  own row (`film_row`) onto the Mode row itself**, right after the "?"
+  info button (with an 8px `addSpacing` between them so the two clusters
+  - mode selection vs. quick per-photo toggles - still read as visually
+  distinct despite sharing one row) - `film_row` as a separate `QHBoxLayout`
+  is gone. Per the user's own "tu peux réduire la taille" allowance, all 3
+  moved off the shared `HEADER_COMPANION_BTN_SIZE` (34×30/20 - used by
+  every *header* action button elsewhere in the app) onto a new, Mode-row-
+  specific `_MODE_ROW_TOGGLE_BTN_SIZE = (28, 26)`/`_MODE_ROW_TOGGLE_ICON_SIZE
+  = 16` - needed since the combined row would otherwise overflow the side
+  panel's own minimum width, same class of fix as every other
+  "block doesn't fit the panel" pass in this app (see the block-system
+  width entries above).
+- Verified headlessly: `import_panel` has no `mode_select_label` attribute;
+  `mode_combo.sizeHint().width()` is identical across all 3 selections in
+  both EN and FR (148px/166px respectively - FR's longer "Trichromie
+  Couleur" text correctly widens the fixed box in that language, but it
+  still stays fixed regardless of *which* item is selected within a given
+  language); `bw_film_button.minimumSizeHint()` reports the new 28×26 size;
+  `import_panel.minimumSizeHint().width()` is 310px in both EN and FR,
+  comfortably under the 360px side-panel minimum this row shares with the
+  block system's other width-sensitive blocks; the full B&W/Color film
+  toggle → Mode-combo-index round trip and a Solo→Trichrome mode switch
+  both still work correctly end-to-end (confirmed against the real
+  "Film type" behavior matrix - Solo's and Trichrome's own film-type
+  remain correctly independent, not a regression, just a wrong first
+  assumption in this test's own expectation, corrected before relying on
+  the result); the panel renders via `QWidget.grab()` without error; i18n
+  EN/FR parity holds; pyflakes clean. **Not verified here**: the real
+  visual read of the merged row and the smaller 28×26 buttons at actual
+  size/DPI - needs the user's own pass, same as any visual/interactive
+  change.
+
+**Follow-up, 2026-09-07 - "Add Photo" header button removed outright.**
+User's own reasoning: it duplicated the existing Import Images window and
+followed unintuitive logic for adding new photos, overloading the Files
+block with a second, inconsistent way to do the same job. Removed
+entirely, not just hidden: `ImportPanel.add_photo_button`/
+`add_photo_requested` (the widget, its header slot, and the signal),
+`MainWindow.on_add_photo_clicked`/`_add_normal_photo`/`_add_trichrome_photo`,
+the `add_photo_tooltip` i18n key (both languages, confirmed zero
+remaining references first), and the wiring connecting them.
+**Deliberately left untouched**: `_append_new_batch_items`/
+`_build_normal_batch_item`/`_build_trichrome_batch_item_from_paths` all
+survive - they're shared with, and still fully exercised by, the 2
+remaining legitimate ways to add a new photo (Finder drag-and-drop onto
+the carousel, and the Scan tool's automatic "add to session" on capture -
+see their own sections above) - only their now-stale docstring mentions
+of "Add Photo" were reworded to describe the 2 remaining callers, the
+functions themselves are unchanged. `Toolbar/image-plus.svg` (the icon
+the button used) is still referenced by the toolbar's own Import button,
+so nothing needed cleaning up there either.
+- Verified headlessly: `ImportPanel` has neither `add_photo_button` nor
+  `add_photo_requested`; `MainWindow` has none of the 3 removed methods;
+  Finder drag-and-drop (`on_carousel_files_dropped`) and the Scan tool's
+  add-to-session path (`on_scan_add_to_session_requested`) both still
+  correctly append a new photo end-to-end, confirming the shared helpers
+  they depend on are intact; full app boot plus French/English
+  retranslation; pyflakes clean across every touched file; i18n EN/FR
+  parity holds.
+
+**Follow-up, 2026-09-07 - B&W Film/Color Film buttons' icon swapped from
+the Film Roll glyph to 2 new user-supplied assets.** `General/b&w.svg`/
+`General/color.svg` (both a plain rounded-square photo-frame glyph -
+currently byte-identical to each other, kept as 2 separate files rather
+than one shared reference in case they diverge later) replace the
+original `Scan/film.svg` both buttons used to share. Per the user's own
+"utilise le même code couleur pour les deux" - no change to the actual
+tinting logic, since `SvgCheckableToolButton`/`SvgColorCheckableToolButton`
+already implement exactly the white/gray (B&W) and orange/grayed-orange
+(Color) convention the icon swap needed to keep: only the `svg_name`
+string passed to each constructor changed. `Scan/film.svg` itself is left
+on disk unreferenced by this pair (still used elsewhere in
+`resources/icons/Scan/`), same leave-it-there convention as every other
+superseded icon reference in this project.
+- Verified: `bw_film_button`/`color_film_button`'s own `_current_svg_name()`
+  report the new paths; rendered the real panel widget (not just checked
+  the string) in both mode states via `QWidget.grab()` - B&W Trichrome
+  active shows the B&W icon solid white/the Color icon faded orange,
+  Color Trichrome active shows the reverse, confirming the tint logic
+  survived the icon swap exactly; pyflakes clean.
+
+**Follow-up, 2026-09-07 - Mode combo restyled to blend into the block
+instead of standing out as a native control.** User's own ask: "un
+dropdown menu plus sobre et intégré à l'interface... qui se fond plus
+dans le bloc." Until now the Mode combo (like every other combo in this
+app - `crop_panel.py`'s aspect-ratio/grid pickers) was fully native, no
+stylesheet at all - which reads as a distinct boxed widget sitting on top
+of the block rather than part of its own surface.
+- **`_MODE_COMBO_STYLE`** (new module constant, `import_panel.py`) is a
+  full QSS block applied via `mode_combo.setStyleSheet(...)` -
+  deliberately scoped to just this one combo, not an app-wide
+  `QComboBox` rule, since the ask was about this specific control, not
+  every combo in the app. Flat translucent fill at rest
+  (`rgba(255,255,255,14)` background, `rgba(255,255,255,35)` border - the
+  same subtle hairline register `block_header_bar.py`'s own dividers and
+  `scan_panel.py`'s section separators already use elsewhere in this
+  app), brightening slightly on hover; the popup list gets a real dark
+  background (`#2b2b2b`) with the app's one established accent blue
+  (`#5b9bd5`, already used for the block drag-reorder insertion line) as
+  its selection highlight, instead of Qt's native (light, on this
+  platform) popup chrome.
+  - **Applying any stylesheet at all switches Qt from native platform
+    rendering to its own `QStyleSheetStyle` engine for that widget** -
+    worth noting since it's *why* this is reliably headless-testable at
+    all (a plain unstyled `QComboBox` renders via native platform theming,
+    which can't be inspected the same way outside the real OS chrome).
+  - **`QComboBox::down-arrow` reuses `General/chevron-down.svg`** (the
+    exact glyph every block's own collapse chevron already uses) via
+    `image: url(<real filesystem path from paths.icon_path>)` - confirmed
+    empirically that Qt's QSS engine renders it as a real vector chevron,
+    not a broken/missing image, and that no re-tinting was needed (the
+    file's own stroke is already plain white, matching the rest of the
+    combo's text/icon colors as-is).
+  - Verified by actually rendering the widget (not just reading the
+    stylesheet string back): the closed combo via `QWidget.grab()`
+    (flat fill, visible chevron, item icon+text both render correctly
+    inside the smaller padding) and, separately, the **open popup**
+    itself via `combo.showPopup()` + `combo.view().grab()` (headless
+    popups don't appear in a parent grab, so this needed grabbing the
+    view widget directly) - confirmed the dark background, all 3 items'
+    icons, and the accent-blue highlight on the current selection all
+    render correctly. Full app boot plus French/English retranslation
+    with the stylesheet still applied afterward; pyflakes clean.
+    **Not verified here**: the real subjective "does this feel
+    integrated" read in the actual running app at real size/DPI - needs
+    the user's own pass, same as any visual/interactive change, though
+    this one is unusually amenable to the headless check above since the
+    stylesheet forces consistent non-native rendering everywhere.
+
+**Design discussion + follow-up, 2026-09-07 - Negative moved back to
+Light, and a genuinely new, purely-cosmetic Black & White toggle added to
+Color.** This followed a real back-and-forth with the user (worth
+recording since it settles the reasoning, not just the outcome) about
+whether Files' B&W/Color Trichrome buttons and Negative were placed and
+scoped sensibly at all. Conclusion reached: Negative reads as a Light-
+adjacent tonal concept to a user even though it's technically per-photo
+source state, so it belongs back where it originally lived; and Files'
+B&W/Color Trichrome pair conflated two genuinely different things under
+one control - a *structural* decode-time decision (Harris Shutter -
+luminance vs. real per-channel extraction, which the user confirmed
+should stay tied to the Mode selector, untouched by this pass) and a
+*cosmetic* "make the final image look B&W" concept (saturation to zero),
+which has no reason to affect decoding at all and works identically
+regardless of mode. Splitting these was the point of this pass - **Files'
+Mode selector and its B&W/Color Trichrome buttons are deliberately left
+completely untouched here**, per the user's explicit "ne touche pas à la
+sélection de mode pour l'instant."
+- **`LightPanel.invert_button`/`invert_toggled`/`set_invert()` restored
+  verbatim** (`global_panel.py`) - same icon (`Preview/invert.svg`), same
+  header position (right after the "?", before Reset), same wiring shape,
+  reverting the 2026-09-07 move to Files earlier the same day.
+  `ImportPanel` loses `invert_button`/`invert_toggled`/`set_invert()`
+  entirely. Every `self.import_panel.set_invert(...)`/
+  `self.import_panel.invert_toggled.connect(...)` call site in
+  `main_window.py` reverted to `self.light_panel.*` - **the wiring call
+  site itself moved too**, not just renamed in place: the original
+  `import_panel.invert_toggled.connect(...)` lived inline right after
+  `ImportPanel()` construction (early in `_build_ui`, before `light_panel`
+  exists), but `light_panel.invert_toggled.connect(...)` has to live in
+  the dedicated `_connect_signals`-style block further down (next to
+  `light_panel.reset_requested.connect(...)`), where `light_panel` is
+  guaranteed to already exist - a real ordering bug caught immediately by
+  a headless boot (`AttributeError` on `self.light_panel` not existing
+  yet) rather than surviving into a later test.
+- **`ColorPanel.black_white_button`** (new) - a single `SvgCheckableToolButton`
+  reusing the existing `General/b&w.svg` icon (already used by Files'
+  `bw_film_button` - "en gardant les icônes actuelles"), sitting in the
+  header right before the white balance eyedropper button, per the user's
+  own placement spec ("en haut du bouton couleur, à côté du bouton WB").
+  `black_white_toggled` is a bare signal - the panel has no opinion on
+  what B&W actually means, matching the "widget emits, MainWindow decides"
+  split every other toggle here follows.
+  - **`GlobalCorrection.saturation_before_black_white: Optional[float]`**
+    (`model.py`, new field) is the *only* new state needed - `None` means
+    off, a real float means on and holds whatever `saturation` was right
+    before being forced to `0.0`. One field doing double duty (flag +
+    restore value) rather than a separate bool, since nothing else needs
+    to know this state exists independently of that value - simpler than
+    the equivalent `BatchItem.saturation_before_bw` field the *old*
+    Solo-N&B mechanism needed (that one needed a real independent flag
+    too, since `harris_shutter` already meant something else on the same
+    object).
+  - **`MainWindow.on_black_white_toggled(checked)`** - multi-select-aware
+    (`_target_batch_indices()`, same convention as
+    `on_invert_toggled`/`on_harris_shutter_toggled`), always sets the
+    explicit new state rather than toggling each photo against its own
+    prior value. **Deliberately a completely separate code path from
+    `on_harris_shutter_toggled`** - writes only
+    `GlobalCorrection.saturation_before_black_white`, never touches
+    `BatchItem.saturation_before_bw`/`ChannelLayer.harris_shutter` at all,
+    so the old Solo-N&B mechanism (still reachable via Files' unchanged
+    `bw_film_button` in Solo mode) and this new one can't fight over the
+    same field.
+  - **Coexistence with the old Solo-N&B full-block disable, handled
+    explicitly rather than left as an edge case**: `set_disabled_message`
+    (still the old mechanism's own method) now lists `black_white_button`
+    in its `extra_widgets` too, so triggering old-style Solo-N&B disables
+    the new button along with everything else in the block - otherwise a
+    user could click the new B&W toggle while the whole panel was
+    supposed to be locked out, a real conflicting-state risk. **`ColorPanel.set_black_white_active(active)`**
+    is the *new* mechanism's own, narrower disable - sliders + WB
+    eyedropper + Reset only, explicitly leaving the B&W toggle itself
+    (must stay clickable to turn back off), title, "?", collapse and
+    close alone - and unlike `set_disabled_message`, shows no message
+    label, since the control causing the disable is right there, visibly
+    checked, with nothing left to explain.
+  - **`recompute_preview()`'s existing Color-Reset guard extended** -
+    already skipped re-enabling `color_panel.reset_button` while
+    `_solo_bw_active()` (see the earlier fix in this file), now also
+    skips it while `saturation_before_black_white is not None` - the
+    exact same bug class (an unconditional `has_color_correction()`-driven
+    sync silently re-enabling a button a disable mechanism had just
+    turned off), confirmed to reproduce here too before the guard was
+    added, and fixed the same way.
+  - **Threaded through every mechanism a `GlobalCorrection` field needs**:
+    `_sync_global_panel_from_model()` (drives `set_black_white_active`
+    from the active item's own field - the one shared sync point every
+    other per-item control already goes through, so no per-call-site
+    changes were needed anywhere else); `_extract_settings`/
+    `paste_settings_to` (copy/paste - included, since this is now a
+    "look" concept living alongside saturation itself, unlike
+    `harris_shutter`/alignment which stay excluded as photo-specific
+    source state); `reset_batch_items` needed **no change** -
+    `GlobalCorrection.reset()` is `self.__init__()`, which already wipes
+    the new field to `None` for free; undo/redo needed **no change** -
+    `GlobalCorrection` is already `copy.copy()`'d whole in
+    `_snapshot_state`, so a new field is automatically included, same
+    precedent as Exposure/Curves. Session persistence: `.trirgb` JSON
+    just adds `"saturation_before_black_white"` to the existing
+    `"global"` dict (native `None`/`null` support, no encoding needed);
+    QSettings uses a `-1.0` sentinel for `None` (`g_saturation_before_black_white`),
+    the same convention `capture_date`/`custom_order` already established
+    for an `Optional[float]` whose real range is never negative.
+  - i18n: `black_white_button_tooltip` ("Black & White"/"Noir et Blanc") -
+    deliberately plain wording, no "Trichrome" language, so it reads as
+    obviously distinct from Files' Mode-related controls even though both
+    involve the words "black" and "white."
+  - Verified headlessly (real synthetic photos, both Solo and Trichrome):
+    Negative fully relocated (present on `light_panel`, absent from
+    `import_panel`, functional end-to-end); the new B&W toggle correctly
+    forces/restores saturation and disables/re-enables sliders+WB+Reset
+    while leaving itself clickable, in **both** Solo and Trichrome mode
+    (confirming mode-agnosticism), and confirmed **not** to touch
+    `normal_layer.harris_shutter` at all (the old mechanism's own state,
+    left provably untouched); undo/redo; a full `.trirgb` round-trip and
+    its old-format-missing-key fallback; a full QSettings round-trip;
+    the old Solo-N&B path disabling the new button too (coexistence);
+    the `recompute_preview` reset-button regression guard, reproduced and
+    fixed; full French/English retranslation; pyflakes clean across every
+    touched file; i18n EN/FR parity holds. **Not verified here**: the real
+    visual/interactive feel in the running app - needs the user's own
+    pass, same as any visual/interactive change.
+
+## Batch Import window gains a Processing Mode block (added 2026-09-07)
+
+`batch_window.py`'s `BatchWindow` gained a **"Processing Mode"** `QGroupBox`
+at the very top - the same 3-way Solo/B&W Trichrome/Color Trichrome choice
+as the main window's Files-block Mode selector, with the same icons and
+labels (imported, not redefined - see below), and the same "?" info-bubble
+convention every other section in this window already uses. Per the
+user's exact spec: Trichrome (either variant) leaves the existing "Input
+folder" triplet-matching UI (`input_group` - Auto/Semi/Manual, the table,
+Advanced Options, all of it) completely unchanged; Solo replaces it with
+a much simpler "Select Image(s)… / Select Folder… / Clear" flow.
+
+- **`widgets/import_panel.py`'s `_MODE_KEYS`/`_MODE_ICONS`/`_MODE_LABEL_KEYS`
+  renamed to public** (`MODE_KEYS`/`MODE_ICONS`/`MODE_LABEL_KEYS`, no other
+  change) - now genuinely shared between 2 modules instead of one
+  module's own private detail, so the Files-block combo and this new
+  block can't drift apart by construction (both read the same 3 icon
+  paths/i18n keys). `raw_svg_icon` (already existed, added the same day
+  for the Files combo's own item icons) is reused verbatim for the new
+  `QRadioButton`s' icons.
+- **`processing_mode_radios: dict[str, QRadioButton]`** - one radio per
+  `MODE_KEYS` entry, in one `QButtonGroup`, each carrying its icon via
+  `setIcon(raw_svg_icon(...))` (set once at construction - icons don't
+  change with language) and its text via `retranslate_ui()`. Defaults to
+  B&W Trichrome, matching the Files combo's own default and this whole
+  window's historically trichrome-only purpose.
+  - **A real ordering bug caught immediately by a headless boot**: the
+    initial `setChecked(True)` for the default radio fires `toggled`
+    synchronously, which called `_on_processing_mode_changed()` -
+    referencing `input_group`/`solo_group`/`align_group`, none of which
+    exist yet at that point in `_build_ui` (they're constructed later).
+    Fixed by wrapping that one `setChecked(True)` in `blockSignals`, and
+    calling `_on_processing_mode_changed()` explicitly once at the very
+    end of `_build_ui()` instead, once every widget it touches actually
+    exists - same "sync explicitly once everything's built" pattern this
+    codebase already uses elsewhere for this exact class of ordering
+    issue.
+- **`solo_group`** (new, sibling of `input_group`, hidden by default) -
+  `Select Image(s)…`/`Select Folder…` (a plain `os.listdir` scan of the
+  chosen folder's direct children matching `IMAGE_EXTENSIONS`, not
+  recursive - predictable, and matches this window's existing folder-scan
+  conventions elsewhere) both append to `Clear` empties a
+  `_DropImageListWidget` (reused as-is for the same drag-and-drop-from-
+  Finder convenience the manual per-channel lists already have), with a
+  running `"N photo(s) queued"` count label. **`align_group` (Auto Align)
+  is also hidden in Solo mode** - not explicitly requested, but an
+  unavoidable direct consequence: there are no channels to align for a
+  single photo, so leaving a live, functional-looking Auto Align checkbox
+  visible there would be a real dead-end control, not just visual noise.
+  Advanced Options needed no separate visibility rule at all - it already
+  lives inside `input_group`, so hiding that whole block for Solo already
+  hides it for free ("N'affiche les options avancées que dans le cas de
+  la trichromie" turned out to already be true by construction once
+  `input_group` itself is gated).
+- **`start_import()`'s Solo branch reuses `MainWindow.on_carousel_files_dropped(paths)`
+  directly** - the exact same "build a fresh Solo `BatchItem` per path,
+  load what you can, report the rest in one alert" flow Finder drag-and-
+  drop onto the carousel already uses - rather than adding a second,
+  parallel Solo-import method on `MainWindow`. No new main-window-side
+  code was needed for this half of the feature at all.
+- **A real, if quiet, existing bug fixed as a consequence of wiring
+  Trichrome's own B&W/Color radios up to something real**:
+  `MainWindow.start_batch_import()` used to read
+  `self.import_panel.is_harris_shutter_active()` internally - silently
+  using whatever Harris Shutter state happened to be set on the *main
+  window's currently-active photo* at the moment Import was clicked,
+  regardless of what was actually being batch-imported. `harris_shutter`
+  is now an explicit parameter (its one and only caller,
+  `BatchWindow.start_import()`, passes
+  `self.processing_mode_radios["color_trichrome"].isChecked()`), so a
+  batch import's own decode strategy is now decided by this window's own
+  Processing Mode choice, not an unrelated, easy-to-miss side effect of
+  whatever the main window happened to be showing.
+- Verified headlessly: all 3 radios present with non-null icons, correct
+  default; `input_group`/`solo_group`/`align_group` visibility flips
+  correctly across all 3 Processing Mode selections; a real Solo import
+  end-to-end (`_add_solo_paths` → `start_import()` →
+  `on_carousel_files_dropped` → real `BatchItem`s appended, `mode ==
+  "normal"` for each); `_clear_solo`; the `harris_shutter` parameter
+  reaching `start_batch_import` correctly for both Trichrome variants
+  (confirmed via a stubbed `BatchImportWorker`/`QThread`, isolating the
+  parameter-threading logic from the real async import pipeline, which
+  isn't safely drivable synchronously in a quick script - a full mock of
+  Qt's threading API turned out to be its own small trap, see below);
+  French/English retranslation of the new group titles; both Processing
+  Mode states rendered via `QWidget.grab()` and visually inspected (not
+  just checked for `isHidden()`); pyflakes clean; i18n EN/FR parity
+  holds. **A test-harness trap hit while verifying the `harris_shutter`
+  wiring, not a product bug**: an early attempt drove
+  `BatchWindow.start_import()` end-to-end against incomplete stub
+  `BatchImportWorker`/`QThread` classes (missing `.quit()`/`.wait()`/etc.)
+  and hung indefinitely rather than raising - isolated by calling
+  `MainWindow.start_batch_import()` directly with the same stubs instead,
+  which surfaced the real (and expected) `AttributeError` on the missing
+  stub method immediately, confirming the parameter itself was already
+  flowing correctly before the hang was ever reached. **Not verified
+  here**: the real visual/drag feel in the running app, and an actual
+  end-to-end Trichrome batch import through a real `BatchImportWorker`
+  thread with a live Processing Mode selection - needs the user's own
+  pass, same as any interactive/visual change.
+
+**Follow-up, 2026-09-07 - Files' B&W Film/Color Film buttons removed
+outright.** Once Trichrome's B&W/Color choice is only ever made via the
+Mode combo (unchanged, still fully functional) and Solo's own cosmetic
+B&W concept moved to `ColorPanel.black_white_button`, these 2 buttons had
+nothing left to do that wasn't already covered elsewhere - they were a
+"quicker" shortcut to the combo's own last 2 entries in Trichrome mode,
+and the Solo-N&B trigger in Solo mode, both now redundant.
+- **Removed from `import_panel.py`**: `bw_film_button`/`color_film_button`
+  themselves, `_on_film_type_clicked`, the now-dead `_COLOR_FILM_TINT`/
+  `_MODE_ROW_TOGGLE_BTN_SIZE`/`_MODE_ROW_TOGGLE_ICON_SIZE` constants
+  (only ever existed for these 2 buttons), the film-button-syncing lines
+  in `set_mode_selection` (the combo-syncing half is untouched), both
+  tooltip lines in `retranslate_ui`, and the now-unused
+  `SvgCheckableToolButton`/`SvgColorCheckableToolButton` imports.
+  `bw_film_button_tooltip`/`color_film_button_tooltip` removed from both
+  i18n blocks (confirmed zero remaining references first).
+- **A real, direct consequence worth flagging rather than silently
+  leaving in place**: `MainWindow.on_harris_shutter_toggled`'s
+  `item.mode == "normal"` branch (the old Solo-N&B saturation-forcing
+  mechanism) is now unreachable from any live control. Tracing it
+  through: `ImportPanel.harris_shutter_toggled` is only ever emitted from
+  `_on_mode_combo_changed()` now, which only fires when the *target* mode
+  is Trichrome - and by the time that emit happens, the active item's own
+  `mode` has already been flipped to `"trichrome"` by the
+  `mode_change_requested` emit that always fires first in the same
+  method (Qt delivers connected-slot calls synchronously, in emission
+  order) - so `item.mode == "normal"` can no longer be true for whichever
+  item the combo action was performed on. **The one remaining path,
+  confirmed but not acted on**: a multi-selected *other* Solo photo
+  (not the active one) can still hit this branch, since
+  `on_harris_shutter_toggled` operates on the whole multi-selection
+  (`_target_batch_indices()`) while `on_import_mode_change_requested`
+  only ever touches the active item - selecting a Solo photo alongside a
+  Trichrome one and changing the Trichrome one's B&W/Color via the combo
+  would still reach the old branch for the co-selected Solo photo. This
+  was **deliberately left in place, not cleaned up**, since retiring it
+  fully (`BatchItem.saturation_before_bw`, `_solo_bw_active()`,
+  `ColorPanel.set_disabled_message`/`color_disabled_label`, the
+  `color_disabled_bw_film` i18n key) is a bigger, separate decision the
+  user hasn't explicitly made yet, distinct from "remove these 2
+  buttons" - flagged directly to the user instead of assumed. Comments
+  referencing the removed buttons in `global_panel.py`/`main_window.py`
+  were updated for accuracy, not left dangling.
+- Verified headlessly: `import_panel` has none of `bw_film_button`/
+  `color_film_button`/`_on_film_type_clicked`; the Mode combo (untouched)
+  still fully functional end-to-end; the panel renders correctly via
+  `QWidget.grab()` with just the combo + "?" on the row; full French/
+  English retranslation; pyflakes clean across every touched file; i18n
+  EN/FR parity holds.
+
+**Follow-up, 2026-09-07 - the old "Solo N&B" mechanism itself fully
+retired, per the user's own explicit direction: "le seul indicateur de
+s'il faut traiter les photos trichrome en mode normal ou couleur (harris
+shutter effect) sont les boutons mode."** Removed everything the flagged
+"multi-select edge case" above depended on, not just its trigger buttons:
+- **`MainWindow.on_harris_shutter_toggled`** - the whole `if item.mode ==
+  "normal": ...` branch deleted outright. The method is now unconditionally
+  Trichrome-only: a Solo item in the target selection is simply skipped
+  (`if item.mode == "normal": continue`), with no saturation side effect
+  of any kind - closing the multi-select edge case for good, not just
+  removing its usual trigger.
+- **`BatchItem.saturation_before_bw`** (model.py) removed entirely,
+  along with every read/write site: `_snapshot_state`'s and
+  `duplicate_batch_item`'s explicit `BatchItem(...)` reconstructions,
+  `reset_batch_items`, and the restore-and-clear logic
+  `_switch_to_trichrome_mode` used to run when leaving a Solo-N&B
+  selection via the Mode combo (that whole block is gone, along with the
+  `_sync_global_panel_from_model()` call it justified there).
+- **`MainWindow._solo_bw_active()`** removed entirely, along with both
+  call sites: `_sync_channels_panel_availability`'s `solo_bw`-driven
+  `color_panel.set_disabled_message(...)` call, and `recompute_preview`'s
+  reset-button guard (now only guards against the *new*
+  `black_white_toggled` mechanism's own disabled state, via
+  `saturation_before_black_white is None` alone).
+- **`ColorPanel.set_disabled_message`/`color_disabled_label`**
+  (`global_panel.py`) removed entirely - this was the Solo-N&B-specific
+  full-block gray-out-with-message mechanism; `set_black_white_active`
+  (the *new* toggle's own, narrower, message-less disable) is untouched
+  and is now the panel's only disable path. `make_disabled_message_label`/
+  `set_block_disabled` imports dropped from this file (still used
+  elsewhere, e.g. Trichrome Process's own Normal-mode disable, which is
+  unrelated and untouched). `color_disabled_bw_film` removed from both
+  i18n blocks (confirmed zero remaining references first) - and, since
+  `retranslate_ui()`'s own re-translate-if-currently-shown line for that
+  label no longer has anything to reference, that line was removed too.
+- **Deliberately left in place, since retiring it is a separate decision**:
+  `ChannelLayer.harris_shutter`/`BatchItem.normal_layer` itself (the field,
+  not the mechanism that used to act on it) - `normal_layer.harris_shutter`
+  is now vestigial (always `True`, set at every fresh-Solo-photo site,
+  never read for a live decision or written by anything else), but still
+  exists as a real field, still threaded through both session-persistence
+  mechanisms (QSettings `normal_harris_shutter`, `.trirgb`'s `"harris_shutter"`
+  key inside the `"normal"` dict) - removing the field itself would touch
+  the session-file schema, which is a bigger, separate cleanup than
+  "retire the mechanism that used to read/write it." Both model.py
+  docstrings (`ChannelLayer.harris_shutter`'s own, and
+  `BatchItem.normal_layer`'s) were rewritten to describe this vestigial
+  state accurately rather than left referencing a mechanism that no
+  longer exists.
+- Verified headlessly (real synthetic Solo and Trichrome photos):
+  `MainWindow` has no `_solo_bw_active`, `ColorPanel` has neither
+  `set_disabled_message` nor `color_disabled_label`; `BatchItem` has no
+  `saturation_before_bw`; calling `on_harris_shutter_toggled` on a
+  Solo-mode item is now a provable no-op (saturation and every other
+  field unchanged); the *new* universal `black_white_toggled` mechanism
+  is completely unaffected and still fully functional in both Solo and
+  Trichrome mode; Trichrome's own real `harris_shutter` decode-strategy
+  toggle (via the Mode combo) is unaffected and still fully functional;
+  undo/redo still round-trips cleanly; a full `.trirgb` load with an
+  injected legacy `"saturation_before_bw_LEGACY_UNUSED"` key (simulating
+  an old file's now-meaningless leftover data) loads without error,
+  confirming the removal doesn't break opening old session files; a full
+  QSettings round-trip; French/English retranslation; pyflakes clean
+  across every touched file; i18n EN/FR parity holds.
+
+**Follow-up, 2026-09-07 - ColorPanel's Black & White toggle reworked to
+perform a real grayscale conversion instead of forcing saturation to 0.**
+Raised by the user asking directly whether there's a technical difference
+between "saturation = 0" and "a real B&W conversion" - answer: yes. This
+app's saturation slider works in HSV color space
+(`apply_global_correction_before_curves`'s `cv2.cvtColor(...,
+COLOR_RGB2HSV)` pass), so setting it to 0 only grays a pixel to HSV's V
+channel (`max(R,G,B)`), not a perceptually-weighted luminance - a
+saturated pure red and a saturated pure blue at the same V read as
+*identical* grays under that approach, even though a real B&W conversion
+(and the human eye) sees blue as clearly darker than red. Once the user
+heard this, the follow-up was immediate: stop reusing the saturation
+slider for this toggle, do a real conversion instead - and keep every
+other piece of the toggle (its position, its "disable the rest of Color"
+behavior) exactly as it already was.
+- **`imaging.apply_black_white(rgb)`** (new) - a genuine luminance-
+  weighted grayscale conversion using `_LUMA_WEIGHTS = (0.299, 0.587,
+  0.114)` (ITU-R BT.601 - the same weights `compute_channel_histograms`'
+  own Y channel, and PIL's `.convert("L")` in `load_grayscale`, already
+  use elsewhere in this app - reused rather than picking a new set of
+  weights, so "B&W" means the same thing everywhere in this codebase).
+  Every pixel becomes `R=G=B=Y`. `_LUMA_WEIGHTS` moved earlier in
+  `imaging.py` (was defined just above `compute_channel_histograms`,
+  after `apply_global_correction`) so the new function can sit next to
+  the tone/curve functions it conceptually belongs with.
+- **`imaging.apply_global_correction` gained a `black_white: bool = False`
+  parameter**, applied as the true final step - after curves, which are
+  themselves already the final creative-shaping step applied after
+  saturation/white balance (see the Curves tool section above) - since a
+  B&W conversion of the finished image is conceptually "the very last
+  thing," not a correction with its own place mid-pipeline.
+  `compose_trichrome`/`compose_normal`/`compose_pre_white_balance_rgb`'s
+  shared `global_params` tuple grew a 13th element (`black_white`,
+  appended after `curves`) to carry this through - every construction/
+  unpacking site needed updating in lockstep (plain positional tuple,
+  same as every previous addition to this tuple): `main_window.py` (5
+  `global_params = (...)` construction sites, the 2 manual `apply_curves`-
+  then-`apply_black_white` unpacking sites in `recompute_preview`'s
+  composite branch and `_recompute_preview_normal`, `_NEUTRAL_GLOBAL`),
+  `export_worker.py`, `widgets/export_dialog.py`, and
+  `scan_tool/process.py`'s own `_NEUTRAL_GLOBAL` (already had a comment
+  documenting the *previous* addition of `curves` as element 12 for the
+  same "not enough values to unpack" reason - extended with the same
+  reasoning for element 13). One call site (`main_window.py`'s
+  `_full_res_color_image`-adjacent unpack at line ~4131) already used
+  `*_rest` and needed no change.
+- **`GlobalCorrection.saturation_before_black_white: Optional[float]`
+  (the field added a few hours earlier the same day) replaced outright
+  with `black_white_active: bool = False`** - simpler now that the field
+  no longer needs to double as both a flag and a saturation-restore
+  value; `saturation` itself is never read or written by this mechanism
+  at all anymore. `on_black_white_toggled` simplified to a plain
+  `gc.black_white_active = checked` (still multi-select-aware via
+  `_target_batch_indices()`, still converging a mixed selection on one
+  explicit state, unchanged from before). Threaded through every place
+  the old field was (mechanical rename, not a new integration): copy/paste
+  (`_extract_settings`/`paste_settings_to`, key `black_white_active`),
+  `.trirgb` JSON (same key inside `"global"`, both directions default to
+  `False` when absent so files saved a few hours earlier the same day -
+  before this rework - still load correctly), QSettings (`g_black_white_active`,
+  a plain bool - the old `-1.0`-sentinel-for-None encoding is gone
+  entirely now that there's no value to restore, just a flag),
+  `_sync_global_panel_from_model`'s `cp.set_black_white_active(...)` call,
+  and `recompute_preview`'s Color-Reset-button guard (now `if not
+  self.global_corr.black_white_active:` instead of an `is None` check).
+  Undo/redo needed no changes, same as every previous `GlobalCorrection`
+  field addition - `copy.copy()` already picks up the renamed field.
+  `ColorPanel.set_black_white_active()` itself (the disable-sliders/WB/
+  Reset mechanism) is completely unchanged - it already just took a bool.
+- **Icon**: the user separately moved the B&W icon file from `General/
+  b&w.svg` to its own `Color Correction/b&w.svg` (and edited it) -
+  `ColorPanel.black_white_button`'s `SvgCheckableToolButton` constructor
+  call updated to the new path to match; confirmed via `ls` that the old
+  `General/b&w.svg` path is genuinely gone (moved, not duplicated) and
+  nothing else in the codebase still referenced it.
+- Verified headlessly with a real synthetic image (a red/blue split
+  photo, specifically chosen so a correct luminance conversion reads the
+  two halves as different grays while the old HSV-based approach would
+  have made a saturated red and a saturated blue read closer to each
+  other): `apply_black_white` on a pure red vs. pure blue pixel returns
+  `0.299`/`0.114` respectively (matching BT.601 exactly, and clearly
+  distinct); `apply_global_correction(..., black_white=True)` produces a
+  true `R=G=B` image while `black_white=False` doesn't touch color at
+  all; toggling the real `ColorPanel` button end-to-end confirms
+  `saturation` stays at `1.0` throughout (never touched, unlike the old
+  mechanism), the composited preview is real grayscale with the red/blue
+  halves reading as visibly different tones (not identical, which would
+  indicate an HSV-V-style bug), and Color's sliders/WB/Reset disable
+  correctly; undo/redo (re-fetching `mw.global_corr` after restore, per
+  this app's own aliasing convention - a stale local reference to the
+  pre-undo object is not itself a bug, just a test-writing trap, caught
+  and fixed in the verification script itself); a full `.trirgb` round
+  trip plus its missing-key backward-compatibility fallback; a full
+  QSettings round-trip via `_save_session_state`/`_legacy_restore_session`;
+  `compose_normal`/`compose_trichrome`'s own direct export-path behavior
+  with `black_white` both `True`/`False`; a full app boot plus French/
+  English retranslation of the button's tooltip; pyflakes clean across
+  every touched file; i18n EN/FR parity holds; the real domain's
+  `g_black_white_active` confirmed untouched throughout. **Not verified
+  here**: the real visual read of the grayscale conversion against actual
+  photo content, and the new icon's appearance - needs the user's own
+  pass, same as any visual/interactive change.
+
+**Follow-up, 2026-09-07 - Batch Import window's Processing Mode row
+restyled to a framed/card selection instead of native radio bullets, plus
+2 renames**, all in `batch_window.py`/`i18n.py`:
+- **`_PROCESSING_MODE_RADIO_STYLE`** (new module constant) is applied to
+  each of the 3 `QRadioButton`s in `processing_mode_radios` - hides the
+  native indicator entirely (`QRadioButton::indicator { width: 0px;
+  height: 0px; }`) and instead draws a 2px border + light tinted
+  background around the whole icon+label box only while `:checked`, using
+  the same accent blue (`#5b9bd5`) the Files-block Mode combo's own popup
+  selection highlight already uses - "un encadrement du mode sélectionné"
+  rather than a bullet next to it, per the user's own spec, and visually
+  consistent with the one other "pick one of these modes" control already
+  in the app. A small `addSpacing(6)` between each radio in
+  `processing_mode_row` keeps the 3 framed boxes from touching now that
+  there's no bullet providing natural separation.
+- **`batch_advanced_options_title`** ("Advanced Options"/"Options
+  avancées") → **"Import Rules"/"Règles d'Import"** - both languages
+  renamed together (not just French), matching this codebase's usual
+  practice of keeping EN/FR as natural-in-each-language equivalents
+  rather than leaving one stale.
+- **`batch_input_group`** ("Input folder"/"Dossier d'entrée") →
+  **"File Selection"/"Sélection des fichiers"** (the user's own French
+  draft, "Selection", missing its accent - corrected to "Sélection",
+  matching this codebase's established typo-correction convention).
+- Verified headlessly: all 3 radios carry the new stylesheet; the group
+  renders via `QWidget.grab()` without error; both renamed titles read
+  correctly in EN and FR via `retranslate_ui()` (the Import Rules title
+  read through `CollapsibleSection.toggle_button.text()`, since
+  `CollapsibleSection` has no `.title()` of its own - `.setTitle()` is a
+  thin wrapper over the button's text); i18n EN/FR parity holds; pyflakes
+  clean; a full `MainWindow` + `BatchWindow` boot together. **Not verified
+  here**: the real visual read of the framed selection at actual size/DPI
+  - needs the user's own pass, same as any visual/interactive change.
+
+**Follow-up, 2026-09-07 - 3 more small fixes to the above, in one pass:**
+1. **`channels_disabled_normal_mode`'s English text translated to match
+   the French wording changed a few hours earlier** - "Tool available
+   only in Trichrome mode" → "This tool is only available for trichrome
+   photographs" (the EN half hadn't been updated when the FR text was
+   changed in the previous pass).
+2. **Batch Import's "B&W Trichrome"/"Trichromie N&B" processing-mode
+   radio labels were missing their literal "&"** - `QRadioButton.setText()`,
+   unlike `QComboBox.addItem()` (which the Files-block Mode combo uses,
+   unaffected), interprets a lone `&` as a mnemonic accelerator: it's
+   consumed and the following letter gets underlined instead of the `&`
+   being displayed. Fixed with `.replace("&", "&&")` on the text passed to
+   `processing_mode_radios[key].setText(...)` in `retranslate_ui()` - `&&`
+   is Qt's own escape for a literal ampersand, same convention already
+   used for `scan_panel.py`'s "B&W" button label.
+3. **Automatic mode's unmatched-files message split into a count + an
+   on-demand list**, per the user's own spec ("affiche le nombre... mais
+   cache le détail, à afficher sur demande, sous forme de liste"). Was one
+   `QLabel` showing "{n} unmatched files (ignored): a.png, b.png, ..." all
+   at once (comma-joined, word-wrapped) - now `unmatched_summary_row`
+   (the count only, `unmatched_summary_label`) sits next to a small flat
+   "Show list"/"Hide list" toggle button (`unmatched_toggle_button`,
+   `batch_unmatched_show_list_button`/`batch_unmatched_hide_list_button`
+   i18n keys), and the actual filenames moved into a real
+   `QListWidget` (`unmatched_list_widget`, capped at 120px, one filename
+   per row - a genuine list, not another joined string), hidden until the
+   toggle is checked. `batch_unmatched_label`'s text lost its trailing
+   colon (EN/FR) since nothing follows it inline anymore.
+   - **Deliberately scoped to Automatic mode only** - Manual and
+     Semi-automatic's own mismatch/invalid-count warnings
+     (`_refresh_manual_triplets`/`_refresh_semi_triplets`) are single-line
+     messages, not a list of filenames, so they keep using the original
+     `unmatched_label` `QLabel` unchanged. Since both groups of widgets
+     share the same space below the 3 sub-mode containers,
+     `_set_unmatched_summary_visible(False)` (new helper - hides the
+     summary row and collapses/unchecks the list together, as one unit)
+     is called whenever switching to Manual/Semi-automatic (both in
+     `_on_mode_changed` and `retranslate_ui`'s own mode dispatch), and
+     `_update_triplets_label()` (Automatic's own refresh) now explicitly
+     hides `unmatched_label` in turn - otherwise a stale count/list or
+     warning text from whichever mode was active last would keep showing
+     under the newly-selected mode.
+   - Verified headlessly: `bw_trichrome`'s raw (escaped) text is
+     `"B&&W Trichrome"`/`"Trichromie N&&B"` in both languages (Qt renders
+     the `&&` as a single literal `&`, confirmed this is the correct
+     fix rather than a new bug, since `.text()` always returns the raw
+     escaped string, not the rendered glyph); a real 3-item `unmatched`
+     list shows the summary row with correct count text and populates the
+     list widget with exactly 3 rows, list starts collapsed; checking the
+     toggle reveals the list and flips its label to "Hide list"; switching
+     to Manual mode hides both the summary row and the list and resets the
+     toggle to unchecked; switching back to Automatic re-shows the summary
+     (list still collapsed, by design - the toggle doesn't remember state
+     across a mode switch) using the same still-set `unmatched` data; an
+     empty `unmatched` list hides the summary row entirely; French
+     retranslation of the toggle button; i18n EN/FR parity holds;
+     pyflakes clean; full `MainWindow` + `BatchWindow` boot. **Not
+     verified here**: the real visual read of the summary/toggle/list
+     layout at actual size/DPI - needs the user's own pass, same as any
+     visual/interactive change.
+
+**Follow-up, 2026-09-07 - the "Show list" button dropped in favor of a
+hover reveal, and the unmatched summary moved onto the matched-triplets
+line.** Two more pieces of feedback on the same feature: (1) "l'indication
+'matching triplet' est justifiée à gauche en dessous du tableau, place
+l'indication 'unmatched' sur la même ligne, justifié sur la droite" -
+`triplets_label` and the unmatched summary now share one `QHBoxLayout`
+row (`triplets_row`) instead of two separate stacked widgets - triplets on
+the left, a stretch, then the unmatched summary on the right. (2) "Pas
+besoin du 'show list', elle doit apparaitre au survol" - the click-to-
+toggle button from the previous pass is gone; the detail list now reveals
+itself on hover instead.
+- **`_HoverRevealContainer(QWidget)`** (new, module level) - a plain
+  container overriding `enterEvent`/`leaveEvent` to show/hide a given
+  `reveal_widget`. Wraps **both** `unmatched_summary_label` and
+  `unmatched_list_widget` together in one small `QVBoxLayout` (label on
+  top, right-aligned; list below it, initially hidden) - not just the
+  label on its own. That's deliberate, not incidental: if the container
+  only wrapped the label, moving the cursor down off the label and onto
+  the now-revealed list (a sibling widget just below it) would cross the
+  label-only container's boundary and immediately hide the list again,
+  making it unreadable/unreachable the moment you tried to look at it.
+  Wrapping both together means the cursor moving from label to list stays
+  within the *same* container's rectangle the whole time, so it's never
+  seen as "leaving."
+- **Removed entirely**: `unmatched_toggle_button` (the flat "Show list"/
+  "Hide list" `QPushButton`), `unmatched_summary_row` (its old wrapping
+  `QWidget`, replaced by `unmatched_hover_container`), `_on_unmatched_toggle`/
+  `_refresh_unmatched_toggle_text`, and the now-dead
+  `batch_unmatched_show_list_button`/`batch_unmatched_hide_list_button`
+  i18n keys (both languages, confirmed zero remaining references via grep
+  first, per this project's usual dead-key-removal convention).
+  `_set_unmatched_summary_visible(visible)` simplified to match - just
+  `unmatched_hover_container.setVisible(visible)` plus (when hiding)
+  forcing the list back to hidden too, dropping the old
+  toggle-button-unchecking line entirely.
+- **`_update_triplets_label()`** now explicitly resets
+  `unmatched_list_widget.setVisible(False)` every time it repopulates the
+  list (a fresh rescan, or a mode/language refresh) - a defensive reset so
+  a stale "still revealed from a previous hover" state can't survive into
+  newly-scanned data; the list only ever becomes visible again through a
+  genuine new hover.
+- Verified headlessly: `triplets_label` and `unmatched_hover_container`
+  are confirmed siblings inside the same `QHBoxLayout` (the "same line"
+  requirement); a real `QEvent.Enter` sent to `unmatched_hover_container`
+  reveals the list, a following `QEvent.Leave` hides it again; switching
+  to Manual mode hides the whole hover container (and the list within it)
+  regardless of whatever hover state it was left in; switching back to
+  Automatic re-shows the summary with the list correctly collapsed again;
+  an empty `unmatched` list hides the container entirely; `bw` has neither
+  `unmatched_toggle_button` nor `unmatched_summary_row` as attributes
+  anymore; i18n EN/FR parity holds with both removed keys confirmed gone;
+  pyflakes clean; full `MainWindow` + `BatchWindow` boot. **Not verified
+  here** (inherent to a real mouse-hover gesture, which can't be driven
+  through actual OS-level mouse movement headlessly - only the
+  `QEvent.Enter`/`Leave` handling logic once Qt delivers those events was
+  exercised): whether the real cursor movement in the running app tracks
+  smoothly between the label and the list without any dead gap or flicker
+  - needs the user's own pass, same as any interactive/visual change.
+
+**Follow-up, 2026-09-07 - the unmatched-files hover now opens a real
+popup bubble (matching the "?" info buttons' own look), and every "?" info
+button in the app gained a 1-second static-hover trigger alongside its
+existing click.** Two requests in one message: (1) "afficher la liste au
+survol dans une fenêtre similaire à celle des boutons info '?'" - the
+inline hover-reveal from the previous pass (an inline `QListWidget`
+expanding below the label, still inside the same panel) is gone, replaced
+by a genuine floating popup, visually identical to `InfoBubble`. (2)
+"affiche le texte des boutons infos au clic comme actuellement, mais
+également après un survol statique d'une seconde" - every info button
+app-wide (there were 8 near-identical hand-rolled call sites) now also
+opens its bubble automatically after the cursor sits on it, unmoved off
+it, for a full second - click is completely unchanged.
+- **`widgets/info_bubble.py` restructured**: `_PopupBubble` (new, private
+  base class) factors out `InfoBubble`'s shared paint/position code (the
+  dark rounded-rect chrome, `show_near()`'s below-anchor placement) so a
+  second bubble shape can reuse it exactly. **`ListBubble(_PopupBubble)`**
+  (new) holds a real read-only, non-selectable `QListWidget` instead of a
+  `QLabel` - height capped to `_MAX_VISIBLE_ROWS = 8` visible rows
+  (derived from `sizeHintForRow(0)`, not a guessed fixed pixel value, so
+  it's correct regardless of font/DPI) rather than growing unbounded for
+  a long list. `show_list_bubble(items, anchor)` is `ListBubble`'s
+  `show_info_bubble`-equivalent constructor+show helper.
+- **`InfoButton(QToolButton)`** (new) is the one shared class replacing
+  every one of the app's 8 previous "?" button call sites (`main_window.py`'s
+  `channels_scope_info_button`/`lock_info_button`, `global_panel.py`'s
+  `LightPanel`/`ColorPanel.scope_info_button` ×2, `channel_panel.py`'s
+  `active_info_button`, `import_panel.py`'s `mode_info_button`, and
+  `batch_window.py`'s `_make_info_button`-built trio - `processing_mode_info_button`/
+  `mode_info_button`/`filters_info_button`) - each was previously 5 lines
+  of identical `QToolButton()`/`setText("?")`/`setFixedSize(18,18)`/
+  `setStyleSheet(...)`/`clicked.connect(lambda: show_info_bubble(...))`
+  boilerplate, now just `InfoButton("some_i18n_key")`. `info_key` is
+  looked up via `i18n.tr()` fresh every time the bubble is actually shown
+  (click or hover-timeout), never cached at construction - so a language
+  switch is picked up automatically, exactly like the original per-site
+  lambdas already did, no `retranslate_ui` hook needed for the bubble text
+  itself. A `QTimer` (single-shot, `_BUBBLE_HOVER_DELAY_MS = 1000`)
+  starts on `enterEvent` and stops on `leaveEvent` - so it only ever fires
+  if the cursor stays on the button, unmoved off it, for the full second
+  ("survol statique"); a real click stops any pending timer first (via
+  `_on_clicked`) so clicking while already hovering can't pop a second,
+  redundant bubble a moment later.
+  - **The 3 batch_window.py info buttons' own separate native
+    `.setToolTip(i18n.tr(key))` calls (set in `retranslate_ui`) were
+    removed** - now genuinely redundant once the same button shows the
+    same text via the new hover-bubble mechanism; keeping both would have
+    meant a native OS tooltip and this app's own bubble both appearing
+    for the same hover, a confusing double-display. No other info button
+    in the app had a native tooltip to begin with, so this cleanup was
+    scoped to just those 3.
+  - **`batch_window.py`'s `_make_info_button`/`_show_mode_info`
+    simplified to a one-line `InfoButton(info_key)` wrapper** (the
+    intermediary `_show_mode_info` method, only ever called from
+    `_make_info_button`, was removed outright as dead code once nothing
+    else called it).
+- **`batch_window.py`'s `_HoverRevealContainer` (the previous pass's
+  inline-reveal mechanism) replaced by `_UnmatchedSummaryLabel(QLabel)`**
+  - a plain `QLabel` subclass holding its own `items: list[str]` and the
+  currently-open `ListBubble` (or `None`). `enterEvent` opens a fresh
+  `ListBubble` via `show_list_bubble(self.items, self)` if there's data
+  and none is already open; `leaveEvent` doesn't close it immediately -
+  it schedules a `QTimer.singleShot(80, self._maybe_close_bubble)` check
+  instead, giving the cursor a brief window to actually land on the
+  bubble (which sits a few pixels below the label, per `show_near`'s own
+  positioning) before deciding whether to close it - `_maybe_close_bubble`
+  only closes if the bubble isn't `underMouse()` by then. **`ListBubble`
+  itself gained a `leaveEvent` that closes it** the moment the cursor
+  genuinely leaves the bubble's own rectangle - this is what actually
+  ends the hover once the cursor has moved onto the list and later off it
+  again; the label's own delayed check only handles the initial
+  label-to-bubble handoff. `close_bubble()` (new, public) force-closes
+  immediately and is called from `_set_unmatched_summary_visible(False)`
+  (a mode switch away from Automatic) and from `_update_triplets_label()`
+  every time it repopulates `items` - both defensive resets so a bubble
+  left open from stale data can't linger after the underlying scan
+  results change.
+- Verified headlessly: all 8 `InfoButton` call sites confirmed to
+  actually be `InfoButton` instances (not just visually similar
+  QToolButtons); a real `.click()` still opens an `InfoBubble` (checked
+  via `QApplication.activePopupWidget()`, not just that a method ran);
+  a real `QEvent.Enter`/`Leave` pair correctly starts/stops the hover
+  timer without firing it prematurely; force-firing the timer (simulating
+  the 1-second elapsed) opens the bubble exactly like a click would; the
+  unmatched summary's hover correctly opens a real `ListBubble` with the
+  right row count, the delayed leave-then-grace-period check correctly
+  closes it when the cursor doesn't land on the bubble, switching to
+  Manual mode force-closes an open bubble and hides the label, switching
+  back to Automatic and an empty `unmatched` list both behave correctly;
+  full `MainWindow` + `BatchWindow` boot in both languages; pyflakes
+  clean across every touched file; i18n EN/FR parity holds. **Not
+  verified here** (inherent to real mouse hardware - a genuine mouse
+  hovering motionless for exactly one second, or moving smoothly from a
+  label into a popup a few pixels below it, can't be driven through
+  actual OS-level input headlessly; only the `QEvent`/`QTimer` handling
+  logic once Qt delivers those was exercised): whether the 1-second delay
+  feels right in practice, and whether the label-to-bubble handoff for
+  the unmatched list reads as smooth rather than flickery at real
+  interaction speed - needs the user's own pass, same as any
+  interactive/visual change.
+
+**Follow-up, 2026-09-08, after the user tried the unified `InfoButton`
+for real - 2 refinements to how the hover/click paths behave.** The
+user confirmed the unification itself was the right call ("unifier les
+boutons info est une excellente idée"), then asked for: a shorter hover
+delay, and - the more significant change - for a hover-opened bubble to
+behave differently from a click-opened one once it's open.
+1. **`_BUBBLE_HOVER_DELAY_MS` lowered from `1000` to `500`** - a plain
+   constant change, `info_bubble.py`.
+2. **Click and hover now diverge in how long the bubble stays open**,
+   per the user's own explicit spec: "dans le cas d'un clic, laisse la
+   bulle affichée jusqu'à ce qu'on clique ailleurs" (a click's bubble
+   should behave exactly like it always did - `Qt.Popup`'s own native
+   "closes on any outside click" behavior, nothing to build) - "dans le
+   cas d'un survol, fais disparaitre la bulle quand on déplace la souris
+   ailleurs" (a hover's bubble should instead close itself the instant
+   the cursor leaves the button, without waiting for an outside click).
+   `InfoButton` gained `self._bubble` (the currently-open bubble, or
+   `None`) and `self._bubble_from_hover` (which of the two paths opened
+   it) - `_show_bubble(from_hover: bool)` is now the one method both
+   `_on_clicked`/`_on_hover_timeout` funnel through, closing any bubble
+   already open first (so re-triggering while one is up doesn't stack a
+   second). `leaveEvent` now checks `self._bubble_from_hover` before
+   closing: a click-opened bubble is left alone (stays open exactly as
+   before this pass), a hover-opened one is closed immediately - this is
+   the one genuinely new piece of logic this refinement added, since the
+   previous version's `leaveEvent` only ever stopped the *pending* timer,
+   never touched an *already-open* bubble regardless of how it got there.
+- Verified headlessly: `_BUBBLE_HOVER_DELAY_MS == 500`; a real `.click()`
+  opens a bubble with `_bubble_from_hover is False`, and a simulated
+  `QEvent.Leave` right after leaves it open and unhidden (confirming the
+  click path is unaffected); force-firing the hover timer (simulating
+  500ms elapsed) opens a bubble with `_bubble_from_hover is True`, and
+  the same simulated `QEvent.Leave` this time closes it (`self._bubble`
+  back to `None`) - confirming the two paths now genuinely diverge, not
+  just superficially; full app boot; pyflakes clean. **Not verified
+  here** (same standing caveat as the previous pass - real mouse timing/
+  movement can't be driven headlessly): whether 500ms reads as
+  responsive rather than trigger-happy in practice, and whether a hover
+  bubble disappearing immediately on leaving (vs. the previous behavior
+  of lingering until an outside click) feels right at real interaction
+  speed - needs the user's own pass.
+
+**Follow-up, 2026-09-08 - "?" info button added next to "Import Rules"
+explaining the 4 mapping rules.** `widgets/controls.py`'s
+`CollapsibleSection` (the disclosure-arrow section `advanced_options_section`
+is built from - also reused, unmodified in behavior, by each `ChannelPanel`'s
+`align_box`/`tone_box`) gained a small structural change to make this
+possible: the header used to be a bare `outer.addWidget(self.toggle_button)`,
+with nothing else able to share that row - now it's
+**`self.header_row` (a `QHBoxLayout`, new public attribute)** holding
+`toggle_button` (still `Expanding`, so it fills the whole row exactly as
+before when nothing else is added - confirmed `align_box`/`tone_box`
+still toggle correctly, unaffected). `batch_window.py` then just appends
+`self.advanced_options_info_button = InfoButton("batch_advanced_options_info")`
+to that same `header_row`, right after constructing
+`advanced_options_section` - reusing the `InfoButton` class from the
+previous 2 passes (click-and-hover, same chrome as every other "?" in the
+app), not a one-off widget.
+- **`batch_advanced_options_info`** (new i18n key, both languages) - same
+  bold-name/muted-description HTML format as `mode_select_info` and every
+  other multi-item info bubble in this app, one block per rule: **Classic
+  Trichrome** (R/G/B filtered photos map directly to R/G/B channels),
+  **IR Trichrome** (Red channel filled by an infrared-filtered photo
+  instead), **Aerochrome** (simulates Kodak Aerochrome's shifted mapping -
+  Red←Infrared, Green←Red, Blue←Green), **Custom** (freely assign which
+  filter feeds each channel) - wording derived directly from
+  `batch.py`'s own `_STATIC_MODE_CHANNEL_FILTERS` dict (`{"classic":
+  {"R":"R","G":"G","B":"B"}, "ir": {"R":"IR","G":"G","B":"B"},
+  "aerochrome": {"R":"IR","G":"R","B":"G"}}`) rather than guessed, so the
+  bubble text matches what each mode actually does.
+- Verified headlessly: `advanced_options_info_button` is a real
+  `InfoButton` instance carrying the right `info_key`, confirmed present
+  inside `advanced_options_section.header_row`'s own layout items (not
+  just constructed and forgotten); a real `.click()` opens a genuine
+  `InfoBubble` (via `QApplication.activePopupWidget()`); the FR/EN bubble
+  text contains the expected rule names in each language; the section's
+  own collapse/expand toggle still works correctly after the layout
+  change (confirmed on both `advanced_options_section` itself and, since
+  the same `CollapsibleSection` class is shared, a `ChannelPanel`'s
+  `align_box` too); the section renders via `QWidget.grab()` without
+  error; i18n EN/FR parity holds; pyflakes clean; full app boot. **Not
+  verified here**: the real visual read of the info button's placement
+  next to the title at actual size/DPI - needs the user's own pass, same
+  as any visual/interactive change.
+
+**Follow-up, 2026-09-08 - the rule-explanation info button moved next to
+the 4 choices it describes, a second, accented info button added next to
+the section title itself, and "Semi-automatic" renamed "Sequential."**
+Three separate requests in one message:
+1. **`advanced_options_info_button`** (the "Classic/IR/Aerochrome/Custom"
+   rule breakdown from the previous pass) moved out of
+   `advanced_options_section.header_row` (next to the title) into
+   `mode_row2` itself, right after the 4 `QRadioButton`s it explains - "à
+   côté des 4 choix," not next to the section title.
+2. **`InfoButton` gained an optional `color: str | None` constructor
+   parameter** (`widgets/info_bubble.py`) - when given, replaces the
+   default plain `border-radius` style with a colored ring
+   (`border: 1.5px solid {color}`) and matching bold `"?"` text color,
+   instead of the app's default plain/white info-button look - a visually
+   distinct, "more important" callout rather than an ordinary contextual
+   hint. **`self.auto_import_rules_info_button = InfoButton(
+   "batch_auto_import_rules_info", color="#5b9bd5")`** now sits where the
+   old button used to be, in `header_row` right next to the "Import
+   Rules" title - `#5b9bd5`, this app's one established accent blue
+   (already used by the Files-block Mode combo's popup highlight, the
+   block drag-reorder insertion line, and the Processing Mode radios'
+   checked-state border). `batch_auto_import_rules_info` (new i18n key,
+   both languages) - same bold-name/muted-description format as every
+   other info bubble here, exact user-supplied French text (silently
+   corrected "paramètre" → "paramètres" for plural agreement, matching
+   this codebase's established typo-correction convention), with a
+   natural English equivalent alongside it.
+3. **`batch_mode_semi_radio`** ("Semi-automatic"/"Semi-automatique") →
+   **"Sequential"/"Séquentiel"** - the user's own French spelling,
+   "Séquenciel," isn't a real French word; corrected to the actual term,
+   same silent-typo-correction convention as above. Every other place
+   this mode's old name appeared in user-facing text was updated to
+   match, not just the radio label itself: `batch_mode_info`'s own
+   bold-heading breakdown (both languages) - which, while being edited
+   anyway, was also caught referencing the now-stale "Advanced Options"/
+   "Options avancées" section name (renamed to "Import Rules"/"Règles
+   d'Import" in the very first pass of this whole feature) and corrected
+   to match - and the Quickstart help dialog's own "Batch mode" walkthrough
+   (`help_quickstart_content`, both languages), which listed all 3 batch
+   sub-modes by name. Internal identifiers (`mode_semi_radio`,
+   `semi_container`, `_semi_triplets`, `ADVANCED_MODE_IDS`, etc.) are
+   left as "semi" throughout - only user-facing text was renamed, per
+   this codebase's standing convention (e.g. "RGB Channels" → "Trichrome
+   Process" kept `independent_channels_group` unchanged internally).
+- Verified headlessly: the old rule-breakdown button is confirmed no
+  longer in `header_row` and present instead as the last item before the
+  stretch in `mode_row2`; the new blue button is confirmed in
+  `header_row`, is a real `InfoButton`, carries the right `info_key`, and
+  its `styleSheet()` contains the `#5b9bd5` accent; a real `.click()`
+  opens its bubble; `mode_semi_radio.text()` reads "Sequential"/
+  "Séquentiel" after `retranslate_ui()` in both languages; i18n EN/FR
+  parity holds; pyflakes clean across every touched file. **Not verified
+  here**: the real visual read of the blue accent and the moved button's
+  new position at actual size/DPI - needs the user's own pass, same as
+  any visual/interactive change.
+
+## Scan tool's Film/Scan Light rows restyled to match Processing Mode (2026-09-08)
+
+The integrated Scan block's Film (`_mode_buttons`, B&W/Color/Color
+Reversal) and Scan Light (`_light_mode_buttons`, External/White/RGB) rows
+- both plain checkable `QPushButton`s until now - were rebuilt as
+`QRadioButton`s using the exact same framed/icon-left look the Batch
+Import window's Processing Mode row already established (see the
+"Processing Mode block" section above): native indicator hidden, a
+2px transparent border that turns the app's one accent blue (`#5b9bd5`,
+with a matching translucent fill) while checked, per the user's own "même
+style que pour le processing mode... encadré, icone à gauche" - all in
+`widgets/scan_panel.py`.
+
+- **`_FRAMED_MODE_BUTTON_STYLE`** (new module constant) is the same QSS
+  shape as batch_window.py's own `_PROCESSING_MODE_RADIO_STYLE`, just with
+  tighter padding/font size (`padding: 3px 5px`, `font-size: 11px` vs. that
+  row's `5px 10px`/no font override) - this panel already had to fit 3
+  real-text buttons (worst case "Color Reversal"/"Couleur Inversible")
+  into a narrower side-panel column than the Batch Import window ever has
+  to, the same constraint the old `_COMPACT_MODE_BUTTON_STYLE` it replaces
+  was already tuned for.
+- **`svg_icons.tinted_svg_icon()`** (new, alongside the existing
+  `raw_svg_icon`) is a thin `QIcon(tinted_svg_pixmap(...))` wrapper - the
+  single-color-glyph counterpart to `raw_svg_icon`'s multi-color one, for
+  exactly this case: a `QRadioButton`/`QComboBox`/etc. item that needs a
+  **fixed, per-item tint** baked into the `QIcon` Qt's own item-view
+  chrome paints from, rather than the glyph's own embedded color (what
+  `raw_svg_icon` is for) or this app's usual live palette-driven repaint
+  (`SvgToolButton`'s own `paintEvent`, not applicable here since a
+  `QRadioButton`'s icon is drawn by Qt itself, not painted by this app).
+- **Film buttons**: all 3 reuse the same `Scan/camera_roll.svg` glyph
+  (already an existing, unreferenced-until-now asset in
+  `resources/icons/Scan/`), each tinted a different **fixed** color via
+  `_FILM_ICON_COLORS = ("#ffffff", "#e67e22", "#5b9bd5")` (order matching
+  `MODES` exactly: bw/color/color_reversal) - white for B&W, orange for
+  Color, blue for Color Reversal, exact colors given by the user. Orange
+  reuses `#e67e22`, the same hex `import_panel.py`'s now-removed
+  `_COLOR_FILM_TINT` used for its own (since-retired) Color Film button -
+  not re-picked from scratch, kept consistent with that earlier
+  orange-means-color-film precedent even though that button itself is
+  gone. Blue reuses this app's one established accent (`#5b9bd5`) rather
+  than a new color - the same value the framed-selection border itself
+  uses, so a selected Color Reversal button reads as "blue icon inside a
+  blue frame," not a color clash.
+- **Scan Light buttons**: no per-mode color scheme was specified for this
+  row (only "same style, icon on the left") - all 3 reuse one existing
+  asset, `Scan/light-bulb.svg`, tinted a plain white
+  (`_LIGHT_ICON_COLOR`), uniformly. If the user wants a per-mode
+  distinction here later (e.g. a muted icon for External since it has no
+  on-screen backlight to represent), that's a follow-up, not assumed here.
+- **Everything else about both rows is unchanged** - `mode_group`/
+  `light_mode_group` are still plain `QButtonGroup`s with the same
+  `addButton(btn, idx)` integer-id convention, so `checkedId()`/
+  `idClicked`/`setChecked(True)` at every existing call site (settings
+  load/save, `apply_settings_snapshot`, `_current_mode()`,
+  `_on_light_mode_changed`) needed zero changes - `QButtonGroup`/
+  `QAbstractButton`'s checkable API doesn't care whether the concrete
+  widget is a `QPushButton` or `QRadioButton`. `retranslate_ui()`'s
+  existing `.replace("&", "&&")` mnemonic-escaping (a `QRadioButton`'s
+  text is just as vulnerable to Qt's `&`-as-accelerator parsing as a
+  `QPushButton`'s) needed no changes either.
+- Verified headlessly: all 6 buttons (3 Film + 3 Light) are real
+  `QRadioButton` instances, each carrying the new style (`#5b9bd5` in its
+  stylesheet) and a non-null icon; `checkedId()`/`setChecked()` still work
+  correctly through `QButtonGroup` for both rows; a settings save/reload
+  round-trip still persists `mode_index` correctly; French/English
+  retranslation still correctly escapes the literal "&" in "B&W"/"N&B".
+  **Not verified here**: the real visual read of the framed selection and
+  the camera-roll/light-bulb icons at actual size/DPI in the running app -
+  needs the user's own pass, same as any visual/interactive change. The
+  standalone `scan_tool/scan_window.py` tool was deliberately left
+  untouched, per this project's standing "keep it alive at its already-
+  tested behavior" convention for that module.
+
+**Follow-up, 2026-09-08 - per-mode Scan Light icons, buttons tightened to
+their own content, and the whole panel brought back under the side
+panel's width budget.** Three requests in one message:
+1. **External Light** now uses `Scan/sun-light.svg` (tinted white, same
+   convention as every other icon here) instead of the plain bulb - a
+   distinct glyph for "an external light source" vs. the on-screen
+   backlight the other 2 modes actually drive.
+2. **RGB Light's icon "adapted to match its own title"** - the user's
+   first-choice ask, with an explicit fallback ("à défaut colore le texte
+   RGB en rouge vert et bleu") offered in case a real tri-color icon
+   wasn't practical. It was: **`svg_icons.gradient_tinted_svg_pixmap()`/
+   `gradient_tinted_svg_icon()`** (new, alongside the existing flat-color
+   `tinted_svg_pixmap`/`tinted_svg_icon`) recolors a glyph's alpha mask
+   with a `QLinearGradient` brush instead of one flat `QColor`, under the
+   same `CompositionMode_SourceIn` pass - so RGB Light reuses the exact
+   same `Scan/light-bulb.svg` glyph as White Light, just banded red→
+   green→blue top-to-bottom, rather than a hand-split multi-path icon (the
+   kind of icon surgery that took many iterations elsewhere in this app -
+   see the Mode-selector icon passes above - avoided here entirely). The
+   gradient's 3 stops reuse `_RGB_CHANNEL_COLORS` (imported from
+   `scan_tool.scan_window`, already used to drive the backlight window's
+   own color cycling during a real RGB capture) rather than this app's
+   more muted trichrome-channel palette (`channel_panel.CHANNEL_COLORS`)
+   - deliberately, since this icon represents that literal on-screen light
+   sequence, pure primaries and all. Verified numerically, not just
+   visually: sampling the rendered pixmap's first and last opaque pixels
+   top-to-bottom confirms red at the top and blue at the bottom. The
+   text-color fallback was **not** built - the gradient icon satisfied the
+   ask on its own.
+3. **Buttons resized to hug their own icon+text** ("adapte la taille des
+   boutons à la taille de l'icone + texte") - root cause, confirmed by
+   directly measuring a real `QRadioButton`'s horizontal size policy: it
+   defaults to `Minimum`, which lets a `QHBoxLayout` stretch a button
+   beyond its own `sizeHint()` to fill leftover row width when nothing
+   else in the row absorbs it. Both rows gained a trailing
+   `addStretch(1)` (plus a small `addSpacing(4)` between buttons for
+   breathing room) - the exact same fix already proven in the Batch
+   Import window's own Processing Mode row - so the *stretch item* now
+   absorbs leftover space instead of the buttons themselves.
+4. **"Fait en sorte que l'outil scan fit le panneau latéral"** - measuring
+   `scan_panel`'s own `minimumSizeHint()` against `_SIDE_PANEL_MIN_WIDTH`
+   (360px, `main_window.py`) after the stretch fix alone still showed
+   368px, still overflowing by a hair - the Scan Light row (`External
+   Light`/`White Light`/`RGB Light`) was the single widest row in the
+   panel by a wide margin (340px measured directly, vs. 283px for Film).
+   Root cause: each label repeated the word "Light" even though the
+   "Scan Light" section header sitting right above the row already
+   establishes that context - a real redundancy, not a font/padding
+   issue. **`scan_light_external`/`scan_light_white`/`scan_light_rgb`**
+   shortened to "External"/"White"/"RGB" (French: "Externe"/"Blanche"/
+   "RVB"), both languages - the same i18n keys the standalone
+   `scan_tool/scan_window.py` tool's own (also section-header-wrapped)
+   Scan Light `QGroupBox` uses, so both consumers benefit and stay in
+   sync automatically, no separate change needed there. This dropped the
+   panel's own `minimumSizeHint()` to 311px in both languages, comfortably
+   under the 360px minimum - confirmed no other row in the panel is wider
+   than the (now-283px) Film row either, so this one fix covers the whole
+   panel, not just the Scan Light row specifically.
+- Verified headlessly: all 3 Scan Light icons non-null, `External`'s icon
+  is genuinely `Scan/sun-light.svg` (not the bulb); the gradient icon's
+  top/bottom pixel colors confirmed red/blue as above; every row's
+  `minimumSize()` measured directly against the panel's own
+  `minimumSizeHint()`, confirming 311px in both EN and FR (previously
+  368px in EN before this pass); the standalone tool's own light buttons
+  read "External"/"White"/"RGB" too, confirming it isn't left stale; full
+  app boot; pyflakes clean across every touched file; i18n EN/FR parity
+  holds. Also rendered the real panel and individual buttons to PNGs via
+  `QWidget.grab()` and visually inspected them (not just checked
+  `isNull()`/measured geometry) - confirmed the camera-roll icons' colors
+  (white/orange/blue), the sun icon on External, the red-to-blue banding
+  on RGB's bulb, and that every button now hugs its own icon+text instead
+  of stretching to fill the row. **Not verified here**: the real
+  subjective read of the gradient bulb and the tightened buttons at
+  actual size/DPI on the user's own display - needs the user's own pass,
+  same as any visual/interactive change.
+
+**Follow-up, 2026-09-08 - the gradient RGB Light icon replaced with a real
+Rainbow glyph, per-mode Film notes, and Film/Light now drive real
+automatic processing on import.** Three requests in one message:
+1. **RGB Light's icon swapped from the gradient-banded light-bulb to a
+   real Rainbow glyph** (`Scan/rainbow-rgb.svg`, new asset, derived from
+   `General/rainbow.svg`'s 3 concentric arc bands) - the user's own
+   follow-up once they saw the gradient bulb in practice. `rainbow.svg`
+   draws all 3 bands as one compound `<path>` (3 subpaths sharing one
+   `fill`); split into 3 separate `<path>` elements (confirmed by
+   rendering both the original and the split version to PNG and
+   comparing before wiring anything in - splitting doesn't disturb the
+   geometry, each subpath is already a self-contained closed band) so
+   each can carry its own fixed color - innermost/middle/outermost =
+   `#ff0000`/`#00ff00`/`#0000ff`, the same pure primaries
+   `_RGB_CHANNEL_COLORS` already uses for the real backlight cycling.
+   Wired via `raw_svg_icon` (verbatim embedded colors), replacing
+   `gradient_tinted_svg_icon` - which, along with `QLinearGradient` and
+   `svg_icons.gradient_tinted_svg_pixmap`/`gradient_tinted_svg_icon`
+   themselves, is now dead code (confirmed via grep, only ever had the
+   one call site) and was deleted outright rather than left unused.
+2. **Per-mode Film notes** - `_sync_mode_note()`'s old invert-vs-not
+   phrasing (`scan_mode_invert_note`/`scan_mode_no_invert_note`, kept
+   as-is for the standalone `scan_tool/scan_window.py`, untouched) was
+   too coarse once B&W also auto-applies a real Black & White conversion
+   (see next point) - 3 new keys, one per `MODES` entry
+   (`_MODE_NOTE_KEYS` dict, new): `scan_mode_note_bw` ("Invert and Black
+   & White will be applied automatically on import."),
+   `scan_mode_note_color` ("Invert will be applied automatically on
+   import."), `scan_mode_note_color_reversal` ("Photo will be imported
+   without changes (already positive)." - reusing the existing "(already
+   positive)" phrasing for continuity). Exact wording/order given by the
+   user, French text lightly corrected for grammatical agreement
+   ("appliqué"→"appliqués", "importé"→"importée") per this codebase's
+   standing typo-correction convention.
+3. **Film and Light now drive real automatic processing on import, not
+   just labels** - the user's own framing: "maintenant que nous avons
+   affiné les processus de traitement, applique automatiquement ceux qui
+   correspondent." Two independent rules, both already partly true by
+   construction, now made explicit/complete:
+   - **Light → Solo vs. Trichrome**: already exactly what `light_mode_id`
+     branching in `_auto_add_to_session` produced (External/White → a
+     `"normal"`-kind request; RGB → a `"trichrome"`-kind one) - no code
+     change needed there. **RGB Light → *Standard* (not Color) Trichrome**
+     needed one explicit line: `_build_trichrome_batch_item_from_paths`
+     (main_window.py) now sets `layer.harris_shutter = False` on each of
+     the 3 built channels explicitly, rather than relying on
+     `ChannelLayer`'s own default (which happens to already be `False` -
+     this makes the "Standard Trichrome" intent readable at the call
+     site instead of implicit, and defends against that default ever
+     changing for an unrelated reason).
+   - **Film → invert + Black & White**: `invert` was already threaded
+     through from `MODES`' own 3rd tuple element (unchanged); **Black &
+     White is new** - `_finish_capture` now computes `mode_key == "bw"`
+     and threads it through `_auto_add_to_session` as a new `black_white`
+     parameter, added to both the `"normal"` and `"trichrome"` request
+     dict shapes (a new `"black_white"` key, alongside the existing
+     `"invert"`). `MainWindow.on_scan_add_to_session_requested` applies
+     it uniformly after building either kind of item:
+     `item.global_corr.black_white_active = g.get("black_white", False)`
+     - reusing the real B&W mechanism from the "Design discussion" pass
+       above (`ColorPanel.black_white_button`'s own field, a genuine
+       luminance-weighted grayscale conversion - not the retired
+       saturation-forcing one), so a scanned B&W photo now renders as
+       true neutral gray automatically, the same as if the user had
+       clicked the Color block's own B&W toggle by hand. **Deliberately
+       applied to a Trichrome (RGB Light) capture too, not just Solo** -
+       reasoned through rather than assumed: genuine B&W film has no real
+       spectral variation for an R/G/B-backlit triple-scan to pick up, so
+       the resulting Trichrome composite from 3 near-identical scans is
+       already close to neutral; forcing `black_white_active` on top is a
+       safety net against any residual sensor-driven color cast, not a
+       contradiction of the trichrome recomposition itself.
+   - `on_carousel_files_dropped` (Finder drag-and-drop, the other caller
+     of `_build_normal_batch_item`) is untouched - it never emits a
+     `black_white` key, so `g.get("black_white", False)` in the scan
+     handler only ever applies to Scan tool captures, never drag-and-drop
+     imports, by construction (drag-and-drop doesn't go through
+     `on_scan_add_to_session_requested` at all).
+- Verified headlessly with real synthetic images: `raw_svg_icon` for RGB
+  Light is non-null; all 3 Film modes' note text matches the new keys in
+  both EN and FR; a full `on_scan_add_to_session_requested` round-trip
+  for all 4 meaningful cases - External+B&W (Solo, invert=True,
+  black_white_active=True), White+Color (Solo, invert=True,
+  black_white_active=False), White+Color Reversal (Solo, no changes at
+  all), and RGB Light+B&W (Standard Trichrome, invert=True on all 3
+  channels, black_white_active=True, harris_shutter=False on all 3
+  channels) - each checked field-by-field on the real resulting
+  `BatchItem`, not just that the call didn't crash; pyflakes clean across
+  every touched file; i18n EN/FR parity holds. Also rendered the real
+  panel to a PNG and visually confirmed the Rainbow icon's 3 bands read
+  clearly and the new B&W note text displays correctly. **Not verified
+  here**: the real visual read of the Rainbow icon at actual toolbar
+  size/DPI, and real end-to-end hardware capture through this new
+  auto-processing path - needs the user's own pass with a real camera,
+  same as every other Scan tool behavior that can't be driven headlessly.
+
+**Reverted, same day - RGB Light's icon back to the gradient-banded
+light-bulb.** Having tried the Rainbow glyph in the real app, the user
+found the earlier banded-bulb version clearer ("elle me paraissait plus
+claire") and asked to go back to it. `_RGB_LIGHT_ICON` reverted from
+`"Scan/rainbow-rgb.svg"` to `"Scan/light-bulb.svg"`; the light-row icon
+construction reverted from `raw_svg_icon(...)` back to the `QLinearGradient`
++ `gradient_tinted_svg_icon(...)` version (red→green→blue top-to-bottom,
+same `_RGB_CHANNEL_COLORS` stops as before). `svg_icons.gradient_tinted_svg_pixmap`/
+`gradient_tinted_svg_icon` (deleted as dead code in the previous pass, once
+the Rainbow icon superseded them) are back, along with the `QLinearGradient`
+import in both `svg_icons.py` and `scan_panel.py`. **`Scan/rainbow-rgb.svg`
+itself was left on disk, unreferenced** - same conservative convention as
+every other superseded icon in this project (`Toolbar/Import.svg`, the old
+hand-drawn `Toolbar/scan.svg`, `General/layers-mode-solo.svg`, ...) - in
+case it's wanted again later, not deleted outright.
+- Verified headlessly: `gradient_tinted_svg_pixmap` reproduces the exact
+  same red-top/blue-bottom banding confirmed in the original pass; the
+  real panel renders via `QWidget.grab()` without error; pyflakes clean.
+
+**Collapsible sub-sections, added 2026-09-08 - "ajoute la possibilité de
+masquer les sous blocs."** The integrated Scan block's 4 muted-label
+sections (Device/Film/Scan Light/Save Location - Capture stays always
+visible, it's the primary action, not a "sub bloc") can now each be
+collapsed to just their own header row, independently.
+
+- **Reused `controls.CollapsibleSection` directly rather than a new
+  widget** - confirmed by reading its own source first that it's
+  borderless by default (no frame/QSS unless a caller adds one, e.g.
+  `ChannelPanel.align_box`/`.tone_box` add a colored border explicitly,
+  `batch_window.py`'s `advanced_options_section` doesn't), so wrapping
+  each section in one doesn't reintroduce the nested-border visual noise
+  this panel's flat, hairline-divided convention (see the module
+  docstring) was specifically built to avoid. Only `toggle_button`'s own
+  stylesheet needed overriding, via a new `_SECTION_TOGGLE_STYLE`
+  constant (composed from the existing `_SECTION_LABEL_STYLE` string, not
+  duplicated) - `CollapsibleSection`'s own default is bold, this panel's
+  established header look is muted small-caps gray.
+- **`_make_section(layout)`** (new helper) builds one, expanded by
+  default (`setChecked(True)` - existing behavior shows everything, so a
+  first run shouldn't surprise anyone by hiding something), styled, wired
+  so any click immediately persists (`section.toggled.connect(lambda
+  _checked: self._save_settings())` - the same catch-all
+  `_save_settings()` every other field here already funnels through).
+  `device_section`/`mode_section`/`light_section`/`location_section`
+  replace the old plain `device_section_label`/`mode_section_label`/
+  `light_section_label`/`location_section_label` `QLabel`s; every row
+  that used to be added to the flat `body_layout` within each section now
+  goes into that section's own `content_layout` instead (mechanical,
+  section by section) - `retranslate_ui()`'s 4 `.setText(...)` calls on
+  the old labels became `.setTitle(...)` calls on the sections themselves.
+- **Persisted to the Scan tool's own QSettings domain** (`self._settings`,
+  the same `ScanTool` domain everything else here already lives in) -
+  4 new keys, `section_expanded_{device,film,light,location}` - written
+  in `_save_settings()`, read back in `_load_settings()`. **Deliberately
+  not** added to `settings_snapshot()`/`apply_settings_snapshot()` (the
+  `.trirgb`-embeddable subset) - collapse state is a personal display
+  preference, not scan configuration a specific session should carry, same
+  reasoning as why block-collapse state elsewhere in the main app isn't
+  session-file content either.
+- **A real bug caught by testing, not just a test-harness quirk this
+  time**: the first version read each section's persisted value and
+  applied it *last* in `_load_settings()` (mirroring where `mode_index`/
+  `light_mode_index` are loaded, on the assumption that "load order-
+  independent fields last is safe," the same reasoning already used
+  there). This is actually unsafe for `CollapsibleSection` specifically -
+  unlike the plain widgets above it (protected by an explicit
+  `blockSignals` bracket), `CollapsibleSection.setChecked()` always calls
+  `_on_clicked()`/emits `toggled` directly as a plain method call, with no
+  `blockSignals`-reachable escape hatch. So loading `mode_index` (which
+  triggers `_sync_mode_note()` → `_save_settings()`) fired *before* the
+  collapse state was restored, and that intermediate save read each
+  section's still-default (expanded) widget state and wrote it straight
+  back into QSettings - clobbering the real persisted value *before* the
+  collapse-restoring code ever got to read it. Every app launch would
+  have silently discarded a saved collapsed section back to expanded.
+  **Fixed by capturing all 4 persisted values into local variables at the
+  very top of `_load_settings()`**, before anything else runs and before
+  any such intermediate save could clobber them - the values are then
+  applied (still near the end, so `_save_settings()`'s own final write is
+  the fully-correct one) from those locals, never re-read from QSettings
+  a second time. Caught by testing on the *same instance* (desyncing a
+  section's in-memory state from what was just persisted, then calling
+  `_load_settings()` again and confirming the restored value was wrong) -
+  constructing a second `ScanPanel()` in the same process to "simulate a
+  restart" is the already-documented unreliable way to catch this class
+  of bug in this environment (see the Curves tool's own test-harness
+  note), not what actually caught it here.
+- Verified headlessly: all 4 sections are real `CollapsibleSection`
+  instances, expanded by default; titles read correctly via
+  `retranslate_ui()`; clicking (`setChecked(False)`) collapses the
+  section's own `content` and persists immediately; the fixed reload path
+  correctly restores a persisted collapsed state on the same instance
+  (reproducing, then confirming the fix for, the bug above); the other 3
+  sections' own state survives an unrelated section's reload untouched;
+  re-expanding persists correctly; a language switch preserves whichever
+  sections were collapsed while still updating their title text; the real
+  `TrichromeMaker`/`ScanTool` QSettings domain confirmed untouched
+  throughout; the panel's own `minimumSizeHint()` stays at 337px, still
+  comfortably under the 360px side-panel minimum despite each header row's
+  new chevron; the standalone `scan_tool/scan_window.py` tool (untouched)
+  still boots independently; pyflakes clean; i18n EN/FR parity holds.
+  Also rendered the real panel to PNGs, fully expanded and with 2 sections
+  collapsed, and visually confirmed both states look correct - not just
+  that the boolean flags were right. **Not verified here**: the real
+  click/chevron feel at actual size/DPI in the running app - needs the
+  user's own pass, same as any interactive/visual change.
+
 ## Roadmap
 
 A running todo list, not tied to version numbers - update it as items are
@@ -4702,27 +6084,68 @@ picked up/finished rather than reorganizing it per release.
   being built out.
 - **Scan tool** - in progress. See the `## Negative scan tool` section
   below for the full build-out log (tethered capture, Scan Light RGB
-  sequence, film base correction, session integration as a block).
+  sequence, film base correction, session integration as a block). Real
+  RAW capture/import (the camera's "Format" dropdown currently only
+  finds a quality config on the connected camera, best-effort, never
+  exercised end-to-end) is a distinct, not-yet-started follow-up - see
+  its own roadmap entry below.
+- **RAW file support** - not started. Scoped in conversation on
+  2026-09-08, not yet prototyped: the natural integration point is
+  `imaging.py`'s two loader functions (`load_grayscale`/`load_color`,
+  the sole choke points every caller in the app already goes through),
+  decoding via `rawpy` (LibRaw wrapper) into the same float32 array shape
+  those functions already return - `uint16` output is already handled by
+  existing normalization code, so no new dtype branch is needed there.
+  Packaging risk is lower than it first looked: `trichrome.spec` already
+  bundles `cv2`'s native binaries via `collect_all()` (line ~10-14) -
+  the exact same mechanism would cover `rawpy`'s bundled LibRaw. Open
+  decisions before starting: decode color space (linear vs. sRGB-
+  gamma-encoded output, to stay consistent with how the rest of the
+  pipeline already treats JPEG/TIFF input), import/preview performance
+  for a full RAW demosaic (likely fine as-is, since import is already
+  threaded and preview is already downsampled to `MAX_PREVIEW_DIM`),
+  EXIF/capture-date extraction (currently PIL-based, needs a RAW-aware
+  fallback per format), and X-Trans demosaic quality/speed specifically
+  on the Fuji X-T3 (the one camera actually confirmed working over
+  gphoto2 tethering so far). Recommended first slice: scope to the Scan
+  tool's own capture/import path (where a RAW option already exists as a
+  stub) rather than opening arbitrary RAW files through the general
+  Import window right away.
 
 **Smaller items:**
 
 - ✅ Clarify the different operating modes (Normal, Trichrome, Harris
   Shutter effect) - done 2026-09-07, see `## Mode selector` below (Files
   block's unified Solo / B&W Trichrome / Color Trichrome combo).
-- Clarify the Film modes (Black & White, Color Negative, Reversible) the
-  same way - this is the Scan tool's own 3-way Film selector
+- ✅ Clarify the Film modes (Black & White, Color Negative, Reversible)
+  the same way - this is the Scan tool's own 3-way Film selector
   (`scan_panel.py`'s `MODES`/B&W-Color-Color Reversal buttons), a
-  different concept from the Mode selector above - still open.
-- Adapt the Import menu/UI to reflect those clarified modes - done for the
-  operating-mode half (the Files block's own Mode selector above); the
-  Film-modes half is still open, tied to the previous bullet.
-- Give each of the above its own matching icon so the modes read clearly
+  different concept from the Mode selector above. Done 2026-09-08, see
+  `## Scan tool's Film/Scan Light rows restyled to match Processing Mode`
+  below - rebuilt as framed/icon-left radio buttons matching the Batch
+  Import window's Processing Mode look.
+- ✅ Adapt the Import menu/UI to reflect those clarified modes - done for the
+  operating-mode half (the Files block's own Mode selector, and the Batch
+  Import window's own Processing Mode block, above); the Scan tool's own
+  window already reflects its now-clarified Film modes too (see above).
+- ✅ Give each of the above its own matching icon so the modes read clearly
   at a glance, not just from label text - done for the operating modes
-  (Mode selector's 3 `General/layers-mode-*.svg` icons); still open for
-  the Scan tool's Film modes.
+  (Mode selector's 3 `General/layers-mode-*.svg` icons) and done
+  2026-09-08 for the Scan tool's Film modes (`Scan/camera_roll.svg`,
+  tinted white/orange/blue per mode via `_FILM_ICON_COLORS`).
 - Do a pass over how the different tools relate to each other in the
   processing pipeline - clarify their actual order (which one applies
   before/after which) both internally and for the user.
+- ✅ **Thumbnail grid view** - already implemented (`grid_view_toggle_btn`/
+  `on_grid_view_toggled` in `main_window.py`), just missing from this
+  log until now. Reuses the existing `CarouselWidget` instance verbatim -
+  reparents it into `preview_stack` in place of the canvas and switches
+  it into a grid layout (`CarouselWidget.set_grid_mode(True)`) instead of
+  the bottom filmstrip strip, so every filmstrip feature (drag-to-reorder,
+  right-click menu, selection) keeps working unchanged with nothing
+  separate to keep in sync. Toggled via the bottom bar's grid icon or
+  Escape to leave; zoom in/out buttons route to the carousel's own
+  zoom while grid mode is active instead of the canvas's.
 
 ## Crop tool (built out 2026-09-01, functional)
 

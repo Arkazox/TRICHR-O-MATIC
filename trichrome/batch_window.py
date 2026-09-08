@@ -5,24 +5,101 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QSettings, Qt, Signal
+from PySide6.QtCore import QSize, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QRadioButton, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
+    QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+    QMessageBox, QPushButton, QRadioButton, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from . import batch, filters as filters_module, i18n
 from .widgets.channel_panel import CHANNEL_COLORS
 from .widgets.controls import CollapsibleSection
-from .widgets.info_bubble import show_info_bubble
+from .widgets.import_panel import MODE_ICONS, MODE_KEYS, MODE_LABEL_KEYS
+from .widgets.info_bubble import InfoButton, show_list_bubble
+from .widgets.svg_icons import raw_svg_icon
 
 ORG_NAME = "TrichromeMaker"
 APP_NAME = "TrichromeMaker"
 CHANNEL_LETTERS = ("R", "G", "B")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
 ADVANCED_MODE_IDS = ("classic", "ir", "aerochrome", "custom")
+
+# Processing Mode's own 3 choices (2026-09-07) - a plain QRadioButton's
+# native bullet ("puce") reads poorly next to a real icon+label, so the
+# indicator is hidden entirely and the selected choice is framed instead -
+# a bordered/tinted box around the whole icon+text, same accent blue
+# (#5b9bd5) the Files-block Mode combo's own popup highlight already
+# uses, for visual consistency between the two "pick one of these 3
+# modes" controls in this app.
+_PROCESSING_MODE_RADIO_STYLE = """
+QRadioButton {
+    border: 2px solid transparent;
+    border-radius: 6px;
+    padding: 5px 10px;
+    background: transparent;
+}
+QRadioButton::indicator {
+    width: 0px;
+    height: 0px;
+}
+QRadioButton:hover {
+    background: rgba(255, 255, 255, 14);
+}
+QRadioButton:checked {
+    border: 2px solid #5b9bd5;
+    background: rgba(91, 155, 213, 30);
+}
+"""
+
+
+class _UnmatchedSummaryLabel(QLabel):
+    """Automatic mode's unmatched-files count - shows the actual filenames
+    in a ListBubble (the same popup chrome this app's "?" info buttons
+    use) while hovered, per the user's own "afficher la liste au survol
+    dans une fenêtre similaire à celle des boutons infos" spec
+    (2026-09-07) - replacing both the earlier "Show list" button pass and
+    the hover-reveals-an-inline-widget pass right before this one.
+
+    Since the bubble is a separate top-level popup window (not a child
+    widget the way the earlier inline list was), leaving this label and
+    leaving the bubble are two different widgets' events - `leaveEvent`
+    below doesn't close the bubble immediately, it defers by a beat via
+    `QTimer.singleShot` so a cursor crossing the small gap between the
+    label and the bubble has a chance to actually land on the bubble
+    first; `ListBubble.leaveEvent` (info_bubble.py) is what closes it once
+    the cursor has genuinely left the bubble itself."""
+
+    _CLOSE_GRACE_MS = 80
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.items: list[str] = []
+        self._bubble = None
+
+    def enterEvent(self, event) -> None:
+        if self.items and self._bubble is None:
+            self._bubble = show_list_bubble(self.items, self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        QTimer.singleShot(self._CLOSE_GRACE_MS, self._maybe_close_bubble)
+        super().leaveEvent(event)
+
+    def _maybe_close_bubble(self) -> None:
+        if self._bubble is not None and not self._bubble.underMouse():
+            self._bubble.close()
+            self._bubble = None
+
+    def close_bubble(self) -> None:
+        """Forces the bubble closed immediately - used whenever the
+        summary itself is about to be hidden (mode switch, a fresh
+        rescan), so a still-open bubble can't linger over stale data."""
+        if self._bubble is not None:
+            self._bubble.close()
+            self._bubble = None
 
 
 class _DropImageListWidget(QListWidget):
@@ -92,6 +169,51 @@ class BatchWindow(QMainWindow):
         central = QWidget()
         root = QVBoxLayout(central)
 
+        # --- Processing Mode: Solo / B&W Trichrome / Color Trichrome -
+        # added 2026-09-07, sitting above everything else so it's the
+        # first decision a user makes here, same 3 choices/icons/labels as
+        # the main window's own Files-block Mode selector
+        # (widgets/import_panel.py's MODE_KEYS/MODE_ICONS/MODE_LABEL_KEYS -
+        # imported rather than redefined, so the two stay in lockstep by
+        # construction). Trichrome (either variant) leaves the existing
+        # "Input Folder"-style triplet-matching UI (input_group) exactly
+        # as it already worked; Solo replaces it with a much simpler
+        # "select image(s) / select folder / clear" flow (solo_group) -
+        # see _on_processing_mode_changed. The "?" reuses the exact info
+        # bubble text the Files-block combo already uses (mode_select_info)
+        # - same 3 modes, same explanation, no need for a second one.
+        self.processing_mode_group = QGroupBox()
+        processing_mode_row = QHBoxLayout(self.processing_mode_group)
+        self.processing_mode_button_group = QButtonGroup(self)
+        self.processing_mode_radios: dict[str, QRadioButton] = {}
+        dpr = self.devicePixelRatioF() or 1.0
+        for key in MODE_KEYS:
+            radio = QRadioButton()
+            radio.setIcon(raw_svg_icon(MODE_ICONS[key], 20, dpr))
+            radio.setIconSize(QSize(20, 20))
+            radio.setStyleSheet(_PROCESSING_MODE_RADIO_STYLE)
+            radio.toggled.connect(lambda checked: self._on_processing_mode_changed() if checked else None)
+            self.processing_mode_button_group.addButton(radio)
+            processing_mode_row.addWidget(radio)
+            processing_mode_row.addSpacing(6)
+            self.processing_mode_radios[key] = radio
+        processing_mode_row.addStretch(1)
+        self.processing_mode_info_button = self._make_info_button("mode_select_info")
+        processing_mode_row.addWidget(self.processing_mode_info_button)
+        # Default matches the Files-block combo's own default (B&W
+        # Trichrome) - this window's whole pre-existing purpose (triplet
+        # matching) is trichrome-focused, so that's the least surprising
+        # starting point. blockSignals here since input_group/solo_group/
+        # align_group don't exist yet at this point in _build_ui - a real
+        # AttributeError caught by a headless boot otherwise, since
+        # setChecked(True) fires `toggled` synchronously - the initial
+        # visibility sync happens explicitly at the end of _build_ui
+        # instead, once every referenced widget exists.
+        self.processing_mode_radios["bw_trichrome"].blockSignals(True)
+        self.processing_mode_radios["bw_trichrome"].setChecked(True)
+        self.processing_mode_radios["bw_trichrome"].blockSignals(False)
+        root.addWidget(self.processing_mode_group)
+
         self.input_group = QGroupBox()
         input_layout = QVBoxLayout(self.input_group)
 
@@ -145,12 +267,25 @@ class BatchWindow(QMainWindow):
             "QToolButton { border: none; font-weight: bold; font-size: 13px; text-align: left; "
             "background: rgba(120, 150, 220, 45); border-radius: 4px; padding: 5px 8px; }"
         )
+        # A second "?" button, in the app's accent blue, sits right next to
+        # the section's own disclosure title (added 2026-09-08) - a general
+        # explanation of what this whole section is for, distinct from the
+        # per-rule breakdown below.
+        self.auto_import_rules_info_button = InfoButton(
+            "batch_auto_import_rules_info", color="#5b9bd5")
+        self.advanced_options_section.header_row.addWidget(self.auto_import_rules_info_button)
         self.advanced_mode_radios: dict[str, QRadioButton] = {}
         mode_row2 = QHBoxLayout()
         for mode_id in ADVANCED_MODE_IDS:
             radio = QRadioButton()
             mode_row2.addWidget(radio)
             self.advanced_mode_radios[mode_id] = radio
+        # "?" info button explaining the 4 rules themselves (Classic/IR/
+        # Aerochrome/Custom) - sits right next to the 4 choices it
+        # describes, not the section title (moved here 2026-09-08,
+        # originally lived in the header row next to the title instead).
+        self.advanced_options_info_button = InfoButton("batch_advanced_options_info")
+        mode_row2.addWidget(self.advanced_options_info_button)
         mode_row2.addStretch(1)
         self.advanced_options_section.content_layout.addLayout(mode_row2)
 
@@ -300,8 +435,31 @@ class BatchWindow(QMainWindow):
         input_layout.addWidget(self.manual_container)
         self.manual_container.setVisible(False)
 
+        # Matched-triplets count (left) and Automatic mode's own
+        # unmatched-files summary (right) share one line (2026-09-07, per
+        # the user's own "place l'indication 'unmatched' sur la même
+        # ligne, justifié sur la droite" spec). The unmatched summary went
+        # through 3 shapes the same day: one wrapped QLabel showing
+        # "{n} unmatched files (ignored): a.png, b.png, ..." all at once
+        # (comma-joined, could grow very long); then a real QListWidget
+        # behind an explicit "Show list" toggle button; then that same
+        # list revealed inline on hover instead of a click; now a
+        # ListBubble popup on hover (_UnmatchedSummaryLabel, same chrome
+        # as this app's "?" info buttons) - "dans une fenêtre similaire à
+        # celle des boutons infos." Kept separate from unmatched_label
+        # below (the Manual/Semi-automatic mismatch warnings, which are
+        # single-line text, not a file list, so they keep their original
+        # plain-label treatment on their own line, unchanged).
+        triplets_row = QHBoxLayout()
         self.triplets_label = QLabel()
-        input_layout.addWidget(self.triplets_label)
+        triplets_row.addWidget(self.triplets_label)
+        triplets_row.addStretch(1)
+        self.unmatched_summary_label = _UnmatchedSummaryLabel()
+        self.unmatched_summary_label.setStyleSheet("color: #c99;")
+        triplets_row.addWidget(self.unmatched_summary_label)
+        self.unmatched_summary_label.setVisible(False)
+        input_layout.addLayout(triplets_row)
+
         self.unmatched_label = QLabel()
         self.unmatched_label.setWordWrap(True)
         self.unmatched_label.setStyleSheet("color: #c99;")
@@ -312,6 +470,37 @@ class BatchWindow(QMainWindow):
         input_layout.addWidget(self.advanced_options_section)
 
         root.addWidget(self.input_group)
+
+        # --- Solo: a much simpler alternative to the triplet-matching UI
+        # above, shown instead of input_group when Processing Mode is
+        # Solo - see _on_processing_mode_changed. Reuses
+        # _DropImageListWidget for the same drag-and-drop-from-Finder
+        # convenience the manual per-channel lists already have.
+        self.solo_group = QGroupBox()
+        solo_layout = QVBoxLayout(self.solo_group)
+        solo_btn_row = QHBoxLayout()
+        self.solo_select_images_button = QPushButton()
+        self.solo_select_images_button.clicked.connect(self._add_solo_images)
+        self.solo_select_folder_button = QPushButton()
+        self.solo_select_folder_button.clicked.connect(self._add_solo_folder)
+        self.solo_clear_button = QPushButton()
+        self.solo_clear_button.clicked.connect(self._clear_solo)
+        solo_btn_row.addWidget(self.solo_select_images_button)
+        solo_btn_row.addWidget(self.solo_select_folder_button)
+        solo_btn_row.addWidget(self.solo_clear_button)
+        solo_layout.addLayout(solo_btn_row)
+
+        self.solo_list = _DropImageListWidget()
+        self.solo_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.solo_list.files_dropped.connect(self._add_solo_paths)
+        self.solo_list.model().rowsInserted.connect(self._update_solo_count)
+        self.solo_list.model().rowsRemoved.connect(self._update_solo_count)
+        solo_layout.addWidget(self.solo_list)
+
+        self.solo_count_label = QLabel()
+        solo_layout.addWidget(self.solo_count_label)
+        root.addWidget(self.solo_group)
+        self.solo_group.setVisible(False)
 
         self.align_group = QGroupBox()
         align_layout = QVBoxLayout(self.align_group)
@@ -337,6 +526,11 @@ class BatchWindow(QMainWindow):
         for radio in self.advanced_mode_radios.values():
             radio.toggled.connect(lambda checked: self._on_advanced_mode_changed() if checked else None)
 
+        # Applies the default Processing Mode's visibility now that every
+        # widget it touches (input_group/solo_group/align_group) exists -
+        # see the blockSignals note above.
+        self._on_processing_mode_changed()
+
     def _restore_folder(self) -> None:
         settings = QSettings(ORG_NAME, APP_NAME)
         input_dir = settings.value("batch_input_dir", "")
@@ -347,11 +541,23 @@ class BatchWindow(QMainWindow):
     # ------------------------------------------------------------------
     def retranslate_ui(self) -> None:
         self.setWindowTitle(i18n.tr("batch_window_title"))
+        self.processing_mode_group.setTitle(i18n.tr("batch_processing_mode_group"))
+        for key in MODE_KEYS:
+            # QRadioButton, unlike QComboBox's addItem, interprets a lone
+            # "&" as a mnemonic accelerator (consuming it and underlining
+            # the next letter instead of displaying it) - "&&" escapes it
+            # to a literal ampersand, same convention already used for
+            # scan_panel.py's "B&W" button label.
+            self.processing_mode_radios[key].setText(i18n.tr(MODE_LABEL_KEYS[key]).replace("&", "&&"))
+        self.solo_group.setTitle(i18n.tr("batch_solo_group"))
+        self.solo_select_images_button.setText(i18n.tr("batch_solo_select_images_button"))
+        self.solo_select_folder_button.setText(i18n.tr("batch_solo_select_folder_button"))
+        self.solo_clear_button.setText(i18n.tr("batch_manual_clear_button"))
+        self._update_solo_count()
         self.input_group.setTitle(i18n.tr("batch_input_group"))
         self.mode_auto_radio.setText(i18n.tr("batch_mode_auto_radio"))
         self.mode_semi_radio.setText(i18n.tr("batch_mode_semi_radio"))
         self.mode_manual_radio.setText(i18n.tr("batch_mode_manual_radio"))
-        self.mode_info_button.setToolTip(i18n.tr("batch_mode_info"))
 
         self.semi_add_button.setText(i18n.tr("batch_semi_select_button"))
         self.semi_remove_button.setText(i18n.tr("batch_manual_remove_button"))
@@ -375,7 +581,6 @@ class BatchWindow(QMainWindow):
         self.filters_table.setHorizontalHeaderLabels(
             [i18n.tr("batch_filters_name_header"), i18n.tr("batch_filters_tokens_header"), ""])
         self.add_filter_button.setText(i18n.tr("batch_filters_add_button"))
-        self.filters_info_button.setToolTip(i18n.tr("batch_filters_hint"))
         self._refresh_filters_table()
 
         for letter in CHANNEL_LETTERS:
@@ -391,34 +596,42 @@ class BatchWindow(QMainWindow):
         self.add_button.setText(i18n.tr("batch_import_button"))
 
         if self.mode_auto_radio.isChecked():
+            self.unmatched_label.setVisible(False)
             self._update_triplets_label()
         elif self.mode_semi_radio.isChecked():
+            self._set_unmatched_summary_visible(False)
             self._refresh_semi_triplets()
         else:
+            self._set_unmatched_summary_visible(False)
             self._refresh_manual_triplets()
+
+    def _set_unmatched_summary_visible(self, visible: bool) -> None:
+        """Hides (or shows) the Automatic-mode unmatched-files summary -
+        used whenever switching away from (or back to) Automatic mode, so
+        a stale count/hover-bubble from a previous scan can't linger
+        visible under Manual/Semi-automatic, which have their own
+        separate unmatched_label warning instead."""
+        self.unmatched_summary_label.setVisible(visible)
+        if not visible:
+            self.unmatched_summary_label.close_bubble()
 
     def _update_triplets_label(self) -> None:
         self.triplets_label.setText(i18n.tr("batch_triplets_found", n=len(self.triplets)))
+        self.unmatched_label.setVisible(False)
         if self.unmatched:
-            self.unmatched_label.setText(
-                i18n.tr("batch_unmatched_label", n=len(self.unmatched)) + " " + ", ".join(self.unmatched))
-            self.unmatched_label.setVisible(True)
+            self.unmatched_summary_label.setText(i18n.tr("batch_unmatched_label", n=len(self.unmatched)))
+            self.unmatched_summary_label.items = list(self.unmatched)
+            self.unmatched_summary_label.close_bubble()
+            self.unmatched_summary_label.setVisible(True)
         else:
-            self.unmatched_label.setVisible(False)
+            self._set_unmatched_summary_visible(False)
+            self.unmatched_summary_label.items = []
 
     # ------------------------------------------------------------------
     # Matching mode
     # ------------------------------------------------------------------
-    def _make_info_button(self, info_key: str) -> QToolButton:
-        button = QToolButton()
-        button.setText("?")
-        button.setFixedSize(18, 18)
-        button.setStyleSheet("QToolButton { border-radius: 9px; }")
-        button.clicked.connect(lambda _c=False, key=info_key, btn=button: self._show_mode_info(key, btn))
-        return button
-
-    def _show_mode_info(self, info_key: str, anchor: QToolButton) -> None:
-        show_info_bubble(i18n.tr(info_key), anchor)
+    def _make_info_button(self, info_key: str) -> InfoButton:
+        return InfoButton(info_key)
 
     def _on_mode_changed(self) -> None:
         auto = self.mode_auto_radio.isChecked()
@@ -428,11 +641,67 @@ class BatchWindow(QMainWindow):
         self.semi_container.setVisible(semi)
         self.manual_container.setVisible(manual)
         if auto:
+            self.unmatched_label.setVisible(False)
             self._update_triplets_label()
         elif semi:
+            self._set_unmatched_summary_visible(False)
             self._refresh_semi_triplets()
         else:
+            self._set_unmatched_summary_visible(False)
             self._refresh_manual_triplets()
+
+    def _on_processing_mode_changed(self) -> None:
+        """Solo has nothing to match into triplets and nothing to align -
+        swaps input_group's whole triplet-matching UI (Auto/Semi/Manual,
+        table, Advanced Options - all of it, unchanged) for the much
+        simpler solo_group, and hides Auto Align entirely (align_group)
+        since there are no channels to align in Solo mode."""
+        is_solo = self.processing_mode_radios["solo"].isChecked()
+        self.input_group.setVisible(not is_solo)
+        self.solo_group.setVisible(is_solo)
+        self.align_group.setVisible(not is_solo)
+
+    # ------------------------------------------------------------------
+    # Solo mode
+    # ------------------------------------------------------------------
+    def _add_solo_images(self) -> None:
+        settings = QSettings(ORG_NAME, APP_NAME)
+        start_dir = settings.value("last_import_dir", "") or ""
+        name_filter = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;" + i18n.tr("file_filter_all")
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, i18n.tr("batch_solo_select_images_title"), start_dir, name_filter)
+        if not paths:
+            return
+        settings.setValue("last_import_dir", os.path.dirname(paths[-1]))
+        self._add_solo_paths(paths)
+
+    def _add_solo_folder(self) -> None:
+        settings = QSettings(ORG_NAME, APP_NAME)
+        start_dir = settings.value("last_import_dir", "") or ""
+        folder = QFileDialog.getExistingDirectory(self, i18n.tr("batch_solo_select_folder_title"), start_dir)
+        if not folder:
+            return
+        settings.setValue("last_import_dir", folder)
+        found = sorted(
+            os.path.join(folder, name) for name in os.listdir(folder)
+            if name.lower().endswith(IMAGE_EXTENSIONS) and os.path.isfile(os.path.join(folder, name)))
+        self._add_solo_paths(found)
+
+    def _add_solo_paths(self, paths: list[str]) -> None:
+        for path in paths:
+            item = QListWidgetItem(os.path.basename(path))
+            item.setData(Qt.UserRole, path)
+            item.setToolTip(path)
+            self.solo_list.addItem(item)
+
+    def _clear_solo(self) -> None:
+        self.solo_list.clear()
+
+    def _solo_paths(self) -> list[str]:
+        return [self.solo_list.item(i).data(Qt.UserRole) for i in range(self.solo_list.count())]
+
+    def _update_solo_count(self, *_args) -> None:
+        self.solo_count_label.setText(i18n.tr("batch_solo_count", n=self.solo_list.count()))
 
     def _current_triplets(self) -> list:
         if self.mode_auto_radio.isChecked():
@@ -677,6 +946,19 @@ class BatchWindow(QMainWindow):
     # Confirm & hand off to the main window
     # ------------------------------------------------------------------
     def start_import(self) -> None:
+        if self.processing_mode_radios["solo"].isChecked():
+            paths = self._solo_paths()
+            if not paths:
+                QMessageBox.warning(self, i18n.tr("batch_window_title"), i18n.tr("batch_solo_no_photos"))
+                return
+            # Same "build a fresh Solo BatchItem per path, load what you
+            # can, report the rest" flow Finder drag-and-drop already
+            # uses on the main carousel - no separate Solo-import method
+            # needed on MainWindow.
+            self.main_window.on_carousel_files_dropped(paths)
+            self.close()
+            return
+
         auto_mode = self.mode_auto_radio.isChecked()
         semi_mode = self.mode_semi_radio.isChecked()
         if auto_mode and not self.input_path_edit.text():
@@ -699,5 +981,6 @@ class BatchWindow(QMainWindow):
             ref_letter=self._ref_letter(),
             auto_align=self.auto_align_checkbox.isChecked(),
             replace=False,
+            harris_shutter=self.processing_mode_radios["color_trichrome"].isChecked(),
         )
         self.close()

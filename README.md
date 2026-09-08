@@ -1,21 +1,78 @@
 # Trichr-o-matic
 
-A macOS app that recomposes a color image from three black & white photos shot through Red, Green and Blue filters (trichromy).
+A macOS app that recomposes a color image from three black & white photos shot
+through Red, Green and Blue (or IR/Aerochrome/custom) filters — and, more
+generally, a photo-editing app built around that trichromy workflow.
 
 ## Features
 
-- Import the 3 B&W shots (R, G, B) — TIFF/PNG/JPEG, 8 or 16 bit
-- **Negative** option per channel, for raw uninverted negative scans
-- Automatic alignment (ORB feature matching + RANSAC, falling back to ECC intensity-based alignment)
-- Manual alignment: drag directly on the preview (offset), Shift+scroll (scale), Alt+scroll (rotate), or the sliders — double-click any slider to reset it
-- Per-channel color correction: black/white point, gamma, brightness, contrast
-- Global color correction on the composed image: black/white point, gamma, brightness, contrast, saturation, hue
-- Export as 8-bit PNG, 8-bit JPEG or 16-bit TIFF
-- **Batch mode** (separate window): point it at a folder of R/G/B triplets (matched by filename) and process them all at once, reusing the alignment and/or color correction dialed in on the Simple mode window
-- English / French interface, switchable anytime from the Language menu (defaults to English)
-- Distraction-free fullscreen preview, trackpad pinch-to-zoom and two-finger pan
-- Built-in help (Help menu, or F1) with shortcuts and a quick-start guide
-- Remembers the last folder used to load/export images
+### Modes
+- **Solo** — a single, already-composed photo (color or B&W), loaded and
+  edited as-is, no channel recomposition.
+- **B&W Trichrome** — the classic case: 3 black & white shots taken through
+  R/G/B (or IR/Aerochrome/custom) filters, recomposed into one color image.
+- **Color Trichrome** — 3 real color photos, each keeping its own R, G or B
+  channel instead of being flattened to grayscale, for a genuine
+  "Harris Shutter" look.
+
+### Import
+- Load photos individually (**Trichrome Process** block), or drag image files
+  from Finder straight onto the thumbnail strip (added as Solo photos).
+- **Import Images…** (batch import window): pick a Processing Mode (Solo /
+  B&W Trichrome / Color Trichrome), then match R/G/B triplets **Automatic**ally
+  by filename (Classic, IR Trichrome, Aerochrome or a fully custom
+  filter-to-channel mapping), **Sequential**ly (files already in R, G, B
+  order), or **Manual**ly (pick each column yourself) — or just select
+  individual images/a whole folder for Solo mode.
+- TIFF/PNG/JPEG, 8 or 16 bit. **Negative** option per channel for raw,
+  uninverted negative scans.
+
+### Editing tools — every one its own movable, collapsible, closable block
+- **Trichrome Process** — per-channel alignment (drag on the canvas,
+  Shift+scroll to scale, Alt/Option+scroll to rotate, or sliders) and tone
+  (exposure, black/white point, gamma, brightness, contrast, highlights/
+  shadows), plus automatic alignment (ORB feature matching + RANSAC, falling
+  back to ECC) and a lockable reference channel.
+- **Light** / **Color** — the composed image's overall look: exposure,
+  brightness, contrast, highlights/shadows/whites/blacks, gamma, negative
+  (Light); temperature, tint, saturation, a white-balance eyedropper, and a
+  true luminance-weighted **Black & White** conversion (Color).
+- **Crop** — aspect ratio presets (or custom/original/free), straighten,
+  horizontal/vertical mirror, 4 grid overlay styles, interactive drag/resize
+  rectangle.
+- **Curves** — independent Y (master), R, G and B tone curves with a live,
+  channel-matched histogram overlay showing the image *before* your edits.
+- **Scan** — tethered capture from a connected camera (via `gphoto2`): live
+  connect/disconnect status, 3 film types (Black & White / Color / Color
+  Reversal), an optional on-screen RGB backlight (with an automatic
+  red/green/blue 3-shot sequence for scanning straight into a trichrome
+  triplet), film-base color correction for color negatives, and automatic
+  import of finished captures into the current session.
+- **Histogram** — live Y/R/G/B curves with clipping indicators and a pixel
+  eyedropper.
+
+### Layout
+- Drag any block by its grip to reorder it, move it between the two side
+  panels, collapse it to just its header, or close it — bring closed blocks
+  back from the **Tools** menu.
+- Save named **Layout Presets**; the toolbar's Trichrome / Color Correction /
+  Crop / Scan buttons (and their T/E/C/S shortcuts) jump straight to your own
+  saved layout for each task. **Reset Layout** restores the defaults.
+
+### Everything else
+- Undo/redo for nearly every action, filmstrip with drag-to-reorder,
+  multi-select, copy/paste settings, Reset All and Duplicate per photo, and a
+  thumbnail grid view.
+- Export as 8-bit PNG, 8-bit JPEG or 16-bit TIFF — current photo, a selection,
+  or the whole session at once.
+- Sessions: portable `.trirgb` project files (File ▸ Save/Open Session), plus
+  an OS-level autosave fallback.
+- Recovery for missing/moved source photos, with a folder-based relink flow.
+- English / French interface, switchable from the Help menu (defaults to
+  English).
+- Distraction-free fullscreen preview, trackpad pinch-to-zoom and two-finger
+  pan.
+- Built-in help (Help menu, or F1) with shortcuts and a quick-start guide.
 
 ## Development
 
@@ -26,7 +83,8 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
-Iterate this way while developing — no need to rebuild the `.app` bundle until you want a standalone, double-clickable copy.
+Iterate this way while developing — no need to rebuild the `.app` bundle until
+you want a standalone, double-clickable copy.
 
 ## Building the macOS app
 
@@ -34,26 +92,35 @@ Iterate this way while developing — no need to rebuild the `.app` bundle until
 ./build_mac.sh
 ```
 
-The app is generated at `dist/Trichr-o-matic.app`.
+The app is generated at `dist/Trichr-o-matic.app`. Bump the version string in
+`trichrome.spec` (`CFBundleShortVersionString`) before a release build — see
+`CHANGELOG_EN.md` / `CHANGELOG_FR.md` for the user-facing history of each
+version.
 
-## Usage notes (Simple mode)
+## Usage notes
 
-1. Load the reference image (Green by default), then the other two. If working from raw negative scans, check **Negative** on each channel first.
-2. To align a layer: click **Auto align**, or check **Active** on that layer and drag it directly on the canvas (scroll to fine-tune scale/rotation).
-3. Adjust each channel's color correction, then the global color correction if needed.
-4. Export the final result.
+1. Pick a **Mode** for your photo in the Files block: **Solo** for a single
+   already-composed image, or a Trichrome mode to combine 3 R/G/B shots.
+2. In a Trichrome mode, load the reference channel first (Green by default),
+   then the other two — they're auto-aligned against it automatically (redo
+   anytime with **Auto Align** in the Trichrome Process block). Switch the
+   locked/reference channel anytime if needed.
+3. Adjust each channel's alignment/tone (Trichrome Process), then the overall
+   Light/Color correction, Crop and Curves as needed — every block can be
+   rearranged, collapsed or hidden to fit how you work.
+4. Click **Export…** to choose an output folder/format and save the result.
 
-The reference channel is the geometric anchor (canvas size and orientation) — its own alignment controls are disabled. Switch the reference via the **Reference** radio button if needed.
+## Batch import
 
-The **Alignment** and **Color correction** sections are collapsed by default to keep the import step uncluttered; click the arrow next to their title to expand them.
+Open it from the sidebar's **Import Images…** button (⌘I). It processes many
+photos in one run:
 
-## Batch mode
-
-Open it from **File → Batch Mode…**. It processes a whole folder of scans in one run:
-
-1. Point it at a folder containing all your R/G/B files. Filenames just need a channel marker somewhere (suffix or prefix, with or without a separator) — e.g. `scene01_R.tif` / `scene01_G.tif` / `scene01_B.tif`, `R_scene01.tif`, `scene01R.tif`, or the French `rouge`/`vert`/`bleu`/`r`/`v`/`b`. Files sharing the same base name are grouped into a triplet; anything that doesn't match a complete R+G+B set is listed as unmatched and skipped.
-2. Choose the alignment strategy:
-   - **Reuse current alignment from Simple mode** — applies the exact fixed offset/scale/rotation currently set in the Simple mode window to every triplet. Ideal when a fixed scanning rig introduces the same geometric offset regardless of the scene: calibrate once on one representative shot in Simple mode, then batch the rest.
-   - **Auto-align each image individually** — re-runs the automatic alignment per triplet, for scans whose framing shifts from shot to shot.
-   - Color correction and negative settings are always taken from the current Simple mode window, whichever alignment strategy you pick.
-3. Pick an output folder, filename suffix and format, then **Start batch**. Progress and a per-file log are shown live; **Cancel** stops after the current image.
+1. Choose a **Processing Mode** for the whole batch — Solo, B&W Trichrome, or
+   Color Trichrome.
+2. In a Trichrome mode, point it at a folder of R/G/B files (matched
+   automatically by a filter keyword in the filename, or manually), pick the
+   **Import Rules** (which filter feeds which channel — Classic, IR,
+   Aerochrome, or a custom mapping), and optionally auto-align each triplet
+   on import. In Solo mode, just select the individual images or a folder.
+3. Click **Import** — the new photos are added to the filmstrip, ready to
+   edit and export like any other photo in the session.

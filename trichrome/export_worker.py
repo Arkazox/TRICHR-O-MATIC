@@ -56,7 +56,7 @@ class BatchExportWorker(QObject):
                     global_params = (
                         gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
                         gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
-                        {ch: tuple(pts) for ch, pts in gc.curves.items()})
+                        {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
                     rgb = imaging.compose_normal(image, global_params)
                     ref_path = nl.path
                 else:
@@ -69,7 +69,7 @@ class BatchExportWorker(QObject):
                     global_params = (
                         gc.black_point, gc.white_point, gc.gamma, gc.exposure, gc.brightness, gc.contrast,
                         gc.shadows, gc.highlights, gc.saturation, gc.temperature, gc.tint,
-                        {ch: tuple(pts) for ch, pts in gc.curves.items()})
+                        {ch: tuple(pts) for ch, pts in gc.curves.items()}, gc.black_white_active)
                     rgb = imaging.compose_trichrome(images, geo_params, tone_params, ref.color_index, global_params)
                     ref_path = ref.path
 

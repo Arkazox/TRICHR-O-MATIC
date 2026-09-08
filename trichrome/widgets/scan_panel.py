@@ -23,8 +23,8 @@ asked to drop the intermediate list entirely). `_finish_capture` still
 emits `add_to_session_requested` internally, right after logging to
 `manifest.append_entry` - MainWindow owns the actual BatchItem construction
 (imaging/model.py), same "panel emits, MainWindow builds" split as
-import_panel.py's add_photo_requested/load_normal_requested. The
-standalone tool's own history list + "Add to Current Session" button are
+import_panel.py's load_normal_requested. The standalone tool's own
+history list + "Add to Current Session" button are
 untouched - it has no MainWindow to hand off to, and keeps its own
 original UI. The standalone tool's optional "processed JPG preview"
 (process.py/ProcessWorker) was deliberately dropped from this integrated
@@ -51,11 +51,11 @@ import os
 import shutil
 import tempfile
 
-from PySide6.QtCore import QSettings, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from PySide6.QtCore import QSettings, QSize, QThread, QTimer, Signal
+from PySide6.QtGui import QColor, QKeySequence, QLinearGradient, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QSpinBox, QWidget,
+    QLabel, QLineEdit, QPushButton, QRadioButton, QSpinBox, QWidget,
 )
 
 from .. import i18n, imaging
@@ -77,7 +77,10 @@ from ..scan_tool.scan_window import (
 # both the standalone tool and this integrated panel at once.
 from .alert_dialog import show_alert
 from .block_header_bar import finish_block_chrome, start_block_chrome
-from .svg_icons import SvgCheckableToolButton, SvgToolButton
+from .controls import CollapsibleSection
+from .svg_icons import (
+    SvgCheckableToolButton, SvgToolButton, gradient_tinted_svg_icon, tinted_svg_icon,
+)
 
 # Muted, small-caps-weight label for a section inside the block - since the
 # whole Scan tool already lives inside one block's own bordered chrome,
@@ -85,6 +88,19 @@ from .svg_icons import SvgCheckableToolButton, SvgToolButton
 # redundant visual noise; a plain label plus a hairline (see _make_hairline
 # below) reads as a section break without adding another border.
 _SECTION_LABEL_STYLE = "font-weight: 600; color: #9a9a9a; font-size: 11px;"
+
+# Each of the 4 sections below (Device/Film/Scan Light/Save Location) is a
+# plain controls.CollapsibleSection (2026-09-08, "ajoute la possibilité de
+# masquer les sous blocs") rather than a new custom widget - it's already
+# borderless by default (confirmed by reading its own source: no frame/
+# QSS is applied unless a caller adds one, e.g. ChannelPanel's
+# align_box/tone_box do, batch_window.py's advanced_options_section
+# doesn't), so reusing it here doesn't reintroduce the nested-border
+# visual noise this panel's flat, hairline-divided convention was built
+# to avoid - only its own toggle_button needed restyling, to match this
+# panel's established muted small-caps header look instead of
+# CollapsibleSection's own bold default.
+_SECTION_TOGGLE_STYLE = f"QToolButton {{ border: none; text-align: left; {_SECTION_LABEL_STYLE} }}"
 
 
 def _make_hairline() -> QWidget:
@@ -94,16 +110,71 @@ def _make_hairline() -> QWidget:
     return line
 
 
-# Both button rows below (Mode: 3 buttons, Scan Light: 3 buttons) must fit
+# Both button rows below (Film: 3 buttons, Scan Light: 3 buttons) must fit
 # side by side inside the narrowest allowed side panel (_SIDE_PANEL_MIN_WIDTH
 # in main_window.py, 360px, minus the block's own chrome margins) - the
 # panel's width must adapt to whichever side it's dragged into, not the
 # other way around (2026-09-04 feedback: "le bloc doit s'adapter en largeur
 # à la taille du panel latéral, quitte à réduire légèrement les boutons").
-# Native QPushButton padding is generous enough that 3 buttons with real
-# text (worst case "Color Reversal"/"Couleur Inversible") can overflow that
-# width - tightened here rather than left at the style default.
-_COMPACT_MODE_BUTTON_STYLE = "QPushButton { padding: 3px 4px; font-size: 11px; }"
+# Both rows now use the same framed/icon-left QRadioButton look as the Batch
+# Import window's own Processing Mode row (added 2026-09-08, per the user's
+# explicit "utilise le même style... encadré, icone à gauche") - same
+# accent-blue checked frame (#5b9bd5), hidden native indicator, just tighter
+# padding/font than that row's own style to still fit 3 real-text buttons
+# (worst case "Color Reversal"/"Couleur Inversible") in this narrower panel.
+_FRAMED_MODE_BUTTON_STYLE = """
+QRadioButton {
+    border: 2px solid transparent;
+    border-radius: 5px;
+    padding: 3px 5px;
+    font-size: 11px;
+    background: transparent;
+}
+QRadioButton::indicator {
+    width: 0px;
+    height: 0px;
+}
+QRadioButton:hover {
+    background: rgba(255, 255, 255, 14);
+}
+QRadioButton:checked {
+    border: 2px solid #5b9bd5;
+    background: rgba(91, 155, 213, 30);
+}
+"""
+_MODE_BUTTON_ICON_SIZE = 16
+
+# One icon (Scan/camera_roll.svg) reused for all 3 Film buttons, tinted a
+# different fixed color per film type instead of the app's usual single
+# palette-driven tint - the color itself is the primary visual cue for
+# which film type is selected (2026-09-08, exact colors given by the
+# user): white for B&W, orange for Color, blue for Color Reversal. Order
+# matches MODES exactly (bw, color, color_reversal).
+_FILM_ICON_COLORS = ("#ffffff", "#e67e22", "#5b9bd5")
+
+# Per-mode note text below the Film row (2026-09-08), keyed by MODES' own
+# mode key - states exactly what _auto_add_to_session actually applies
+# automatically on import for that film type (invert, and for B&W, a real
+# Black & White conversion too - see GlobalCorrection.black_white_active).
+_MODE_NOTE_KEYS = {
+    "bw": "scan_mode_note_bw",
+    "color": "scan_mode_note_color",
+    "color_reversal": "scan_mode_note_color_reversal",
+}
+
+# Scan Light's own 3 modes (External/White/RGB), 2026-09-08: External gets
+# the Sun Light glyph (a plain external light source, as opposed to the
+# on-screen backlight the other 2 modes use); White keeps the plain
+# light-bulb glyph, white; RGB also keeps the light-bulb glyph but banded
+# red/green/blue top-to-bottom (via gradient_tinted_svg_icon) so it reads
+# as "RGB" while staying recognizably the same bulb shape as White's - a
+# tri-color Scan/rainbow-rgb.svg glyph was tried instead the same day but
+# the user preferred this banded-bulb version once they'd seen both, so
+# it was kept/reverted to rather than the rainbow.
+_EXTERNAL_LIGHT_ICON = "Scan/sun-light.svg"
+_WHITE_LIGHT_ICON = "Scan/light-bulb.svg"
+_RGB_LIGHT_ICON = "Scan/light-bulb.svg"
+_LIGHT_ICON_COLOR = "#ffffff"
 
 # One full spin over 1 second when the Refresh button is clicked - timer-
 # driven (SvgToolButton.set_rotation() is a plain method, not a Qt
@@ -191,12 +262,24 @@ class ScanPanel(QGroupBox):
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
+    def _make_section(self, layout) -> CollapsibleSection:
+        """Builds one collapsible sub-section, expanded by default, styled
+        to match this panel's own muted small-caps section-label look, and
+        wired so any collapse/expand click is immediately persisted (its
+        own toggled signal feeds the same catch-all _save_settings() every
+        other field here already goes through)."""
+        section = CollapsibleSection()
+        section.setChecked(True)
+        section.toggle_button.setStyleSheet(_SECTION_TOGGLE_STYLE)
+        section.toggled.connect(lambda _checked: self._save_settings())
+        layout.addWidget(section)
+        return section
+
     def _build_ui(self) -> None:
         layout = self.body_layout
 
-        self.device_section_label = QLabel()
-        self.device_section_label.setStyleSheet(_SECTION_LABEL_STYLE)
-        layout.addWidget(self.device_section_label)
+        self.device_section = self._make_section(layout)
+        device_content = self.device_section.content_layout
         status_row = QHBoxLayout()
         self.status_dot = QLabel("●")
         self.status_dot.setStyleSheet("color: #888; font-size: 14px;")
@@ -206,65 +289,98 @@ class ScanPanel(QGroupBox):
         self.refresh_button = SvgToolButton("Scan/refresh.svg")
         self.refresh_button.clicked.connect(self._on_refresh_clicked)
         status_row.addWidget(self.refresh_button)
-        layout.addLayout(status_row)
+        device_content.addLayout(status_row)
         self.camera_combo = QComboBox()
         self.camera_combo.currentIndexChanged.connect(self._on_camera_selected)
-        layout.addWidget(self.camera_combo)
+        device_content.addWidget(self.camera_combo)
         self.quality_label = QLabel()
-        layout.addWidget(self.quality_label)
+        device_content.addWidget(self.quality_label)
         self.quality_combo = QComboBox()
         self.quality_combo.currentTextChanged.connect(self._on_quality_changed)
         self.quality_combo.hide()
-        layout.addWidget(self.quality_combo)
+        device_content.addWidget(self.quality_combo)
 
         layout.addWidget(_make_hairline())
 
-        self.mode_section_label = QLabel()
-        self.mode_section_label.setStyleSheet(_SECTION_LABEL_STYLE)
-        layout.addWidget(self.mode_section_label)
+        self.mode_section = self._make_section(layout)
+        mode_content = self.mode_section.content_layout
         mode_buttons_row = QHBoxLayout()
         self.mode_group = QButtonGroup(self)
         self.mode_group.setExclusive(True)
-        self._mode_buttons: list[QPushButton] = []
+        self._mode_buttons: list[QRadioButton] = []
+        dpr = self.devicePixelRatioF() or 1.0
         for idx, _mode in enumerate(MODES):
-            btn = QPushButton()
-            btn.setCheckable(True)
-            btn.setStyleSheet(_COMPACT_MODE_BUTTON_STYLE)
+            btn = QRadioButton()
+            btn.setIcon(tinted_svg_icon(
+                "Scan/camera_roll.svg", _MODE_BUTTON_ICON_SIZE, QColor(_FILM_ICON_COLORS[idx]), dpr))
+            btn.setIconSize(QSize(_MODE_BUTTON_ICON_SIZE, _MODE_BUTTON_ICON_SIZE))
+            btn.setStyleSheet(_FRAMED_MODE_BUTTON_STYLE)
             self.mode_group.addButton(btn, idx)
             mode_buttons_row.addWidget(btn)
+            if idx < len(MODES) - 1:
+                mode_buttons_row.addSpacing(4)
             self._mode_buttons.append(btn)
+        # A trailing stretch (not just addWidget with no stretch factor) is
+        # what actually keeps each button sized to its own icon+text -
+        # without it, QRadioButton's default horizontal size policy
+        # (Minimum, confirmed by measuring it directly) lets leftover row
+        # width stretch the buttons themselves instead of the empty space
+        # at the row's end; same fix already used by the Batch Import
+        # window's own Processing Mode row (2026-09-08).
+        mode_buttons_row.addStretch(1)
         self._mode_buttons[0].setChecked(True)
         self.mode_group.idClicked.connect(lambda _id: self._sync_mode_note())
-        layout.addLayout(mode_buttons_row)
+        mode_content.addLayout(mode_buttons_row)
         self.mode_note_label = QLabel()
         self.mode_note_label.setWordWrap(True)
         self.mode_note_label.setStyleSheet("color: #888; font-size: 11px;")
-        layout.addWidget(self.mode_note_label)
+        mode_content.addWidget(self.mode_note_label)
 
         layout.addWidget(_make_hairline())
 
-        self.light_section_label = QLabel()
-        self.light_section_label.setStyleSheet(_SECTION_LABEL_STYLE)
-        layout.addWidget(self.light_section_label)
+        self.light_section = self._make_section(layout)
+        light_content = self.light_section.content_layout
         light_buttons_row = QHBoxLayout()
         self.light_mode_group = QButtonGroup(self)
         self.light_mode_group.setExclusive(True)
-        self._light_mode_buttons: list[QPushButton] = []
+        self._light_mode_buttons: list[QRadioButton] = []
+        # RGB Light's own icon is the same light-bulb glyph as White, but
+        # banded red/green/blue via a linear gradient - reusing the same
+        # pure primary colors the backlight window itself actually cycles
+        # through during an RGB capture (_RGB_CHANNEL_COLORS), not the
+        # app's more muted trichrome-channel palette, since this icon
+        # represents that literal on-screen light sequence. A tri-color
+        # Rainbow glyph (Scan/rainbow-rgb.svg) was tried instead the same
+        # day, but the user preferred this banded-bulb version once
+        # they'd compared both in the real app.
+        rgb_gradient = QLinearGradient(0, 0, 0, _MODE_BUTTON_ICON_SIZE)
+        rgb_gradient.setColorAt(0.0, _RGB_CHANNEL_COLORS["R"])
+        rgb_gradient.setColorAt(0.5, _RGB_CHANNEL_COLORS["G"])
+        rgb_gradient.setColorAt(1.0, _RGB_CHANNEL_COLORS["B"])
+        light_icons = (
+            tinted_svg_icon(_EXTERNAL_LIGHT_ICON, _MODE_BUTTON_ICON_SIZE, QColor(_LIGHT_ICON_COLOR), dpr),
+            tinted_svg_icon(_WHITE_LIGHT_ICON, _MODE_BUTTON_ICON_SIZE, QColor(_LIGHT_ICON_COLOR), dpr),
+            gradient_tinted_svg_icon(_RGB_LIGHT_ICON, _MODE_BUTTON_ICON_SIZE, rgb_gradient, dpr),
+        )
         for idx, _label_key in enumerate(_LIGHT_MODE_KEYS):
-            btn = QPushButton()
-            btn.setCheckable(True)
-            btn.setStyleSheet(_COMPACT_MODE_BUTTON_STYLE)
+            btn = QRadioButton()
+            btn.setIcon(light_icons[idx])
+            btn.setIconSize(QSize(_MODE_BUTTON_ICON_SIZE, _MODE_BUTTON_ICON_SIZE))
+            btn.setStyleSheet(_FRAMED_MODE_BUTTON_STYLE)
             self.light_mode_group.addButton(btn, idx)
             light_buttons_row.addWidget(btn)
+            if idx < len(_LIGHT_MODE_KEYS) - 1:
+                light_buttons_row.addSpacing(4)
             self._light_mode_buttons.append(btn)
+        light_buttons_row.addStretch(1)
         self._light_mode_buttons[0].setChecked(True)
         self.light_mode_group.idClicked.connect(lambda _id: self._on_light_mode_changed())
-        layout.addLayout(light_buttons_row)
+        light_content.addLayout(light_buttons_row)
         self.light_note_label = QLabel()
         self.light_note_label.setWordWrap(True)
         self.light_note_label.setStyleSheet("color: #888; font-size: 11px;")
         self.light_note_label.hide()
-        layout.addWidget(self.light_note_label)
+        light_content.addWidget(self.light_note_label)
 
         # Not gated by light mode (2026-09-04) - originally RGB-Light-only,
         # widened once film base correction applied to any photo (Normal
@@ -292,23 +408,22 @@ class ScanPanel(QGroupBox):
         self.pick_from_photo_button = SvgCheckableToolButton("Color Correction/eyedropper.svg")
         self.pick_from_photo_button.toggled.connect(self.pick_film_base_from_photo_toggled.emit)
         sample_base_row.addWidget(self.pick_from_photo_button)
-        layout.addLayout(sample_base_row)
+        light_content.addLayout(sample_base_row)
         self.film_base_status_label = QLabel()
         self.film_base_status_label.setWordWrap(True)
         self.film_base_status_label.setStyleSheet("color: #888; font-size: 11px;")
-        layout.addWidget(self.film_base_status_label)
+        light_content.addWidget(self.film_base_status_label)
         self.apply_film_base_checkbox = QCheckBox()
         self.apply_film_base_checkbox.setChecked(True)
-        layout.addWidget(self.apply_film_base_checkbox)
+        light_content.addWidget(self.apply_film_base_checkbox)
         self.apply_film_base_button = QPushButton()
         self.apply_film_base_button.clicked.connect(self._on_apply_film_base_clicked)
-        layout.addWidget(self.apply_film_base_button)
+        light_content.addWidget(self.apply_film_base_button)
 
         layout.addWidget(_make_hairline())
 
-        self.location_section_label = QLabel()
-        self.location_section_label.setStyleSheet(_SECTION_LABEL_STYLE)
-        layout.addWidget(self.location_section_label)
+        self.location_section = self._make_section(layout)
+        location_content = self.location_section.content_layout
 
         folder_row = QHBoxLayout()
         self.base_folder_label = QLabel()
@@ -319,7 +434,7 @@ class ScanPanel(QGroupBox):
         self.browse_button = QPushButton()
         self.browse_button.clicked.connect(self._browse_base_folder)
         folder_row.addWidget(self.browse_button)
-        layout.addLayout(folder_row)
+        location_content.addLayout(folder_row)
 
         subfolder_row = QHBoxLayout()
         self.subfolder_label = QLabel()
@@ -327,11 +442,11 @@ class ScanPanel(QGroupBox):
         self.subfolder_edit = QLineEdit()
         self.subfolder_edit.textChanged.connect(self._save_settings)
         subfolder_row.addWidget(self.subfolder_edit, 1)
-        layout.addLayout(subfolder_row)
+        location_content.addLayout(subfolder_row)
 
         self.use_roll_subfolder_checkbox = QCheckBox()
         self.use_roll_subfolder_checkbox.toggled.connect(self._on_use_roll_subfolder_toggled)
-        layout.addWidget(self.use_roll_subfolder_checkbox)
+        location_content.addWidget(self.use_roll_subfolder_checkbox)
 
         roll_row = QHBoxLayout()
         self.roll_name_label = QLabel()
@@ -339,12 +454,12 @@ class ScanPanel(QGroupBox):
         self.roll_name_edit = QLineEdit()
         self.roll_name_edit.textChanged.connect(self._on_roll_name_changed)
         roll_row.addWidget(self.roll_name_edit, 1)
-        layout.addLayout(roll_row)
+        location_content.addLayout(roll_row)
 
         self.subfolder_preview_label = QLabel()
         self.subfolder_preview_label.setStyleSheet("color: #888; font-size: 11px;")
         self.subfolder_preview_label.hide()
-        layout.addWidget(self.subfolder_preview_label)
+        location_content.addWidget(self.subfolder_preview_label)
 
         next_row = QHBoxLayout()
         self.next_number_label = QLabel()
@@ -353,7 +468,7 @@ class ScanPanel(QGroupBox):
         self.next_number_spin.setRange(1, 9999)
         self.next_number_spin.valueChanged.connect(self._save_settings)
         next_row.addWidget(self.next_number_spin, 1)
-        layout.addLayout(next_row)
+        location_content.addLayout(next_row)
 
         layout.addWidget(_make_hairline())
 
@@ -371,15 +486,15 @@ class ScanPanel(QGroupBox):
 
     def retranslate_ui(self) -> None:
         self.title_label.setText(i18n.tr("menu_tools_scan"))
-        self.device_section_label.setText(i18n.tr("scan_device_group"))
+        self.device_section.setTitle(i18n.tr("scan_device_group"))
         self.refresh_button.setToolTip(i18n.tr("scan_device_refresh"))
-        self.mode_section_label.setText(i18n.tr("scan_mode_group"))
+        self.mode_section.setTitle(i18n.tr("scan_mode_group"))
         for btn, (_key, label_key, _invert) in zip(self._mode_buttons, MODES):
             # QPushButton treats a single "&" as a mnemonic marker (would
             # otherwise render "Black & White" as "Black _White") - escape
             # it as a literal ampersand.
             btn.setText(i18n.tr(label_key).replace("&", "&&"))
-        self.light_section_label.setText(i18n.tr("scan_light_group"))
+        self.light_section.setTitle(i18n.tr("scan_light_group"))
         for btn, label_key in zip(self._light_mode_buttons, _LIGHT_MODE_KEYS):
             btn.setText(i18n.tr(label_key).replace("&", "&&"))
         self.sample_base_button.setText(i18n.tr("scan_sample_base_button"))
@@ -389,7 +504,7 @@ class ScanPanel(QGroupBox):
         self.apply_film_base_checkbox.setToolTip(i18n.tr("scan_apply_film_base_tooltip"))
         self.apply_film_base_button.setText(i18n.tr("scan_apply_film_base_button"))
         self.apply_film_base_button.setToolTip(i18n.tr("scan_apply_film_base_button_tooltip"))
-        self.location_section_label.setText(i18n.tr("scan_location_group"))
+        self.location_section.setTitle(i18n.tr("scan_location_group"))
         self.base_folder_label.setText(i18n.tr("scan_base_folder_label"))
         self.browse_button.setText(i18n.tr("scan_base_folder_browse"))
         self.subfolder_label.setText(i18n.tr("scan_subfolder_label"))
@@ -424,6 +539,25 @@ class ScanPanel(QGroupBox):
         # loaded yet. Without blocking signals here, loading field N would
         # echo field N+1's still-default value back into the store before
         # it's ever read, clobbering it.
+        #
+        # The 4 section-collapse values are read into locals right here,
+        # before anything else runs, for the same reason but a sharper
+        # trap: CollapsibleSection.setChecked() always calls _save_settings()
+        # (no blockSignals escape hatch - see the comment further down),
+        # so mode_index/light_mode_index loading below would otherwise
+        # trigger an intermediate _save_settings() that reads each
+        # section's still-default (expanded) widget state and writes it
+        # straight back into QSettings, clobbering the real persisted
+        # value *before* this method ever gets to read it - a real bug
+        # caught by testing (constructing a second ScanPanel() in the same
+        # process to "simulate a restart" is the documented-unreliable way
+        # to catch this - re-calling _load_settings() on the same instance
+        # after desyncing its widgets from what's on disk is what actually
+        # reproduced it).
+        device_expanded = self._settings.value("section_expanded_device", True, type=bool)
+        film_expanded = self._settings.value("section_expanded_film", True, type=bool)
+        light_expanded = self._settings.value("section_expanded_light", True, type=bool)
+        location_expanded = self._settings.value("section_expanded_location", True, type=bool)
         fields = (
             self.base_folder_edit, self.subfolder_edit, self.roll_name_edit,
             self.next_number_spin, self.use_roll_subfolder_checkbox,
@@ -452,6 +586,20 @@ class ScanPanel(QGroupBox):
         # moment the block becomes visible, only once the user actively
         # picks a mode.
         self._sync_light_note()
+        # Applying the values captured at the very top, not re-reading
+        # QSettings here - see that comment for why re-reading at this
+        # point would pick up a clobbered value instead of the real one.
+        # CollapsibleSection.setChecked() always fires _save_settings()
+        # regardless of whether the value actually changed, so this also
+        # correctly re-persists mode_index/light_mode_index (already
+        # loaded above) alongside each section's own restored state -
+        # by the time the last of these 4 calls runs, every field
+        # _save_settings() reads is already correct, so the net result on
+        # disk is fully consistent again.
+        self.device_section.setChecked(device_expanded)
+        self.mode_section.setChecked(film_expanded)
+        self.light_section.setChecked(light_expanded)
+        self.location_section.setChecked(location_expanded)
 
     def settings_snapshot(self) -> dict:
         """Every field this tool's configuration should be captured by -
@@ -529,6 +677,10 @@ class ScanPanel(QGroupBox):
         self._settings.setValue("use_roll_as_subfolder", self.use_roll_subfolder_checkbox.isChecked())
         self._settings.setValue("mode_index", self.mode_group.checkedId())
         self._settings.setValue("light_mode_index", self.light_mode_group.checkedId())
+        self._settings.setValue("section_expanded_device", self.device_section.isChecked())
+        self._settings.setValue("section_expanded_film", self.mode_section.isChecked())
+        self._settings.setValue("section_expanded_light", self.light_section.isChecked())
+        self._settings.setValue("section_expanded_location", self.location_section.isChecked())
 
     # ------------------------------------------------------------------
     # Mode
@@ -537,9 +689,15 @@ class ScanPanel(QGroupBox):
         return MODES[max(0, self.mode_group.checkedId())]
 
     def _sync_mode_note(self) -> None:
-        _key, _label_key, invert = self._current_mode()
-        note_key = "scan_mode_invert_note" if invert else "scan_mode_no_invert_note"
-        self.mode_note_label.setText(i18n.tr(note_key))
+        # Per-mode note text (2026-09-08), replacing the older plain
+        # invert-vs-not phrasing (kept as scan_mode_invert_note/
+        # scan_mode_no_invert_note for the standalone scan_tool/
+        # scan_window.py, untouched) - each mode now also states whether
+        # Black & White is applied automatically, not just Invert, since
+        # that's now real automatic behavior on import too (see
+        # _auto_add_to_session's own "black_white" below).
+        key, _label_key, _invert = self._current_mode()
+        self.mode_note_label.setText(i18n.tr(_MODE_NOTE_KEYS[key]))
         self._save_settings()
 
     # ------------------------------------------------------------------
@@ -999,19 +1157,29 @@ class ScanPanel(QGroupBox):
             manifest.append_entry(dest_folder, os.path.basename(path), mode_key, invert, channel=channel)
         if advance_index and entries:
             self.next_number_spin.setValue(index + 1)
-            self._auto_add_to_session(entries, light_mode_id, invert)
+            self._auto_add_to_session(entries, light_mode_id, invert, mode_key == "bw")
         self._save_settings()
         self._end_capture_ui()
 
     def _auto_add_to_session(
         self, entries: list[tuple[str, str | None]], light_mode_id: int, invert: bool,
+        black_white: bool,
     ) -> None:
         """Builds the one capture-group request for this completed capture
         and emits add_to_session_requested - only ever called from
         _finish_capture's ``advance_index`` branch, i.e. never for a
         partial/failed RGB triplet (advance_index=False there), so
         ``entries`` is always either a single normal shot or a real,
-        complete R/G/B triplet here."""
+        complete R/G/B triplet here.
+
+        ``black_white`` (True only for Film=B&W, see _finish_capture)
+        flows straight onto the built BatchItem's own
+        GlobalCorrection.black_white_active (main_window.py's
+        on_scan_add_to_session_requested) - automatically forcing a true
+        neutral-gray composite for B&W source material regardless of how
+        it was captured (added 2026-09-08, alongside the Light-mode ->
+        Solo/Trichrome mapping right below, both "apply the matching
+        processing automatically on import" per the user's own request)."""
         if light_mode_id == 2:
             by_channel = {ch: p for p, ch in entries if ch}
             if set(by_channel) != {"R", "G", "B"}:
@@ -1025,11 +1193,12 @@ class ScanPanel(QGroupBox):
             request = {
                 "kind": "trichrome", "paths": by_channel, "invert": invert,
                 "film_base": dict(self._film_base) if use_base else None,
+                "black_white": black_white,
             }
         else:
             if not entries:
                 return
-            request = {"kind": "normal", "path": entries[0][0], "invert": invert}
+            request = {"kind": "normal", "path": entries[0][0], "invert": invert, "black_white": black_white}
         self.add_to_session_requested.emit([request])
 
     def _handle_capture_failure(self, message: str) -> None:

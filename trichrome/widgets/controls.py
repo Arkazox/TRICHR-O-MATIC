@@ -457,6 +457,14 @@ class CollapsibleSection(QFrame):
         outer.setContentsMargins(6, 4, 6, 6)
         outer.setSpacing(2)
 
+        # A QHBoxLayout, not a bare addWidget(toggle_button) - lets a
+        # caller append an extra widget (e.g. an InfoButton) to the same
+        # header row via self.header_row, next to the title, without
+        # this class needing to know about that widget itself (2026-09-08,
+        # added for the Batch Import window's "Import Rules" section).
+        # toggle_button keeps its own Expanding size policy, so it still
+        # fills the whole row exactly as before when nothing else is added.
+        self.header_row = QHBoxLayout()
         self.toggle_button = QToolButton()
         self.toggle_button.setCheckable(True)
         self.toggle_button.setChecked(False)
@@ -468,7 +476,8 @@ class CollapsibleSection(QFrame):
         )
         self.toggle_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.toggle_button.clicked.connect(self._on_clicked)
-        outer.addWidget(self.toggle_button)
+        self.header_row.addWidget(self.toggle_button)
+        outer.addLayout(self.header_row)
 
         self.content = QWidget()
         self.content_layout = QVBoxLayout(self.content)

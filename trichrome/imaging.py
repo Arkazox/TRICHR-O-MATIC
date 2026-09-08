@@ -430,6 +430,25 @@ def apply_curves(rgb: np.ndarray, curves: dict) -> np.ndarray:
     return np.stack(channels, axis=-1) if changed else out
 
 
+_LUMA_WEIGHTS = (0.299, 0.587, 0.114)
+
+
+def apply_black_white(rgb: np.ndarray) -> np.ndarray:
+    """Real luminance-weighted grayscale conversion (ITU-R BT.601 weights -
+    the same _LUMA_WEIGHTS compute_channel_histograms' own Y channel, and
+    PIL's .convert("L") in load_grayscale, already use elsewhere in this
+    app), replacing every pixel with R=G=B=Y. Added 2026-09-07, replacing
+    the original implementation of ColorPanel's Black & White toggle, which
+    only zeroed saturation in HSV space - that only grays a pixel to HSV's
+    V (max(R,G,B)), not a perceptually-weighted brightness, so e.g. a
+    saturated red and a saturated blue at the same V read as the same gray
+    even though a real B&W conversion (and the human eye) would see the
+    blue as noticeably darker. See ColorPanel.black_white_button /
+    MainWindow.on_black_white_toggled."""
+    luma = np.dot(rgb[..., :3], _LUMA_WEIGHTS).astype(np.float32)
+    return np.stack([luma, luma, luma], axis=-1)
+
+
 def apply_global_correction_before_curves(
     rgb: np.ndarray, black_point: float, white_point: float, gamma: float, exposure: float,
     brightness: float, contrast: float, shadows: float, highlights: float,
@@ -458,6 +477,7 @@ def apply_global_correction(
     rgb: np.ndarray, black_point: float, white_point: float, gamma: float, exposure: float,
     brightness: float, contrast: float, shadows: float, highlights: float,
     saturation: float, temperature: float, tint: float, curves: dict | None = None,
+    black_white: bool = False,
 ) -> np.ndarray:
     out = apply_global_correction_before_curves(
         rgb, black_point, white_point, gamma, exposure, brightness, contrast, shadows, highlights,
@@ -465,10 +485,12 @@ def apply_global_correction(
     # The tone curves are the final creative shaping step, applied last -
     # after saturation/white balance, on the fully color-corrected image.
     out = apply_curves(out, curves or {})
+    # Black & White (ColorPanel's toggle) is the true final step - a real
+    # grayscale conversion of the finished, fully-corrected image, not a
+    # correction of its own.
+    if black_white:
+        out = apply_black_white(out)
     return np.clip(out, 0.0, 1.0)
-
-
-_LUMA_WEIGHTS = (0.299, 0.587, 0.114)
 
 
 def compute_channel_histograms(rgb_uint8: np.ndarray, valid_mask: np.ndarray | None = None) -> dict[str, np.ndarray]:
@@ -567,7 +589,7 @@ def compose_pre_white_balance_rgb(images, geo_params, tone_params, ref_index: in
     call signature; the saturation/temperature/tint entries are unused."""
     rgb = compose_rgb_from_channels(images, geo_params, tone_params, ref_index)
     (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-     _gsat, _gtemp, _gtint, _gcurves) = global_params
+     _gsat, _gtemp, _gtint, _gcurves, _gbw) = global_params
     return apply_tone_curve(rgb, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights)
 
 
@@ -580,15 +602,17 @@ def compose_trichrome(images, geo_params, tone_params, ref_index: int, global_pa
     tone_params: list of 3 (black, white, gamma, exposure, brightness,
         contrast, shadows, highlights, invert) tuples.
     global_params: (black, white, gamma, exposure, brightness, contrast,
-        shadows, highlights, saturation, temperature, tint, curves) tuple -
-        curves is a {"Y"/"R"/"G"/"B": points} dict, see apply_curves.
+        shadows, highlights, saturation, temperature, tint, curves,
+        black_white) tuple - curves is a {"Y"/"R"/"G"/"B": points} dict,
+        see apply_curves; black_white is ColorPanel's B&W toggle, see
+        apply_black_white.
     """
     rgb = compose_rgb_from_channels(images, geo_params, tone_params, ref_index)
     (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-     gsat, gtemp, gtint, gcurves) = global_params
+     gsat, gtemp, gtint, gcurves, gbw) = global_params
     return apply_global_correction(
         rgb, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-        gsat, gtemp, gtint, gcurves)
+        gsat, gtemp, gtint, gcurves, gbw)
 
 
 def compose_normal(image: np.ndarray, global_params) -> np.ndarray:
@@ -598,10 +622,10 @@ def compose_normal(image: np.ndarray, global_params) -> np.ndarray:
     stage first; just the same global-correction stage applied on top,
     taking the identical global_params tuple shape."""
     (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-     gsat, gtemp, gtint, gcurves) = global_params
+     gsat, gtemp, gtint, gcurves, gbw) = global_params
     return apply_global_correction(
         image, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-        gsat, gtemp, gtint, gcurves)
+        gsat, gtemp, gtint, gcurves, gbw)
 
 
 def apply_straighten_mirror(rgb: np.ndarray, rotation_deg: float, mirror_h: bool, mirror_v: bool) -> np.ndarray:

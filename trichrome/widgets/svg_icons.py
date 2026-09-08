@@ -8,7 +8,7 @@ with CompositionMode_SourceIn.
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QPainter, QPixmap, QTransform
+from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPixmap, QTransform
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QLabel, QToolButton
 
@@ -53,6 +53,49 @@ def raw_svg_pixmap(svg_name: str, size: int, dpr: float) -> QPixmap:
     renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
     return pixmap
+
+
+def raw_svg_icon(svg_name: str, size: int, dpr: float) -> QIcon:
+    """QIcon wrapper over raw_svg_pixmap - for a QComboBox/QAction/etc. item
+    that needs a multi-color icon shown by Qt's own item-view chrome
+    (a combo's closed box and its dropdown list both paint from a QIcon,
+    not a raw pixmap) rather than one this app paints itself."""
+    return QIcon(raw_svg_pixmap(svg_name, size, dpr))
+
+
+def gradient_tinted_svg_pixmap(svg_name: str, size: int, gradient: QLinearGradient, dpr: float) -> QPixmap:
+    """Same idea as tinted_svg_pixmap, but recolors the glyph with a linear-
+    gradient brush instead of one flat color - for a glyph that needs to
+    read as multiple colors at once without hand-splitting it into several
+    separately-colored paths (e.g. the Scan tool's RGB Light icon,
+    2026-09-08: the plain light-bulb glyph every other light mode uses,
+    banded red/green/blue top-to-bottom, so it reads as "RGB" while still
+    being recognizably the same bulb shape as its sibling buttons)."""
+    renderer = QSvgRenderer(icon_path(svg_name))
+    pixmap = QPixmap(max(1, round(size * dpr)), max(1, round(size * dpr)))
+    pixmap.setDevicePixelRatio(dpr)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    renderer.render(painter, QRectF(0, 0, size, size))
+    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    painter.fillRect(QRectF(0, 0, size, size), gradient)
+    painter.end()
+    return pixmap
+
+
+def gradient_tinted_svg_icon(svg_name: str, size: int, gradient: QLinearGradient, dpr: float) -> QIcon:
+    return QIcon(gradient_tinted_svg_pixmap(svg_name, size, gradient, dpr))
+
+
+def tinted_svg_icon(svg_name: str, size: int, color: QColor, dpr: float) -> QIcon:
+    """QIcon wrapper over tinted_svg_pixmap - same use case as raw_svg_icon
+    (a QComboBox/QRadioButton/etc. item painted by Qt's own item-view
+    chrome), but for the common single-color-glyph case that still needs a
+    fixed, per-item tint baked in (e.g. the Scan tool's per-Film-type
+    camera-roll icon, added 2026-09-08) rather than the glyph's own
+    embedded colors verbatim."""
+    return QIcon(tinted_svg_pixmap(svg_name, size, color, dpr))
 
 
 def rotated_tinted_svg_pixmap(svg_name: str, size: int, color: QColor, dpr: float, rotation: float = 0.0) -> QPixmap:

@@ -1,4 +1,11 @@
-"""Filmstrip of imported batch photos, at the bottom of the preview.
+"""Filmstrip of imported batch photos, at the bottom of the preview - and,
+in "grid mode", the exact same widget/cards/selection/reorder/context-menu
+logic shown as a full responsive grid standing in for the preview canvas
+(see set_grid_mode(), toggled by MainWindow as the filmstrip's own
+"fullscreen" mode). Only the cards' container/layout and size change
+between the two modes - every card is the same _CarouselCard instance
+either way, so nothing about selection, drag-reorder or the context menu
+needs to be reimplemented for the grid.
 
 Plain click / arrow-key navigation picks the "current" photo (the one shown
 and edited in the main window) and, by default, makes it the sole selection.
@@ -6,12 +13,12 @@ Cmd+click toggles a photo in/out of the selection without changing which one
 is current; Cmd+A selects all (or deselects all, if everything is already
 selected) - that selection is what "export selected" uses.
 
-Cards can also be dragged to reorder the strip; a drop anywhere (including
-past the last card) is resolved to an insertion point and reported upward
-via ``reordered`` as a permutation of the old indices.
+Cards can also be dragged to reorder - a drop anywhere (including past the
+last card, or in any empty grid cell) is resolved to an insertion point and
+reported upward via ``reordered`` as a permutation of the old indices.
 
-The strip is also a drop target for image files dragged in from Finder -
-those are reported upward via ``files_dropped`` (a plain list of local
+The strip/grid is also a drop target for image files dragged in from Finder
+- those are reported upward via ``files_dropped`` (a plain list of local
 paths) rather than handled here, since deciding what to do with them
 (new Normal-mode photos, appended at the end) is MainWindow's job.
 """
@@ -19,9 +26,9 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtCore import QMimeData, QPointF, Qt, Signal
 from PySide6.QtGui import QDrag, QPixmap
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
 from .. import i18n
 from .controls import ArrowKeyScrollArea
@@ -30,6 +37,17 @@ THUMB_W, THUMB_H = 96, 64
 CURRENT_COLOR = "#f2c40c"
 SELECTED_COLOR = "#8a7a3a"
 DEFAULT_COLOR = "#444"
+
+# Grid mode (fullscreen) sizing - cards fill the available width, Zoom
+# In/Out (see MainWindow.on_zoom_in_clicked/on_zoom_out_clicked) only
+# change the column count; the cell size is derived to always fill the row.
+MIN_GRID_COLUMNS = 1
+MAX_GRID_COLUMNS = 24
+MIN_GRID_CELL_SIZE = 40
+_GRID_SPACING = 8
+_GRID_MARGIN = 8
+_GRID_CELL_CHROME = 14  # matches _CarouselCard's own thumb_w + 14 chrome convention
+_INITIAL_GRID_CELL_TARGET = THUMB_W  # ~96px, used only to pick the starting column count
 
 _REORDER_MIME = "application/x-trichrome-carousel-index"
 # Same set load_image's own file-picker filter accepts.
@@ -56,7 +74,8 @@ class _CarouselCard(QFrame):
         self._is_current = False
         self._is_selected = False
         self._drag_start_pos = None
-        self.setFixedSize(THUMB_W + 14, THUMB_H + 30)
+        self._base = base
+        self._pixmap: QPixmap | None = None
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QVBoxLayout(self)
@@ -64,7 +83,6 @@ class _CarouselCard(QFrame):
         layout.setSpacing(2)
 
         self.thumb_label = QLabel()
-        self.thumb_label.setFixedSize(THUMB_W, THUMB_H)
         self.thumb_label.setStyleSheet("background:#222; border:1px solid #444;")
         self.thumb_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.thumb_label)
@@ -72,14 +90,21 @@ class _CarouselCard(QFrame):
         self.name_label = QLabel()
         self.name_label.setStyleSheet("color:#aaa; font-size:10px;")
         self.name_label.setAlignment(Qt.AlignCenter)
-        self._base = base
         layout.addWidget(self.name_label)
-        self._update_name_label()
+
+        self.set_cell_size(THUMB_W)
         self._update_style()
 
-    def _update_name_label(self) -> None:
+    def set_cell_size(self, thumb_w: int) -> None:
+        """Resizes the card to a given thumbnail width - THUMB_W (the
+        filmstrip's own fixed size) in strip mode, or whatever the grid's
+        current per-cell size is in grid mode (see CarouselWidget._reflow_grid)."""
+        thumb_h = max(1, round(thumb_w * THUMB_H / THUMB_W))
+        self.setFixedSize(thumb_w + 14, thumb_h + 30)
+        self.thumb_label.setFixedSize(thumb_w, thumb_h)
+        self._rescale_thumbnail()
         fm = self.name_label.fontMetrics()
-        self.name_label.setText(fm.elidedText(self._base, Qt.ElideMiddle, THUMB_W + 6))
+        self.name_label.setText(fm.elidedText(self._base, Qt.ElideMiddle, thumb_w + 6))
 
     def _update_style(self) -> None:
         if self._is_current:
@@ -99,7 +124,14 @@ class _CarouselCard(QFrame):
         self._update_style()
 
     def set_thumbnail(self, pixmap: QPixmap) -> None:
-        scaled = pixmap.scaled(THUMB_W, THUMB_H, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._pixmap = pixmap
+        self._rescale_thumbnail()
+
+    def _rescale_thumbnail(self) -> None:
+        if self._pixmap is None:
+            return
+        scaled = self._pixmap.scaled(
+            self.thumb_label.width(), self.thumb_label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.thumb_label.setPixmap(scaled)
 
     def mousePressEvent(self, event) -> None:
@@ -139,11 +171,12 @@ class _CarouselCard(QFrame):
 
 
 class _CarouselStrip(QWidget):
-    """The row of cards; also the drop target for reordering, spanning the
-    trailing empty space too so dropping past the last card appends it -
-    and, separately, for image files dragged in from Finder (see
-    files_dropped)."""
-    card_dropped = Signal(int, float)  # from_index, drop x (local coords)
+    """The cards' container - the row in strip mode, or the grid_strip in
+    grid mode (see CarouselWidget). Also the drop target for reordering,
+    spanning the trailing empty space too so dropping past the last card
+    appends it - and, separately, for image files dragged in from Finder
+    (see files_dropped)."""
+    card_dropped = Signal(int, QPointF)  # from_index, drop position (local coords)
     files_dropped = Signal(list)  # local file paths
 
     def __init__(self, parent: QWidget | None = None):
@@ -162,7 +195,7 @@ class _CarouselStrip(QWidget):
         if event.mimeData().hasFormat(_REORDER_MIME):
             from_index = int(bytes(event.mimeData().data(_REORDER_MIME)).decode())
             pos = event.position() if hasattr(event, "position") else event.pos()
-            self.card_dropped.emit(from_index, float(pos.x()))
+            self.card_dropped.emit(from_index, QPointF(pos))
             event.acceptProposedAction()
             return
         paths = _local_image_paths(event.mimeData())
@@ -192,6 +225,9 @@ class CarouselWidget(QWidget):
         # Only true once something's been copied that carries crop settings -
         # gates whether "Paste Crop" shows in the context menu at all.
         self._paste_crop_available = False
+        self._grid_mode = False
+        self._grid_columns = 0  # 0 = not yet initialized; picked on first grid layout
+        self._grid_cell_size = THUMB_W
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -202,6 +238,7 @@ class CarouselWidget(QWidget):
         self.empty_label.setStyleSheet("color:#777; font-style: italic;")
         outer.addWidget(self.empty_label)
 
+        # Strip mode - the filmstrip, a single horizontally-scrolling row.
         self.scroll = ArrowKeyScrollArea()
         self.scroll.setFixedHeight(THUMB_H + 50)
         self.scroll.setWidgetResizable(True)
@@ -218,6 +255,27 @@ class CarouselWidget(QWidget):
         self.scroll.setWidget(self.strip)
         outer.addWidget(self.scroll)
 
+        # Grid mode - the same cards, wrapped into a responsive multi-column
+        # grid instead of one scrolling row, centered in the available width
+        # so the margins either side stay equal regardless of how wide the
+        # container is (see set_grid_mode(), toggled by MainWindow as this
+        # widget's own "fullscreen" mode).
+        self.grid_scroll = ArrowKeyScrollArea()
+        self.grid_scroll.setWidgetResizable(True)
+        self.grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.grid_scroll.setFrameShape(QFrame.NoFrame)
+        self.grid_strip = _CarouselStrip()
+        self.grid_strip.card_dropped.connect(self._on_card_dropped)
+        self.grid_strip.files_dropped.connect(self.files_dropped.emit)
+        self.grid_layout = QGridLayout(self.grid_strip)
+        self.grid_layout.setContentsMargins(_GRID_MARGIN, _GRID_MARGIN, _GRID_MARGIN, _GRID_MARGIN)
+        self.grid_layout.setSpacing(_GRID_SPACING)
+        self.grid_layout.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.grid_scroll.setWidget(self.grid_strip)
+        self.grid_scroll.setVisible(False)
+        outer.addWidget(self.grid_scroll)
+
         self.retranslate_ui()
         self._update_empty_state()
 
@@ -227,8 +285,108 @@ class CarouselWidget(QWidget):
     def _update_empty_state(self) -> None:
         has_items = bool(self._cards)
         self.empty_label.setVisible(not has_items)
-        self.scroll.setVisible(has_items)
+        self.scroll.setVisible(has_items and not self._grid_mode)
+        self.grid_scroll.setVisible(has_items and self._grid_mode)
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._grid_mode:
+            self._reflow_grid()
+
+    # ------------------------------------------------------------------
+    # Grid mode (fullscreen)
+    # ------------------------------------------------------------------
+    def set_grid_mode(self, enabled: bool) -> None:
+        if enabled == self._grid_mode:
+            return
+        self._grid_mode = enabled
+        if enabled:
+            for card in self._cards:
+                self.strip_layout.removeWidget(card)
+            # Force a resize pass even if the recomputed size happens to
+            # match the last-known grid cell size, since the cards were
+            # just reset to the strip's fixed THUMB_W by the disable
+            # branch below the last time grid mode was left.
+            self._grid_cell_size = 0
+            self._reflow_grid(force=True)
+        else:
+            for card in self._cards:
+                self.grid_layout.removeWidget(card)
+                card.set_cell_size(THUMB_W)
+            for i, card in enumerate(self._cards):
+                self.strip_layout.insertWidget(i, card)
+        self._update_empty_state()
+        self._ensure_current_visible()
+
+    def zoom_in(self) -> None:
+        self._set_grid_columns(self._grid_columns - 1)
+
+    def zoom_out(self) -> None:
+        self._set_grid_columns(self._grid_columns + 1)
+
+    def _set_grid_columns(self, columns: int) -> None:
+        columns = max(MIN_GRID_COLUMNS, min(MAX_GRID_COLUMNS, columns))
+        if columns == self._grid_columns:
+            return
+        self._grid_columns = columns
+        self._reflow_grid(force=True)
+
+    def _initial_grid_columns(self) -> int:
+        available = self.grid_scroll.viewport().width() - 2 * _GRID_MARGIN
+        if available <= 0:
+            return max(MIN_GRID_COLUMNS, min(MAX_GRID_COLUMNS, 6))
+        step = _INITIAL_GRID_CELL_TARGET + _GRID_CELL_CHROME + _GRID_SPACING
+        columns = (available + _GRID_SPACING) // step
+        return max(MIN_GRID_COLUMNS, min(MAX_GRID_COLUMNS, int(columns)))
+
+    def _reflow_grid(self, force: bool = False) -> None:
+        if not self._grid_mode or not self._cards:
+            return
+        columns_changed = force
+        if self._grid_columns <= 0:
+            self._grid_columns = self._initial_grid_columns()
+            columns_changed = True
+        available = self.grid_scroll.viewport().width() - 2 * _GRID_MARGIN
+        total_spacing = _GRID_SPACING * (self._grid_columns - 1)
+        cell_size = max(
+            MIN_GRID_CELL_SIZE,
+            (max(self._grid_columns, available) - total_spacing) // self._grid_columns - _GRID_CELL_CHROME,
+        )
+        if cell_size != self._grid_cell_size:
+            self._grid_cell_size = cell_size
+            for card in self._cards:
+                card.set_cell_size(self._grid_cell_size)
+        if columns_changed:
+            while self.grid_layout.count():
+                self.grid_layout.takeAt(0)
+            for i, card in enumerate(self._cards):
+                row, col = divmod(i, self._grid_columns)
+                self.grid_layout.addWidget(card, row, col)
+
+    def _insert_index_for_point(self, pos: QPointF) -> int:
+        if not self._cards or self._grid_columns <= 0:
+            return len(self._cards)
+        card0 = self._cards[0]
+        cell_w = card0.width() + _GRID_SPACING
+        cell_h = card0.height() + _GRID_SPACING
+        if cell_w <= 0 or cell_h <= 0:
+            return len(self._cards)
+        col = int((pos.x() - _GRID_MARGIN) // cell_w)
+        row = int((pos.y() - _GRID_MARGIN) // cell_h)
+        col = max(0, min(col, self._grid_columns - 1))
+        row = max(0, row)
+        index = row * self._grid_columns + col
+        return max(0, min(index, len(self._cards)))
+
+    def _ensure_current_visible(self) -> None:
+        if not (0 <= self._current_index < len(self._cards)):
+            return
+        scroll = self.grid_scroll if self._grid_mode else self.scroll
+        scroll.ensureWidgetVisible(self._cards[self._current_index])
+
+    # ------------------------------------------------------------------
+    # Items / selection / activation
+    # ------------------------------------------------------------------
     def set_items(self, bases: list[str]) -> None:
         for card in self._cards:
             card.setParent(None)
@@ -241,8 +399,15 @@ class CarouselWidget(QWidget):
             card.clicked.connect(self._on_card_clicked)
             card.ctrl_clicked.connect(self._on_card_ctrl_clicked)
             card.context_menu_requested.connect(self._on_card_context_menu)
-            self.strip_layout.insertWidget(self.strip_layout.count() - 1, card)
             self._cards.append(card)
+
+        if self._grid_mode:
+            for card in self._cards:
+                card.set_cell_size(self._grid_cell_size or THUMB_W)
+            self._reflow_grid(force=True)
+        else:
+            for card in self._cards:
+                self.strip_layout.insertWidget(self.strip_layout.count() - 1, card)
 
         self._current_index = -1
         self._selection_anchor = -1
@@ -311,10 +476,10 @@ class CarouselWidget(QWidget):
                 return i
         return len(self._cards)
 
-    def _on_card_dropped(self, from_index: int, drop_x: float) -> None:
+    def _on_card_dropped(self, from_index: int, pos: QPointF) -> None:
         if not (0 <= from_index < len(self._cards)):
             return
-        insert_before = self._insert_index_for_x(drop_x)
+        insert_before = self._insert_index_for_point(pos) if self._grid_mode else self._insert_index_for_x(pos.x())
         target = insert_before - 1 if insert_before > from_index else insert_before
         target = max(0, min(target, len(self._cards) - 1))
         if target == from_index:
@@ -330,8 +495,11 @@ class CarouselWidget(QWidget):
 
         card = self._cards.pop(from_index)
         self._cards.insert(target, card)
-        self.strip_layout.removeWidget(card)
-        self.strip_layout.insertWidget(target, card)
+        if self._grid_mode:
+            self._reflow_grid(force=True)
+        else:
+            self.strip_layout.removeWidget(card)
+            self.strip_layout.insertWidget(target, card)
         for i, c in enumerate(self._cards):
             c.index = i
 
@@ -348,7 +516,7 @@ class CarouselWidget(QWidget):
         self._current_index = index
         if 0 <= index < len(self._cards):
             self._cards[index].set_current(True)
-            self.scroll.ensureWidgetVisible(self._cards[index])
+            self._ensure_current_visible()
 
     def set_selected(self, index: int, selected: bool) -> None:
         """Directly set one card's selection state without emitting
