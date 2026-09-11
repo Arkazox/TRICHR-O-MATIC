@@ -64,7 +64,7 @@ app = BUNDLE(
     bundle_identifier="com.simonjayet.trichromemaker",
     info_plist={
         "NSHighResolutionCapable": "True",
-        "CFBundleShortVersionString": "0.5.0",
+        "CFBundleShortVersionString": "0.5.1",
         "CFBundleName": "Trichr-o-matic",
         "NSHumanReadableCopyright": "© 2026",
         "CFBundleDocumentTypes": [

@@ -17,6 +17,7 @@ EN = {
     "load_image_button": "Load an image…",
     "change_image_button": "Change Image",
     "no_image_loaded": "No image loaded",
+    "channel_swap_handle_tooltip": "Drag onto another channel's filename to swap their images",
     "active_checkbox": "Active (edit on canvas)",
     "active_layer_info": "The active channel is the one that reacts to dragging and "
                           "scrolling directly on the preview canvas. Only one channel can "
@@ -77,7 +78,8 @@ EN = {
     "zoom_out": "Zoom Out",
     "zoom_fit_tooltip": "Fit to window (F)",
     "zoom_100": "100% (Real Size) (Z)",
-    "hq_preview_tooltip": "HQ Preview: show a full-resolution pass once editing settles (slower)",
+    "hq_preview_tooltip": "HQ Preview (H): show the photo at full resolution shortly after you stop editing, computed in the background",
+    "hq_preview_failed": "HQ Preview couldn't be computed: {error}",
     "rotate_left_tooltip": "Rotate left (⌘L)",
     "rotate_right_tooltip": "Rotate right (⌘R)",
     "fullscreen_button": "Fullscreen (⌘F)",
@@ -149,6 +151,7 @@ EN = {
     "menu_edit_delete": "Delete Selection",
     "menu_reset_all": "Reset All",
     "menu_duplicate": "Duplicate",
+    "menu_convert_to_trichrome": "Convert to Trichrome Image",
     "menu_language": "Language",
     "menu_tools": "Tools",
     "menu_tools_crop": "Crop",
@@ -182,31 +185,35 @@ EN = {
     "independent_channels_group_title": "Trichrome Process",
     "import_panel_title": "Files",
     "mode_solo_option": "Solo",
-    "mode_bw_trichrome_option": "B&W Trichrome",
+    "mode_bw_trichrome_option": "Classic Trichrome",
     "mode_color_trichrome_option": "Color Trichrome",
     "mode_select_info": (
         "<b>Solo</b><br>"
         "<span style=\"color:#9a9a9a;\">A single already-composed photo, loaded and edited "
         "as-is - no channel recomposition</span>"
         "<br><br>"
-        "<b>B&amp;W Trichrome</b><br>"
-        "<span style=\"color:#9a9a9a;\">Classic mode: combines 3 black &amp; white photos "
-        "to recompose a color image</span>"
+        "<b>Classic Trichrome</b><br>"
+        "<span style=\"color:#9a9a9a;\">Combines 3 black &amp; white photos taken with colored "
+        "filters to recompose a color image</span>"
         "<br><br>"
         "<b>Color Trichrome</b><br>"
         "<span style=\"color:#9a9a9a;\">Simulates RGB filters from 3 color photos, each keeping "
         "its own real channel, to create a &quot;Harris Shutter Effect&quot;</span>"
     ),
-    "load_normal_dialog_title": "Load Image",
+    "normal_file_path_label": "File Path:",
     "status_photo_added": "Photo added",
     "status_photos_added": "{n} photo(s) added",
     "dialog_drop_photos_failed_text": "Could not load the following file(s):\n{files}",
     "normal_photo_label": "Photo",
     "channels_disabled_normal_mode": "This tool is only available for trichrome photographs",
-    "mode_switch_dialog_title": "Trichrome Photo",
+    "mode_switch_dialog_title": "Mode Change",
     "mode_switch_dialog_text": (
-        "Are you sure you want to switch back to Normal mode? Choose which "
+        "Are you sure you want to switch back to Solo mode? Choose which "
         "layer you want to continue editing:"
+    ),
+    "mode_switch_to_trichrome_dialog_text": (
+        "Are you sure you want to switch to {mode} mode? Which layer would "
+        "you like to assign this image to?"
     ),
     "mode_switch_channel_button": "{channel} Layer",
     "mode_switch_cancel_button": "Cancel",
@@ -264,7 +271,7 @@ EN = {
         "get assigned to the R/G/B Channels</span>"
     ),
     "batch_advanced_options_info": (
-        "<b>Classic Trichrome</b><br>"
+        "<b>RGB Trichrome</b><br>"
         "<span style=\"color:#9a9a9a;\">Standard mapping - the R, G and B filtered photos fill "
         "the R, G and B channels directly</span>"
         "<br><br>"
@@ -280,7 +287,7 @@ EN = {
         "<span style=\"color:#9a9a9a;\">Freely assign which filter feeds each channel, using the "
         "filters defined below</span>"
     ),
-    "batch_advanced_mode_classic": "Classic Trichrome",
+    "batch_advanced_mode_classic": "RGB Trichrome",
     "batch_advanced_mode_ir": "IR Trichrome",
     "batch_advanced_mode_aerochrome": "Aerochrome",
     "batch_advanced_mode_custom": "Custom",
@@ -305,11 +312,9 @@ EN = {
     "batch_manual_remove_button": "Remove selected",
     "batch_manual_clear_button": "Clear",
     "batch_manual_hint": ("Drop image files onto a column to add them, or drag items within a column "
-                           "to reorder them — row N of each column forms one triplet."),
-    "batch_manual_mismatch_warning": "Columns have different counts (R: {r}, G: {g}, B: {b}) — only the first {n} will be paired.",
+                           "to reorder them."),
     "batch_select_files_title": "Select the {channel} images",
     "batch_processing_mode_group": "Processing Mode",
-    "batch_solo_group": "Photos",
     "batch_solo_select_images_button": "Select Image(s)…",
     "batch_solo_select_folder_button": "Select Folder…",
     "batch_solo_select_images_title": "Select photos to import",
@@ -352,6 +357,7 @@ EN = {
     "status_photos_deleted": "{n} photo(s) deleted",
     "status_photos_reset": "{n} photo(s) reset",
     "status_photo_duplicated": "Photo duplicated",
+    "status_photo_converted_to_trichrome": "Trichrome photo created",
     "status_crop_applied": "Crop applied",
 
     "dialog_load_error_title": "Loading error",
@@ -381,7 +387,7 @@ EN = {
 <ul>
 <li><b>Solo</b> — a single, already-composed photo (color or B&amp;W), loaded and edited
 as-is — no channel recomposition.</li>
-<li><b>B&amp;W Trichrome</b> — the classic case: 3 black &amp; white shots taken through
+<li><b>Classic Trichrome</b> — the classic case: 3 black &amp; white shots taken through
 Red/Green/Blue (or IR/custom) filters, recomposed into one color image.</li>
 <li><b>Color Trichrome</b> — 3 real color photos, each keeping its own R, G or B channel
 (a "Harris Shutter" look), instead of being flattened to grayscale.</li>
@@ -432,12 +438,12 @@ You can also save any number of your own named layouts the same way.</li>
 <h3>Importing many photos at once (Batch Import)</h3>
 <ol>
 <li>Click the <b>Import Images…</b> button at the top of the sidebar (or press Cmd+I).</li>
-<li>Choose a <b>Processing Mode</b> — Solo, B&amp;W Trichrome, or Color Trichrome — for the
+<li>Choose a <b>Processing Mode</b> — Solo, Classic Trichrome, or Color Trichrome — for the
 whole batch.</li>
 <li>In Trichrome mode, pick how files are matched: <b>Automatic</b> (by filename),
 <b>Sequential</b> (select files already in R, G, B order), or <b>Manual</b> (pick each
 column yourself) — click the <b>?</b> buttons for details, including the <b>Import
-Rules</b> that decide which filter feeds which channel (Classic, IR, Aerochrome, or a
+Rules</b> that decide which filter feeds which channel (RGB Trichrome, IR, Aerochrome, or a
 fully custom mapping). In Solo mode, just select individual images or a whole folder.</li>
 <li>Click <b>Import</b> — the new photos are added to the filmstrip after the current
 selection.</li>
@@ -544,6 +550,9 @@ directly on the preview (Trichrome modes only).</p>
     "scan_device_not_connected": "Not connected",
     "scan_device_connected": "Connected: {model}",
     "scan_device_refresh": "Refresh",
+    "scan_camera_settings_group": "Camera Settings",
+    "scan_white_balance_label": "White Balance",
+    "scan_shutter_speed_label": "Shutter Speed",
     "scan_mode_group": "Film",
     "scan_mode_bw": "B&W",
     "scan_mode_color": "Color",
@@ -623,6 +632,7 @@ FR = {
     "load_image_button": "Charger une image…",
     "change_image_button": "Changer l'image",
     "no_image_loaded": "Aucune image chargée",
+    "channel_swap_handle_tooltip": "Glisser sur le nom de fichier d'un autre canal pour échanger leurs images",
     "active_checkbox": "Actif (édition sur le canevas)",
     "active_layer_info": "Le calque actif est celui qui réagit quand on glisse ou "
                           "qu'on utilise la molette directement sur le canevas de "
@@ -685,7 +695,8 @@ FR = {
     "zoom_out": "Zoom arrière",
     "zoom_fit_tooltip": "Ajuster à la fenêtre (F)",
     "zoom_100": "100 % (taille réelle) (Z)",
-    "hq_preview_tooltip": "Aperçu HQ : bascule en pleine résolution une fois l'édition stabilisée (plus lent)",
+    "hq_preview_tooltip": "Aperçu HQ (H) : affiche la photo en pleine résolution peu après l'arrêt de l'édition, calculé en arrière-plan",
+    "hq_preview_failed": "Impossible de calculer l'aperçu HQ : {error}",
     "rotate_left_tooltip": "Rotation à gauche (⌘L)",
     "rotate_right_tooltip": "Rotation à droite (⌘R)",
     "fullscreen_button": "Plein écran (⌘F)",
@@ -758,6 +769,7 @@ FR = {
     "menu_edit_delete": "Supprimer la sélection",
     "menu_reset_all": "Tout réinitialiser",
     "menu_duplicate": "Dupliquer",
+    "menu_convert_to_trichrome": "Convertir en image trichrome",
     "menu_language": "Langue",
     "menu_tools": "Outils",
     "menu_tools_crop": "Recadrer",
@@ -791,31 +803,35 @@ FR = {
     "independent_channels_group_title": "Traitement Trichrome",
     "import_panel_title": "Fichiers",
     "mode_solo_option": "Solo",
-    "mode_bw_trichrome_option": "Trichromie N&B",
+    "mode_bw_trichrome_option": "Trichromie Classique",
     "mode_color_trichrome_option": "Trichromie Couleur",
     "mode_select_info": (
         "<b>Solo</b><br>"
         "<span style=\"color:#9a9a9a;\">Une seule photo déjà composée, chargée et éditée "
         "telle quelle - aucune recomposition de canaux</span>"
         "<br><br>"
-        "<b>Trichromie N&amp;B</b><br>"
-        "<span style=\"color:#9a9a9a;\">Mode classique : combine 3 photos noir et blanc "
-        "pour recomposer une image couleur</span>"
+        "<b>Trichromie Classique</b><br>"
+        "<span style=\"color:#9a9a9a;\">Combine 3 photos noir et blanc prises avec des filtres "
+        "colorés pour recomposer une image couleur</span>"
         "<br><br>"
         "<b>Trichromie Couleur</b><br>"
         "<span style=\"color:#9a9a9a;\">Simule des filtres RGB à partir de 3 photos couleur, "
         "chacune gardant son propre canal réel, pour créer un &quot;Harris Shutter Effect&quot;</span>"
     ),
-    "load_normal_dialog_title": "Charger l'image",
+    "normal_file_path_label": "Chemin du fichier :",
     "status_photo_added": "Photo ajoutée",
     "status_photos_added": "{n} photo(s) ajoutée(s)",
     "dialog_drop_photos_failed_text": "Impossible de charger le(s) fichier(s) suivant(s) :\n{files}",
     "normal_photo_label": "Photo",
     "channels_disabled_normal_mode": "Cet outil est disponible uniquement pour les photographies trichrome",
-    "mode_switch_dialog_title": "Photo Trichrome",
+    "mode_switch_dialog_title": "Changement de mode",
     "mode_switch_dialog_text": (
-        "Êtes-vous sûr de vouloir repasser en mode Normal ? Choisissez le "
+        "Êtes-vous sûr de vouloir repasser en mode Solo ? Choisissez le "
         "calque que vous souhaitez continuer d'éditer :"
+    ),
+    "mode_switch_to_trichrome_dialog_text": (
+        "Êtes-vous sûr de vouloir basculer en mode {mode} ? À quelle "
+        "couche souhaitez-vous attribuer cette image ?"
     ),
     "mode_switch_channel_button": "Calque {channel}",
     "mode_switch_cancel_button": "Annuler",
@@ -876,7 +892,7 @@ FR = {
         "des fichiers et leur attribution dans les Canaux RVB</span>"
     ),
     "batch_advanced_options_info": (
-        "<b>Trichrome classique</b><br>"
+        "<b>Trichrome RVB</b><br>"
         "<span style=\"color:#9a9a9a;\">Correspondance standard - les photos filtrées R, V et B "
         "remplissent directement les canaux R, V et B</span>"
         "<br><br>"
@@ -892,7 +908,7 @@ FR = {
         "<span style=\"color:#9a9a9a;\">Assignez librement quel filtre alimente chaque canal, à "
         "partir des filtres définis ci-dessous</span>"
     ),
-    "batch_advanced_mode_classic": "Trichrome classique",
+    "batch_advanced_mode_classic": "Trichrome RVB",
     "batch_advanced_mode_ir": "Trichrome IR",
     "batch_advanced_mode_aerochrome": "Aerochrome",
     "batch_advanced_mode_custom": "Personnalisé",
@@ -918,12 +934,9 @@ FR = {
     "batch_manual_remove_button": "Retirer la sélection",
     "batch_manual_clear_button": "Vider",
     "batch_manual_hint": ("Déposez des fichiers image sur une colonne pour les ajouter, ou glissez les "
-                           "éléments dans une colonne pour les réordonner — la ligne N de chaque "
-                           "colonne forme un triplet."),
-    "batch_manual_mismatch_warning": "Les colonnes ont des tailles différentes (R : {r}, V : {g}, B : {b}) — seules les {n} premières seront appariées.",
+                           "éléments dans une colonne pour les réordonner."),
     "batch_select_files_title": "Sélectionner les images {channel}",
     "batch_processing_mode_group": "Mode de traitement",
-    "batch_solo_group": "Photos",
     "batch_solo_select_images_button": "Sélectionner des photos…",
     "batch_solo_select_folder_button": "Sélectionner un dossier…",
     "batch_solo_select_images_title": "Sélectionner les photos à importer",
@@ -966,6 +979,7 @@ FR = {
     "status_photos_deleted": "{n} photo(s) supprimée(s)",
     "status_photos_reset": "{n} photo(s) réinitialisée(s)",
     "status_photo_duplicated": "Photo dupliquée",
+    "status_photo_converted_to_trichrome": "Photo trichrome créée",
     "status_crop_applied": "Recadrage appliqué",
 
     "dialog_load_error_title": "Erreur de chargement",
@@ -996,7 +1010,7 @@ traitée :</p>
 <ul>
 <li><b>Solo</b> — une seule photo déjà composée (couleur ou N&amp;B), chargée et éditée
 telle quelle - aucune recomposition de canaux.</li>
-<li><b>Trichromie N&amp;B</b> — le cas classique : 3 clichés noir et blanc pris à travers
+<li><b>Trichromie Classique</b> — le cas classique : 3 clichés noir et blanc pris à travers
 des filtres Rouge/Vert/Bleu (ou IR/personnalisés), recomposés en une image couleur.</li>
 <li><b>Trichromie Couleur</b> — 3 vraies photos couleur, chacune conservant son propre
 canal R, V ou B (effet « Harris Shutter »), au lieu d'être aplaties en niveaux de
@@ -1057,13 +1071,13 @@ d'origine de l'application.</li>
 <ol>
 <li>Cliquez sur le bouton <b>Import Images…</b> en haut de la barre latérale (ou appuyez
 sur Cmd+I).</li>
-<li>Choisissez un <b>Mode de traitement</b> - Solo, Trichromie N&amp;B, ou Trichromie
+<li>Choisissez un <b>Mode de traitement</b> - Solo, Trichromie Classique, ou Trichromie
 Couleur - pour tout le lot.</li>
 <li>En mode Trichromie, choisissez comment les fichiers sont appariés : <b>Automatique</b>
 (par nom de fichier), <b>Séquentiel</b> (fichiers déjà dans l'ordre R, V, B) ou
 <b>Manuelle</b> (vous choisissez chaque colonne) — cliquez sur les boutons <b>?</b> pour
 les détails, y compris les <b>Règles d'Import</b> qui déterminent quel filtre alimente
-quel canal (Classique, IR, Aerochrome, ou une correspondance entièrement personnalisée).
+quel canal (Trichrome RVB, IR, Aerochrome, ou une correspondance entièrement personnalisée).
 En mode Solo, sélectionnez simplement des images individuelles ou un dossier entier.</li>
 <li>Cliquez sur <b>Importer</b> — les nouvelles photos sont ajoutées au bandeau de
 vignettes à la suite de la sélection actuelle.</li>
@@ -1181,6 +1195,9 @@ panneau latéral</li>
     "scan_device_not_connected": "Non connecté",
     "scan_device_connected": "Connecté : {model}",
     "scan_device_refresh": "Actualiser",
+    "scan_camera_settings_group": "Réglages caméra",
+    "scan_white_balance_label": "Balance des blancs",
+    "scan_shutter_speed_label": "Vitesse d'obturation",
     "scan_mode_group": "Film",
     "scan_mode_bw": "N&B",
     "scan_mode_color": "Couleur",

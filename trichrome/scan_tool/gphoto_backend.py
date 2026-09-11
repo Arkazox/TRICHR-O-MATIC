@@ -166,17 +166,39 @@ def set_config(port: str, name: str, value: str, timeout: float = 10.0) -> None:
 
 
 # Candidate leaf-name substrings (checked case-insensitively) for whichever
-# config actually controls RAW vs. JPEG on the connected camera - the first
-# match in --list-config's output wins.
+# config actually controls RAW vs. JPEG / white balance / shutter speed on
+# the connected camera - the first match in --list-config's output wins.
+# Same "never hardcode a path" rationale as the module docstring: these are
+# the standard PTP property leaf names libgphoto2 uses across Canon/Nikon/
+# Sony/Fuji drivers, but whether a given camera exposes the node at all -
+# and whether it's actually *settable* rather than read-only - still
+# depends on the specific model/firmware and (for shutter speed especially)
+# the camera's own physical mode dial being in Manual; `get_config`'s own
+# `choices` list is empty when that's not the case, which is what
+# ScanPanel._populate_config_combo checks before showing the control.
 _QUALITY_LEAF_HINTS = ("imagequality", "imageformat", "quality")
+_WHITE_BALANCE_LEAF_HINTS = ("whitebalance",)
+_SHUTTER_SPEED_LEAF_HINTS = ("shutterspeed",)
+
+
+def _find_config_by_hints(port: str, hints: tuple[str, ...], timeout: float = 10.0) -> str | None:
+    for path in list_config(port, timeout=timeout):
+        leaf = path.rsplit("/", 1)[-1].lower()
+        if any(hint in leaf for hint in hints):
+            return path
+    return None
 
 
 def find_quality_config(port: str, timeout: float = 10.0) -> str | None:
-    for path in list_config(port, timeout=timeout):
-        leaf = path.rsplit("/", 1)[-1].lower()
-        if any(hint in leaf for hint in _QUALITY_LEAF_HINTS):
-            return path
-    return None
+    return _find_config_by_hints(port, _QUALITY_LEAF_HINTS, timeout=timeout)
+
+
+def find_white_balance_config(port: str, timeout: float = 10.0) -> str | None:
+    return _find_config_by_hints(port, _WHITE_BALANCE_LEAF_HINTS, timeout=timeout)
+
+
+def find_shutter_speed_config(port: str, timeout: float = 10.0) -> str | None:
+    return _find_config_by_hints(port, _SHUTTER_SPEED_LEAF_HINTS, timeout=timeout)
 
 
 _SAVED_FILE_RE = re.compile(r"^Saving file as (.+)$")

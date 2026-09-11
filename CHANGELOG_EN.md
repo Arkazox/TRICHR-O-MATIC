@@ -5,11 +5,6 @@ v0.4.0. It's the release-notes counterpart to `CLAUDE.md` (which covers
 *how* things are implemented, for development) — this one covers *what
 changed and why it matters to someone using the app*.
 
-A French version lives in `CHANGELOG_FR.md`. A PDF copy of each
-(`CHANGELOG_EN.pdf` / `CHANGELOG_FR.pdf`) is regenerated automatically by
-`build_mac.sh` on every build (`scripts/generate_changelog_pdf.py`), so
-they're always in sync with whatever `.app` you're holding.
-
 The **Unreleased** section at the top always lists what's changed since
 the last version was actually built, plus a running list of what's planned
 next — so it doubles as a short roadmap snapshot, not just a history.
@@ -18,6 +13,10 @@ next — so it doubles as a short roadmap snapshot, not just a history.
 
 ## Unreleased
 
+---
+
+## v0.5.1 — 2026-09-11
+
 ### Added
 - **RAW file support**: photos can now be imported directly from camera
   RAW files (Fuji `.RAF`, Canon `.CR2`/`.CR3`, Nikon `.NEF`/`.NRW`, Sony
@@ -25,16 +24,35 @@ next — so it doubles as a short roadmap snapshot, not just a history.
   Pentax `.PEF`, and more) - every file picker in the app (per-channel
   Load, Solo mode's Load Image, the missing-file relink dialog, every
   picker in the Batch Import window) and Finder drag-and-drop now accept
-  them alongside PNG/JPEG/TIFF/BMP.
+  them alongside PNG/JPEG/TIFF/BMP, including a real end-to-end batch
+  import of RAW triplets through the Batch Import window itself.
+- **Grid view** for the thumbnail strip: a new toolbar button (or press
+  G) switches from the single filmstrip row to a resizable grid of every
+  photo - the same drag-to-reorder, right-click menu, and click/⌘-click/
+  Shift-arrow selection you already know, plus Up/Down arrow keys to move
+  a row at a time while it's active.
 - **Drag and drop a photo directly onto the preview** itself (while no
   photo is loaded yet), not just onto the thumbnail strip or grid view.
 - **An "HQ" toggle** next to the zoom buttons: once on, the app shows a
   full-resolution version of the composed photo a moment after you stop
   editing, layered on top of the normal fast preview - useful for judging
   fine detail while zoomed in or in fullscreen, without slowing down live
-  slider/curve edits.
+  slider/curve edits or freezing the app while it computes.
 - **Keyboard shortcuts for zoom**: ⌘+ and ⌘-, alongside the existing Z
   (100%) and F (fit) shortcuts.
+- **"Convert to Trichrome Image"**: right-click 1 to 3 selected Solo
+  photos in the thumbnail strip to combine them into a new Classic
+  Trichrome photo (the first selected becomes Red, the second Green, the
+  third Blue).
+- **Swap which photo is loaded into which Trichrome channel**: drag one
+  channel's filename in the Files block onto another channel to swap
+  the two photos (and their own alignment/tone edits) between slots.
+- Switching a Solo photo to a Trichrome mode now asks which channel
+  (Red/Green/Blue) it should become, instead of leaving the other two
+  channels empty with no way to pick which one gets the image.
+- **New Camera Settings in the Scan tool**: RAW/JPEG format, white
+  balance, and shutter speed, read directly from the connected camera and
+  adjustable from within the app.
 
 ### Changed
 - Dropping the very first photo(s) into a brand-new/empty session now
@@ -42,13 +60,27 @@ next — so it doubles as a short roadmap snapshot, not just a history.
   behind as a stray extra thumbnail.
 - The Scan tool now carries a permanent "still under development" notice,
   since it remains a beta feature.
+- The Batch Import window's Automatic/Sequential/Manual layouts now share
+  a consistent look (same list sizing, colored per-channel headers), and
+  Manual mode now also flags leftover unmatched files, the same way
+  Automatic mode already did.
+- The Mode selector's **"B&W Trichrome"** is now called **"Classic
+  Trichrome"** for clarity; its matching Import Rules preset (Batch
+  Import) is now called **"RGB Trichrome"** to avoid the two "Classic"
+  labels colliding.
+- Every alert/warning dialog in the app (image load errors, session
+  errors, auto-align failures, and more) now uses Trichr-o-matic's own
+  dialog design instead of the native macOS look.
+
+### Fixed
+- The image no longer visually jumps in size when the HQ toggle swaps in
+  a sharper version, and "Fit" now stays correctly fitted when switching
+  between photos of different orientations while it's active.
+- The Mode Change dialog's text could sometimes get clipped depending on
+  window size - it now always sizes itself to show its full content.
 
 ### Remaining tasks for future versions
 - **v0.6.0**: a **metadata panel** - not yet specified.
-- **RAW file support**: a real end-to-end batch import of RAW triplets
-  through the Batch Import window itself hasn't been verified yet with
-  actual camera files (only its filename-matching logic was checked with
-  empty stub files).
 
 ---
 

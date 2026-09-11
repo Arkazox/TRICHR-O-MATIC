@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import os
 import re
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from . import alignment, i18n, imaging
 from .batch_window import BatchWindow
+from .hq_preview_worker import HQPreviewWorker
 from .import_worker import BatchImportWorker
 from .model import (
     CHANNEL_NAMES, BatchItem, ChannelLayer, CropSettings, GlobalCorrection, ensure_batch_item_uid_above,
@@ -42,7 +44,7 @@ from .widgets.fullscreen_toggle_button import FullscreenToggleButton
 from .widgets.global_panel import ColorPanel, LightPanel
 from .widgets.histogram_widget import HistogramPanel
 from .widgets.alert_dialog import show_alert
-from .widgets.import_panel import ImportPanel
+from .widgets.import_panel import MODE_LABEL_KEYS, ImportPanel
 from .widgets.info_bubble import InfoButton
 from .widgets.missing_files_banner import MissingFilesBanner
 from .widgets.mode_switch_dialog import ModeSwitchDialog
@@ -127,17 +129,43 @@ _DUPLICATE_SUFFIX_RE = re.compile(r"^(.*) \((\d+)\)$")
 # cost (not this timer) becomes the limiting factor regardless.
 _CURVE_RECOMPUTE_THROTTLE_MS = 16
 
-# HQ Preview (2026-09-08): the live preview always composites from the
-# ~1400px-capped imaging.make_preview() arrays (see MAX_PREVIEW_DIM in
-# imaging.py) - fast enough to stay live on every slider tick, but visibly
-# soft once zoomed in or in fullscreen. Recomposing at full resolution on
-# every tick would defeat that whole point, so HQ Preview mode instead
-# waits for a short idle gap after the last edit (see _arm_hq_preview_if_enabled/
-# _recompute_hq_preview) before swapping in one full-res pass - same
-# "fast while moving, sharp once still" tradeoff as the Curves tool's own
-# throttle above, just a settle-delay (restarted on every edit) rather than
-# a throttle (fires at most once per burst).
-_HQ_PREVIEW_IDLE_MS = 400
+# HQ Preview (2026-09-08/09): the live preview always composites from the
+# ~MAX_PREVIEW_DIM-capped (1400px, see imaging.py) imaging.make_preview()
+# arrays - fast enough to stay live on every slider tick, but visibly
+# soft once zoomed in or in fullscreen. Recomposing at the source's true
+# native resolution on every tick would defeat that whole point (measured
+# empirically at ~2.9s for a single pass on a realistic 24MP (6000x4000)
+# trichrome triplet, all in compose_trichrome's own warp/tone/color math,
+# not I/O), so HQ Preview mode instead waits for a short idle gap
+# (_HQ_PREVIEW_IDLE_MS, (re)armed on every edit by
+# _arm_hq_preview_if_enabled - QTimer.start() on an already-running
+# single-shot timer restarts its countdown, so this is a settle-delay that
+# fires N ms after the *last* edit, not a throttle like the Curves tool's
+# own _CURVE_RECOMPUTE_THROTTLE_MS, which fires at most once per burst)
+# before recomposing at native resolution. That recompute runs in a
+# background QThread (HQPreviewWorker, see _start_hq_preview), not on the
+# UI thread, so it doesn't block sliders/menus/etc. while it runs - see
+# hq_preview_worker.py. Since a stale result (an edit arriving before/
+# during an in-flight compute) is simply discarded rather than shown (see
+# _hq_result_stale), this delay can stay short: unlike the earlier
+# UI-thread-blocking design, firing it too eagerly costs some wasted
+# background CPU on a fast-moving edit, not a frozen UI.
+#
+# **Tried and reverted (2026-09-09)**: an intermediate capped stage (a
+# fast ~3200px pass at 400ms idle, then upgrading to native at 4s idle,
+# both still fast enough to run *synchronously*) was tried first and
+# dropped once the recompute moved to a background thread - at that point
+# a single native-resolution step, now able to fire much sooner (500ms)
+# since it no longer risks freezing the UI, was simpler and sharper sooner.
+_HQ_PREVIEW_IDLE_MS = 500
+
+# The status bar's HQ-compute indicator's spin rate (see _on_hq_spin_tick) -
+# matches ScanPanel's own refresh-button spin exactly (same tick interval,
+# same -360deg/second speed), just looped continuously instead of that
+# one's fixed 1-second one-shot, since a HQ compute's duration isn't known
+# up front.
+_HQ_SPIN_TICK_MS = 16
+_HQ_SPIN_DEGREES_PER_SEC = 360.0
 
 # The block system (2026-09-04): every side-panel block (Files/Channels on
 # the left; Histogram/Light/Color/Crop on the right; Scan can live on
@@ -187,31 +215,95 @@ _BLOCK_MENU_LABEL_KEYS = {
     "curves": "curves_group_title",
 }
 
-# The 4 built-in default-layout menu entries (2026-09-04), each backing one
-# of the top toolbar's Trichrome/Color Correction/Crop/Scan buttons -
-# ordered (display name - the fixed identifier used throughout the code,
-# its Window-menu i18n label key, bare-letter shortcut hint, source preset
-# name) matching the toolbar's own left-to-right order. The display name
-# itself is a reserved slot, not a real saved preset - on_save_layout_preset
-# refuses to save a custom preset under one of these 4 names, and
-# _rebuild_layout_preset_menu skips them so they never show a stray
-# Load/Update/Delete submenu of their own. What each one actually loads is
-# its `source` preset - an ordinary, fully editable/updatable/deletable
-# custom preset the user manages like any other through the Layout Preset
-# submenu (2026-09-04: user recreated these as "NewTrichrome"/
-# "NewColorCorrection"/"NewCrop"/"NewScan" after finding the layouts saved
-# under the display names themselves didn't match what they'd set up -
-# decoupling display name from source preset name is what lets the menu
-# item keep a fixed, translated label while the underlying layout it
-# applies stays a normal, user-editable preset).
+# The 4 built-in default-layout menu entries, each backing one of the top
+# toolbar's Trichrome/Color Correction/Crop/Scan buttons - ordered (display
+# name - the fixed identifier used throughout the code, its Window-menu
+# i18n label key, bare-letter shortcut hint) matching the toolbar's own
+# left-to-right order. The display name itself is a reserved slot, not a
+# real saved preset - on_save_layout_preset refuses to save a custom
+# preset under one of these 4 names, and _rebuild_layout_preset_menu skips
+# them so they never show a stray Load/Update/Delete submenu of their own.
+#
+# 2026-09-11: each slot's actual layout is now a fixed dict literal
+# (_BUILT_IN_LAYOUT_STATES below), not a QSettings-backed custom preset.
+# Previously each slot loaded an ordinary user-editable preset ("NewTrichrome"/
+# "NewColorCorrection"/"NewCrop"/"NewScan") via an indirection table - that
+# meant these 4 toolbar buttons silently broke if that underlying preset
+# was ever deleted (which build_mac.sh's fresh-build QSettings reset now
+# does deliberately - see build_mac.sh), and the "New*" presets themselves
+# cluttered the Layout Preset submenu as ordinary-looking entries. Hardcoding
+# the state here makes these 4 slots immune to any preset being cleared -
+# there's no more "Update" action for them either (removed from the Window
+# menu's per-slot submenu), since there's no live preset left to update; a
+# genuinely different default would mean editing this dict directly. If a
+# user later saves/recreates a custom preset literally named "NewTrichrome"
+# (or any other string), it's just an ordinary preset now - no special
+# handling, shows normally in the Layout Preset submenu.
 _BUILT_IN_LAYOUT_PRESETS = (
-    ("Trichrome", "menu_window_layout_trichrome", "T", "NewTrichrome"),
-    ("Color Correction", "menu_window_layout_color_correction", "E", "NewColorCorrection"),
-    ("Crop", "menu_window_layout_crop", "C", "NewCrop"),
-    ("Scan", "menu_window_layout_scan", "S", "NewScan"),
+    ("Trichrome", "menu_window_layout_trichrome", "T"),
+    ("Color Correction", "menu_window_layout_color_correction", "E"),
+    ("Crop", "menu_window_layout_crop", "C"),
+    ("Scan", "menu_window_layout_scan", "S"),
 )
-_BUILT_IN_LAYOUT_PRESET_NAMES = tuple(name for name, _key, _shortcut, _source in _BUILT_IN_LAYOUT_PRESETS)
-_BUILT_IN_LAYOUT_SOURCE = {name: source for name, _key, _shortcut, source in _BUILT_IN_LAYOUT_PRESETS}
+_BUILT_IN_LAYOUT_PRESET_NAMES = tuple(name for name, _key, _shortcut in _BUILT_IN_LAYOUT_PRESETS)
+_BUILT_IN_LAYOUT_STATES = {
+    "Trichrome": {
+        "left_panel_visible": True, "right_panel_visible": True, "carousel_visible": True,
+        "block_side": {
+            "files": "left", "channels": "left", "scan": "left",
+            "histogram": "right", "light": "right", "color": "right", "crop": "right", "curves": "right",
+        },
+        "block_visible": {
+            "files": True, "channels": True, "scan": False,
+            "histogram": True, "light": True, "color": True, "crop": False, "curves": True,
+        },
+        "block_collapsed": {k: False for k in _ALL_BLOCK_KEYS},
+        "left_block_order": ["files", "channels", "scan"],
+        "right_block_order": ["histogram", "crop", "light", "curves", "color"],
+    },
+    "Color Correction": {
+        "left_panel_visible": True, "right_panel_visible": True, "carousel_visible": True,
+        "block_side": {
+            "files": "left", "channels": "left", "scan": "left",
+            "histogram": "right", "light": "right", "color": "left", "crop": "right", "curves": "left",
+        },
+        "block_visible": {
+            "files": False, "channels": False, "scan": False,
+            "histogram": True, "light": True, "color": True, "crop": False, "curves": True,
+        },
+        "block_collapsed": {k: False for k in _ALL_BLOCK_KEYS},
+        "left_block_order": ["files", "channels", "scan", "curves", "color"],
+        "right_block_order": ["histogram", "crop", "light"],
+    },
+    "Crop": {
+        "left_panel_visible": True, "right_panel_visible": True, "carousel_visible": True,
+        "block_side": {
+            "files": "left", "channels": "left", "scan": "left",
+            "histogram": "right", "light": "right", "color": "right", "crop": "right", "curves": "right",
+        },
+        "block_visible": {
+            "files": True, "channels": True, "scan": False,
+            "histogram": True, "light": False, "color": False, "crop": True, "curves": False,
+        },
+        "block_collapsed": {k: False for k in _ALL_BLOCK_KEYS},
+        "left_block_order": ["files", "channels", "scan"],
+        "right_block_order": ["histogram", "crop", "light", "color", "curves"],
+    },
+    "Scan": {
+        "left_panel_visible": True, "right_panel_visible": True, "carousel_visible": True,
+        "block_side": {
+            "files": "left", "channels": "left", "scan": "left",
+            "histogram": "right", "light": "right", "color": "right", "crop": "right", "curves": "right",
+        },
+        "block_visible": {
+            "files": False, "channels": False, "scan": True,
+            "histogram": True, "light": False, "color": False, "crop": True, "curves": False,
+        },
+        "block_collapsed": {k: False for k in _ALL_BLOCK_KEYS},
+        "left_block_order": ["files", "channels", "scan"],
+        "right_block_order": ["histogram", "crop", "light", "color", "curves"],
+    },
+}
 
 # Session files: a portable project file (every imported photo's path,
 # alignment, tone, and global correction) - distinct from the QSettings-based
@@ -264,7 +356,17 @@ class MainWindow(QMainWindow):
         self.hq_preview_enabled = False
         self._hq_idle_timer = QTimer(self)
         self._hq_idle_timer.setSingleShot(True)
-        self._hq_idle_timer.timeout.connect(self._recompute_hq_preview)
+        self._hq_idle_timer.timeout.connect(self._start_hq_preview)
+        # QThread/HQPreviewWorker currently computing a HQ pass (None if
+        # none is in flight - see _start_hq_preview). _hq_result_stale marks
+        # whether an in-flight (or already-finished but not yet applied)
+        # worker's result should be discarded instead of shown - set True by
+        # any edit or by turning HQ Preview off, cleared right when a new
+        # worker is dispatched. This is what lets an in-flight computation
+        # become "abandoned" without actually being cancellable mid-numpy-call.
+        self._hq_thread: QThread | None = None
+        self._hq_worker: HQPreviewWorker | None = None
+        self._hq_result_stale = True
         # The exact array last handed to canvas.set_image_rgb/set_image_gray
         # and histogram.set_image - the histogram pixel-pick tool samples
         # from this on hover instead of recomposing anything itself.
@@ -380,10 +482,9 @@ class MainWindow(QMainWindow):
         self.window_left_panel_action.setText(i18n.tr("menu_window_left_panel") + "\tI")
         self.window_right_panel_action.setText(i18n.tr("menu_window_right_panel") + "\tO")
         self.window_thumbnails_action.setText(i18n.tr("menu_window_thumbnails") + "\tP")
-        for name, label_key, shortcut, _source in _BUILT_IN_LAYOUT_PRESETS:
-            self.builtin_layout_menus[name].setTitle(i18n.tr("menu_window_layout_prefix") + i18n.tr(label_key))
-            self.builtin_layout_load_actions[name].setText(i18n.tr("layout_preset_load") + f"\t{shortcut}")
-            self.builtin_layout_update_actions[name].setText(i18n.tr("layout_preset_update"))
+        for name, label_key, shortcut in _BUILT_IN_LAYOUT_PRESETS:
+            self.builtin_layout_load_actions[name].setText(
+                i18n.tr("menu_window_layout_prefix") + i18n.tr(label_key) + f"\t{shortcut}")
         self.layout_preset_menu.setTitle(i18n.tr("menu_window_layout_preset"))
         self.save_layout_preset_action.setText(i18n.tr("menu_window_save_layout_preset"))
         self._rebuild_layout_preset_menu()
@@ -587,36 +688,21 @@ class MainWindow(QMainWindow):
         self.window_menu.addAction(self.window_thumbnails_action)
         self.window_menu.addSeparator()
 
-        # The 4 built-in default-layout presets, listed directly in the
+        # The 4 built-in default-layout entries, listed directly in the
         # Window menu (not nested in the Layout Preset submenu below) -
-        # each one is its own small submenu (Load + Update, no Delete -
-        # 2026-09-04, the user asked for Update to be added here too,
-        # matching a custom preset's own submenu shape minus the ability
-        # to remove a reserved slot entirely). Load mirrors one of the top
-        # toolbar's Trichrome/Color Correction/Crop/Scan buttons -
-        # triggering either goes through the same _activate_default_layout(),
-        # so the toolbar's exclusive checked state stays in sync regardless
-        # of which one was used. Update re-saves the *current* layout into
-        # that slot's underlying source preset (_BUILT_IN_LAYOUT_SOURCE,
-        # e.g. "Trichrome" -> "NewTrichrome") - the same effect as finding
-        # that preset under Layout Preset and clicking its own Update, just
-        # reachable directly from the slot the user actually thinks of it
-        # by ("update the Trichrome layout").
-        self.builtin_layout_menus: dict[str, QMenu] = {}
+        # each one is a single plain action (2026-09-11: no longer a
+        # submenu with its own Update - see _BUILT_IN_LAYOUT_STATES, these
+        # 4 slots are fixed dict literals now, not a live QSettings preset,
+        # so there's nothing left to "update" from here). Triggering
+        # mirrors the matching top toolbar button - both go through the
+        # same _activate_default_layout(), so the toolbar's exclusive
+        # checked state stays in sync regardless of which one was used.
         self.builtin_layout_load_actions: dict[str, QAction] = {}
-        self.builtin_layout_update_actions: dict[str, QAction] = {}
-        for name, _label_key, _shortcut, source in _BUILT_IN_LAYOUT_PRESETS:
-            submenu = QMenu(self.window_menu)
-            load_action = QAction(submenu)
+        for name, _label_key, _shortcut in _BUILT_IN_LAYOUT_PRESETS:
+            load_action = QAction(self.window_menu)
             load_action.triggered.connect(lambda _checked=False, n=name: self._activate_default_layout(n))
-            submenu.addAction(load_action)
-            update_action = QAction(submenu)
-            update_action.triggered.connect(lambda _checked=False, src=source: self._save_layout_preset(src))
-            submenu.addAction(update_action)
-            self.window_menu.addMenu(submenu)
-            self.builtin_layout_menus[name] = submenu
+            self.window_menu.addAction(load_action)
             self.builtin_layout_load_actions[name] = load_action
-            self.builtin_layout_update_actions[name] = update_action
         self.window_menu.addSeparator()
 
         # Layout Preset: save/restore a full named layout snapshot (panel
@@ -696,8 +782,8 @@ class MainWindow(QMainWindow):
         self.import_panel = ImportPanel()
         self.import_panel.load_requested.connect(self.load_image)
         self.import_panel.mode_change_requested.connect(self.on_import_mode_change_requested)
-        self.import_panel.load_normal_requested.connect(self.load_normal_image)
         self.import_panel.harris_shutter_toggled.connect(self.on_harris_shutter_toggled)
+        self.import_panel.channel_swap_requested.connect(self.on_channel_swap_requested)
 
         self.channel_panels = [ChannelPanel(layer.label) for layer in self.layers]
         self.independent_channels_group = QGroupBox()
@@ -885,6 +971,7 @@ class MainWindow(QMainWindow):
         self.carousel.delete_requested.connect(self.delete_batch_items)
         self.carousel.reset_requested.connect(self.reset_batch_items)
         self.carousel.duplicate_requested.connect(self.duplicate_batch_item)
+        self.carousel.convert_to_trichrome_requested.connect(self.convert_items_to_trichrome)
         self.carousel.reordered.connect(self.on_carousel_reordered)
         self.carousel.files_dropped.connect(self.on_carousel_files_dropped)
         self.canvas.files_dropped.connect(self.on_carousel_files_dropped)
@@ -971,6 +1058,44 @@ class MainWindow(QMainWindow):
         # its text changes and draws the eye.
         self.session_name_label.setStyleSheet("color: #888; padding-right: 10px;")
         self.statusBar().addPermanentWidget(self.session_name_label)
+
+        # HQ Preview's background-compute indicator (see _start_hq_preview) -
+        # the same glyph and spin animation as the Scan block's own
+        # "refresh"/device-poll button (Global/refresh.svg,
+        # ScanPanel._on_refresh_spin_tick), continuously looping here
+        # instead of that one's fixed 1-second one-shot spin, since a HQ
+        # compute's duration isn't known in advance. Indeterminate ("busy")
+        # style, not a real 0-100% meter - a single compose_trichrome/
+        # compose_normal call has no meaningful sub-steps to report.
+        # Not made non-interactive via setEnabled(False) - that would dim
+        # it (SvgToolButton._glyph_color()'s disabled state), unlike the
+        # Scan button it's matching, which stays full-color while spinning;
+        # setFocusPolicy/cursor keep it from inviting a click instead.
+        self.hq_loading_icon = SvgToolButton("Global/refresh.svg")
+        self.hq_loading_icon.setFocusPolicy(Qt.NoFocus)
+        self.hq_loading_icon.setCursor(Qt.ArrowCursor)
+        self.hq_loading_bar_container = QWidget()
+        hq_loading_layout = QHBoxLayout(self.hq_loading_bar_container)
+        hq_loading_layout.setContentsMargins(2, 2, 4, 2)
+        hq_loading_layout.addWidget(self.hq_loading_icon)
+        self.hq_loading_bar_container.setVisible(False)
+        # insertWidget(0, ...), not addWidget - index 0 is the exact slot
+        # QStatusBar's own showMessage() label occupies (e.g. the
+        # "status_saving_session" text) - a hidden widget takes no layout
+        # space, so this container sits flush at the status bar's own left
+        # margin, the same starting point that text uses, rather than
+        # wherever it happened to land after whatever else was already
+        # added to the status bar.
+        self.statusBar().insertWidget(0, self.hq_loading_bar_container)
+        # Continuous version of ScanPanel's own refresh-spin timer (same
+        # 16ms/~60fps tick rate and -360deg/sec speed, see
+        # _HQ_SPIN_TICK_MS above) - (re)started/stopped by
+        # _show_hq_loading_indicator/_hide_hq_loading_indicator, never
+        # directly by the container's own setVisible.
+        self._hq_spin_angle = 0.0
+        self._hq_spin_timer = QTimer(self)
+        self._hq_spin_timer.setInterval(_HQ_SPIN_TICK_MS)
+        self._hq_spin_timer.timeout.connect(self._on_hq_spin_tick)
 
         # Registry mapping every block key to its widget/collapse-button/
         # close-button, built here (end of _build_ui) since every block now
@@ -1108,10 +1233,10 @@ class MainWindow(QMainWindow):
         # Default-layout quick-switch buttons (Trichrome/Color Correction/
         # Crop/Scan), re-purposed 2026-09-04 - now that layout is fully
         # customizable (the block system above), these 4 no longer toggle
-        # a fixed tool panel's visibility; each instead loads whichever
-        # custom preset _BUILT_IN_LAYOUT_SOURCE maps its display name to
-        # (see _BUILT_IN_LAYOUT_PRESETS) via _activate_default_layout(). A
-        # single exclusive QButtonGroup across all 4 (not two independent
+        # a fixed tool panel's visibility; each instead applies its own
+        # fixed layout (see _BUILT_IN_LAYOUT_STATES) via
+        # _activate_default_layout(). A single exclusive QButtonGroup
+        # across all 4 (not two independent
         # pairs like the old tool-switcher) - only one default layout
         # reads as "active" (full color) at a time, the rest dimmed, per
         # the user's explicit ask.
@@ -1368,26 +1493,25 @@ class MainWindow(QMainWindow):
     def _activate_default_layout(self, name: str) -> None:
         """Loads one of the 4 built-in default-layout menu entries (name is
         the fixed display identifier - "Trichrome"/"Color Correction"/
-        "Crop"/"Scan", never the underlying preset name) and syncs the
-        matching toolbar button's exclusive checked state - the single
-        entry point for all 3 ways to trigger this (toolbar click, bare
-        keyboard shortcut, Window menu item), so whichever was used, the
-        toolbar always ends up showing the right one active. Always
-        reloads the preset even if that button was already checked (e.g.
-        re-pressing T after dragging blocks around resets back to the
-        Trichrome layout), unlike a plain radio-button click which would
-        be a no-op in that case. Resolves through _BUILT_IN_LAYOUT_SOURCE
-        to the actual custom preset name it loads (e.g. "NewTrichrome") -
-        the display name itself isn't a real saved preset. Activating the
-        "Crop" slot specifically also arms active crop mode - every other
-        slot (and the preset load itself, via _apply_restored_layout)
-        deactivates it, since loading a layout otherwise always turns
-        active crop mode off (2026-09-04)."""
+        "Crop"/"Scan") and syncs the matching toolbar button's exclusive
+        checked state - the single entry point for all 3 ways to trigger
+        this (toolbar click, bare keyboard shortcut, Window menu item), so
+        whichever was used, the toolbar always ends up showing the right
+        one active. Always reapplies the layout even if that button was
+        already checked (e.g. re-pressing T after dragging blocks around
+        resets back to the Trichrome layout), unlike a plain radio-button
+        click which would be a no-op in that case. Applies the fixed dict
+        literal in _BUILT_IN_LAYOUT_STATES directly - not a QSettings
+        custom preset (see that dict's own comment) - so this can never
+        silently break if the user's custom presets get cleared (e.g. by
+        build_mac.sh). Activating the "Crop" slot specifically also arms
+        active crop mode - every other slot (and the preset load itself,
+        via _apply_restored_layout) deactivates it, since loading a layout
+        otherwise always turns active crop mode off (2026-09-04)."""
         button = self._default_layout_buttons.get(name)
         if button is not None and not button.isChecked():
             button.setChecked(True)
-        source = _BUILT_IN_LAYOUT_SOURCE.get(name, name)
-        self._load_layout_preset(source)
+        self._apply_layout_state(_BUILT_IN_LAYOUT_STATES[name])
         self._set_crop_active(name == "Crop")
 
     def _save_layout_preset(self, name: str) -> None:
@@ -1434,12 +1558,12 @@ class MainWindow(QMainWindow):
         Skips any of the 4 reserved display names entirely (e.g. saving a
         custom preset literally called "Trichrome" is already refused by
         on_save_layout_preset, but this is a second guard) - they must
-        never be Delete-able. Their *source* presets (e.g. "NewTrichrome")
-        aren't reserved names, so they still appear here normally with
-        their own full Load/Update/Delete, alongside the same slot's
-        Load/Update submenu in the Window menu directly
-        (builtin_layout_menus) - two convenient paths to the same preset,
-        not a conflict."""
+        never be Delete-able. These 4 slots no longer resolve to a
+        QSettings preset at all (see _BUILT_IN_LAYOUT_STATES) - if a user
+        saves an ordinary custom preset under some other name (even one
+        that used to be special, like "NewTrichrome"), it's a perfectly
+        normal preset with its own Load/Update/Delete here, no special
+        casing."""
         for action in list(self.layout_preset_menu.actions()):
             if action in (self.save_layout_preset_action, self._layout_preset_separator):
                 continue
@@ -1581,6 +1705,14 @@ class MainWindow(QMainWindow):
             self.preview_stack.addWidget(self.carousel)
             self.preview_stack.setCurrentWidget(self.carousel)
             self.carousel.set_grid_mode(True)
+            # Grid mode becomes the active panel for Up/Down navigation
+            # right away, regardless of which panel had focus before
+            # activating it (e.g. a side tool panel, which would otherwise
+            # keep eating Up/Down to scroll itself instead of moving
+            # between photos) - a real click on a cell already moves focus
+            # here on its own; this covers activation via the toolbar
+            # button or the bare G shortcut too.
+            self.carousel.grid_scroll.setFocus()
         else:
             self.preview_stack.removeWidget(self.carousel)
             self.preview_stack.setCurrentWidget(self.canvas)
@@ -1640,6 +1772,12 @@ class MainWindow(QMainWindow):
 
         focus = QApplication.focusWidget()
         text_editing = isinstance(focus, (QAbstractSpinBox, QLineEdit))
+        if (not text_editing and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and self.grid_view_toggle_btn.isChecked()):
+            self.grid_view_toggle_btn.setChecked(False)
+            event.accept()
+            return
+
         if (not text_editing and event.key() == Qt.Key_F
                 and event.modifiers() == Qt.NoModifier):
             self.canvas.zoom_fit()
@@ -1688,6 +1826,12 @@ class MainWindow(QMainWindow):
             event.accept()
             return
 
+        if (not text_editing and event.key() == Qt.Key_H
+                and event.modifiers() == Qt.NoModifier):
+            self.hq_preview_btn.toggle()
+            event.accept()
+            return
+
         if (not text_editing and event.key() == Qt.Key_T
                 and event.modifiers() == Qt.NoModifier):
             self._activate_default_layout("Trichrome")
@@ -1725,6 +1869,15 @@ class MainWindow(QMainWindow):
                     self.carousel.go_prev(extend_selection=extend)
                 else:
                     self.carousel.go_next(extend_selection=extend)
+                event.accept()
+                return
+            if (not text_editing and event.key() in (Qt.Key_Up, Qt.Key_Down)
+                    and self.grid_view_toggle_btn.isChecked()):
+                extend = bool(event.modifiers() & Qt.ShiftModifier)
+                if event.key() == Qt.Key_Up:
+                    self.carousel.go_up(extend_selection=extend)
+                else:
+                    self.carousel.go_down(extend_selection=extend)
                 event.accept()
                 return
             if (not text_editing and event.key() == Qt.Key_A
@@ -1790,9 +1943,22 @@ class MainWindow(QMainWindow):
     # Batch mode
     # ------------------------------------------------------------------
     def open_batch_window(self) -> None:
-        # A fresh window each time: the previous one closes itself once an
-        # import is confirmed, and its file-matching state doesn't need to
-        # survive across separate batch imports.
+        # Only one Import window at a time (2026-09-12, a real bug: this
+        # used to unconditionally build a fresh BatchWindow on every call,
+        # so repeated Cmd+I presses stacked up multiple import windows
+        # instead of surfacing the one already open). BatchWindow has no
+        # WA_DeleteOnClose, so closing it only hides it - the Python/C++
+        # object and self.batch_window itself both survive, making
+        # isHidden() a safe, cheap check here without needing a
+        # try/except for a deleted-wrapper RuntimeError. A closed (hidden)
+        # window still gets a genuinely fresh instance below, same as
+        # before - its file-matching state never needs to survive across
+        # separate batch imports, only across repeated presses while it's
+        # already open.
+        if self.batch_window is not None and not self.batch_window.isHidden():
+            self.batch_window.raise_()
+            self.batch_window.activateWindow()
+            return
         self.batch_window = BatchWindow(self)
         self.batch_window.show()
         self.batch_window.raise_()
@@ -1868,7 +2034,7 @@ class MainWindow(QMainWindow):
             self.batch_items.extend(new_items)
         self._apply_current_sort()
 
-        self.carousel.set_items([it.base for it in self.batch_items])
+        self.carousel.set_items([it.base for it in self.batch_items], [it.mode for it in self.batch_items])
 
         start_index = next(i for i, it in enumerate(self.batch_items) if it is first_new)
         self.activate_batch_item(start_index)
@@ -1921,7 +2087,7 @@ class MainWindow(QMainWindow):
             return
         current_item = self.batch_items[self.batch_current_index] if self.batch_items else None
         self._apply_current_sort()
-        self.carousel.set_items([it.base for it in self.batch_items])
+        self.carousel.set_items([it.base for it in self.batch_items], [it.mode for it in self.batch_items])
         for i, it in enumerate(self.batch_items):
             self.carousel.set_selected(i, it.selected)
         if current_item is not None:
@@ -2046,6 +2212,12 @@ class MainWindow(QMainWindow):
         self.import_panel.set_normal_filename(
             os.path.basename(self.normal_layer.path) if self.normal_layer.path else "")
         self._sync_channels_panel_availability(mode)
+        # Keeps the carousel's own cached per-item mode (used by its "Convert
+        # to Trichrome" context-menu eligibility check) in sync with every
+        # mode-switch handler below, without each of them needing to call it
+        # separately - this is their one shared tail.
+        if 0 <= self.batch_current_index < len(self.batch_items):
+            self.carousel.set_item_mode(self.batch_current_index, mode)
 
     def on_import_mode_change_requested(self, mode: str) -> None:
         if not (0 <= self.batch_current_index < len(self.batch_items)):
@@ -2065,7 +2237,7 @@ class MainWindow(QMainWindow):
             # would leave 1-2 loaded channels invisible/unused - ask which
             # one to keep editing, per the user's explicit spec, instead of
             # silently picking one.
-            dialog = ModeSwitchDialog(available, self)
+            dialog = ModeSwitchDialog(available, i18n.tr("mode_switch_dialog_text"), self)
             dialog.exec()
             if dialog.chosen_index is None:
                 self._sync_import_and_channels_ui()  # revert the combo, nothing changed
@@ -2118,67 +2290,78 @@ class MainWindow(QMainWindow):
         self.canvas.zoom_fit()
 
     def _switch_to_trichrome_mode(self, item) -> None:
+        if self.normal_layer.has_image():
+            # The active Solo photo has a real image - ask which of the 3
+            # channels it should become, mirroring _switch_to_normal_mode's
+            # own "which channel do you want to keep" dialog in reverse.
+            # Skipped entirely for an empty Solo photo (nothing to assign).
+            harris_shutter = self.import_panel.is_harris_shutter_active()
+            mode_key = "color_trichrome" if harris_shutter else "bw_trichrome"
+            text = i18n.tr("mode_switch_to_trichrome_dialog_text",
+                            mode=i18n.tr(MODE_LABEL_KEYS[mode_key]))
+            dialog = ModeSwitchDialog([True, True, True], text, self)
+            dialog.exec()
+            if dialog.chosen_index is None:
+                self._sync_import_and_channels_ui()  # revert the combo, nothing changed
+                return
+            self._assign_normal_photo_to_channel(item, dialog.chosen_index, harris_shutter)
+            return
+
         self.push_undo()
         item.mode = "trichrome"
         self._sync_import_and_channels_ui()
         self.recompute_preview()
         self.canvas.zoom_fit()
 
-    def load_normal_image(self) -> None:
-        name_filter = f"Images ({imaging.qt_image_name_filter_patterns()});;" + i18n.tr("file_filter_all")
-        settings = QSettings(ORG_NAME, APP_NAME)
-        start_dir = settings.value("last_import_dir", "")
-        path, _ = QFileDialog.getOpenFileName(
-            self, i18n.tr("load_normal_dialog_title"), start_dir, name_filter)
-        if not path:
-            return
-        settings.setValue("last_import_dir", os.path.dirname(path))
-        self._load_normal_image_from_path(path)
-
-    def _load_normal_image_from_path(self, path: str, state: dict | None = None) -> bool:
-        """Load ``path`` as the active item's Normal-mode photo. With
-        ``state`` omitted (a fresh, manual load) quarter_turns resets to 0;
-        with ``state`` given (restoring the same file from a previous
-        session) it's restored from it instead - mirrors
-        _load_image_from_path's own ``state`` convention."""
+    def _assign_normal_photo_to_channel(self, item, index: int, harris_shutter: bool) -> None:
+        """Loads the active Solo photo's own file into Trichrome channel
+        ``index`` - the reverse of _switch_to_normal_mode, used when
+        switching Solo -> Trichrome and the user picks which channel this
+        photo should become (ModeSwitchDialog). The other 2 channels are
+        left completely untouched, same "nothing else is silently
+        clobbered" principle _switch_to_normal_mode already follows."""
+        path = self.normal_layer.path
         try:
-            full = imaging.load_color(path)
+            full = imaging.load_grayscale(path, channel=CHANNEL_NAMES[index] if harris_shutter else None)
         except Exception as exc:
             show_alert(self, i18n.tr("dialog_load_error_title"),
                                   i18n.tr("dialog_load_error_text", error=exc))
-            return False
+            self._sync_import_and_channels_ui()
+            return
+        if self.normal_layer.quarter_turns:
+            full = np.ascontiguousarray(np.rot90(full, self.normal_layer.quarter_turns))
+        full = imaging.apply_film_base_correction(full, None, channel=CHANNEL_NAMES[index])
 
         self.push_undo()
-        film_base = state.get("film_base") if state is not None else None
-        full = imaging.apply_film_base_correction(full, film_base)
         preview, preview_scale = imaging.make_preview(full)
-        layer = self.normal_layer
+        layer = item.layers[index]
         layer.path = path
         layer.image_full = full
         layer.image_preview = preview
         layer.preview_scale = preview_scale
-        layer.quarter_turns = state.get("quarter_turns", 0) if state is not None else 0
-        layer.film_base = film_base
-        # A fresh manual load always starts as "Solo Couleur" (a real color
-        # image was just loaded); restoring from a previous session's
-        # ``state`` instead honors whichever film type was selected then -
-        # defaulting True there too, for a state dict saved before this
-        # field existed.
-        layer.harris_shutter = state.get("harris_shutter", True) if state is not None else True
-        if 0 <= self.batch_current_index < len(self.batch_items):
-            item = self.batch_items[self.batch_current_index]
-            item.base = os.path.splitext(os.path.basename(path))[0]
-            # Defensive, not just relying on the Load button only being
-            # reachable while normal_container is already shown - loading a
-            # Normal photo always implies Normal mode is now active.
-            if item.mode != "normal":
-                item.mode = "normal"
-                self._sync_channels_panel_availability("normal")
-
+        layer.harris_shutter = harris_shutter
+        layer.film_base = None
+        layer.reset_alignment()
+        layer.reset_tone()
+        layer.quarter_turns = self.normal_layer.quarter_turns
+        # invert is meant to stay uniform across all 3 trichrome channels
+        # (see on_invert_toggled) - propagated to all of them rather than
+        # only the chosen one, so the Light panel's Negative toggle keeps
+        # reading one consistent state afterward.
+        for channel_layer in item.layers:
+            channel_layer.invert = self.normal_layer.invert
+        item.mode = "trichrome"
+        # _sync_import_and_channels_ui() only refreshes the Mode combo/Solo
+        # File Path row - it never touches the 3 channel filename labels
+        # (every other call site that changes layer.path does this itself,
+        # see e.g. activate_batch_item/on_channel_swap_requested), so
+        # without this the newly-assigned channel kept showing "No image
+        # loaded" the first time a fresh item went Solo -> Trichrome.
+        self.import_panel.set_filename(index, os.path.basename(layer.path))
+        self._sync_panel_from_layer(index)
         self._sync_import_and_channels_ui()
         self.recompute_preview()
         self.canvas.zoom_fit()
-        return True
 
     def on_carousel_files_dropped(self, paths: list[str]) -> None:
         """Photos dragged in from Finder directly onto the thumbnail strip,
@@ -2360,7 +2543,7 @@ class MainWindow(QMainWindow):
         for it in self.batch_items:
             it.selected = id(it) in added_ids
 
-        self.carousel.set_items([it.base for it in self.batch_items])
+        self.carousel.set_items([it.base for it in self.batch_items], [it.mode for it in self.batch_items])
         for i, it in enumerate(self.batch_items):
             self.carousel.set_selected(i, it.selected)
         self.activate_batch_item(new_index)
@@ -2548,7 +2731,7 @@ class MainWindow(QMainWindow):
             self.batch_items = [BatchItem(base="", paths={}, layers=new_project_layers(),
                                            global_corr=GlobalCorrection(), selected=True)]
 
-        self.carousel.set_items([it.base for it in self.batch_items])
+        self.carousel.set_items([it.base for it in self.batch_items], [it.mode for it in self.batch_items])
 
         # Every item that was selected got deleted (that's what "indices"
         # was), so the only thing left worth selecting is the new current
@@ -2630,7 +2813,7 @@ class MainWindow(QMainWindow):
         )
         self.batch_items.insert(index + 1, dup)
 
-        self.carousel.set_items([it.base for it in self.batch_items])
+        self.carousel.set_items([it.base for it in self.batch_items], [it.mode for it in self.batch_items])
         for i, it in enumerate(self.batch_items):
             it.selected = it is dup
             self.carousel.set_selected(i, it.selected)
@@ -2638,6 +2821,65 @@ class MainWindow(QMainWindow):
         self._update_carousel_visibility(force_show=True)
         self._refresh_all_carousel_thumbnails()
         self.statusBar().showMessage(i18n.tr("status_photo_duplicated"), 4000)
+
+    def convert_items_to_trichrome(self, indices: list[int]) -> None:
+        """Builds one new Classic Trichrome BatchItem out of 1-3 selected
+        Solo photos (CarouselWidget's "Convert to Trichrome" context-menu
+        item, 2026-09-10) - in filmstrip order, the first becomes the Red
+        channel, the second (if any) Green, the third (if any) Blue, each
+        flattened to luminance the same way a real classic-trichrome shot
+        would be (imaging.load_grayscale with no channel argument - this is
+        always Classic, never Color Trichrome, since a Solo photo has no
+        per-channel decode of its own to preserve). Inserted right after the
+        first source photo, named with the same "(N)" version suffix
+        Duplicate uses. The source photo(s) are left completely untouched -
+        this creates a new item, it doesn't consume them. The menu itself
+        (CarouselWidget._on_card_context_menu) already restricts this to
+        exactly the eligible case (1-3 targets, all still Solo), so the
+        guards below are defensive, not expected to actually fire."""
+        indices = sorted(i for i in indices if 0 <= i < len(self.batch_items))
+        if not (1 <= len(indices) <= 3):
+            return
+        sources = [self.batch_items[i] for i in indices]
+        if any(it.mode != "normal" for it in sources):
+            return
+
+        layers = new_project_layers()
+        for ci, src in enumerate(sources):
+            if not src.normal_layer.has_image():
+                continue
+            try:
+                full = imaging.load_grayscale(src.normal_layer.path)
+            except Exception as exc:
+                show_alert(self, i18n.tr("dialog_load_error_title"),
+                           i18n.tr("dialog_load_error_text", error=exc))
+                return
+            if src.normal_layer.quarter_turns:
+                full = np.ascontiguousarray(np.rot90(full, src.normal_layer.quarter_turns))
+            preview, preview_scale = imaging.make_preview(full)
+            layer = layers[ci]
+            layer.path = src.normal_layer.path
+            layer.image_full = full
+            layer.image_preview = preview
+            layer.preview_scale = preview_scale
+            layer.quarter_turns = src.normal_layer.quarter_turns
+
+        self.push_undo()
+        first = sources[0]
+        new_item = BatchItem(
+            base=self._duplicate_base_name(first.base), paths={}, layers=layers,
+            global_corr=GlobalCorrection(), mode="trichrome", selected=False)
+        insert_at = indices[0] + 1
+        self.batch_items.insert(insert_at, new_item)
+
+        self.carousel.set_items([it.base for it in self.batch_items], [it.mode for it in self.batch_items])
+        for i, it in enumerate(self.batch_items):
+            it.selected = it is new_item
+            self.carousel.set_selected(i, it.selected)
+        self.activate_batch_item(insert_at)
+        self._update_carousel_visibility(force_show=True)
+        self._refresh_all_carousel_thumbnails()
+        self.statusBar().showMessage(i18n.tr("status_photo_converted_to_trichrome"), 4000)
 
     # ------------------------------------------------------------------
     # Undo / redo
@@ -2669,7 +2911,7 @@ class MainWindow(QMainWindow):
         self.active_index = None
         self.canvas.set_align_enabled(False)
 
-        self.carousel.set_items([it.base for it in self.batch_items])
+        self.carousel.set_items([it.base for it in self.batch_items], [it.mode for it in self.batch_items])
         for i, it in enumerate(self.batch_items):
             self.carousel.set_selected(i, it.selected)
         self.carousel.set_current(index)
@@ -2843,6 +3085,41 @@ class MainWindow(QMainWindow):
                 self._undo_suppressed = was_suppressed
 
         return True
+
+    # Fields kept pinned to their channel slot when swapping two channels'
+    # images (on_channel_swap_requested) - color_index/label are the slot's
+    # own identity, is_reference is the Lock Layer Position anchor choice,
+    # and solo is a per-panel "preview this channel alone" UI toggle - none
+    # of these describe the photo itself, unlike every other ChannelLayer
+    # field (path, image data, alignment, tone, invert, harris_shutter,
+    # film_base, quarter_turns), which all travel with the photo.
+    _CHANNEL_SWAP_PINNED_FIELDS = {"color_index", "label", "is_reference", "solo"}
+
+    def _swap_channel_layers(self, i: int, j: int) -> None:
+        li, lj = self.layers[i], self.layers[j]
+        for f in dataclasses.fields(ChannelLayer):
+            if f.name in self._CHANNEL_SWAP_PINNED_FIELDS:
+                continue
+            vi, vj = getattr(li, f.name), getattr(lj, f.name)
+            setattr(li, f.name, vj)
+            setattr(lj, f.name, vi)
+
+    def on_channel_swap_requested(self, from_index: int, to_index: int) -> None:
+        """A channel's drag handle (ImportPanel's Files block) was dropped
+        onto another channel's filename - swap which photo (and its own
+        alignment/tone edits) is loaded into each of the two channels."""
+        if from_index == to_index:
+            return
+        if not (0 <= from_index < len(self.layers) and 0 <= to_index < len(self.layers)):
+            return
+        self.push_undo()
+        self._swap_channel_layers(from_index, to_index)
+        for i in (from_index, to_index):
+            layer = self.layers[i]
+            self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
+            self._sync_panel_from_layer(i)
+        self.recompute_preview()
+        self.canvas.zoom_fit()
 
     def _target_batch_indices(self) -> list[int]:
         """Selected photos in the carousel, or just the active one if
@@ -3307,7 +3584,7 @@ class MainWindow(QMainWindow):
         self.crop = self.batch_items[self.batch_current_index].crop
         self.normal_layer = self.batch_items[self.batch_current_index].normal_layer
 
-        self.carousel.set_items([it.base for it in self.batch_items])
+        self.carousel.set_items([it.base for it in self.batch_items], [it.mode for it in self.batch_items])
         for i, it in enumerate(self.batch_items):
             self.carousel.set_selected(i, it.selected)
         self.carousel.set_current(self.batch_current_index)
@@ -4816,7 +5093,7 @@ class MainWindow(QMainWindow):
             self.canvas.clear_image()
             self.histogram.clear()
             self._last_preview_rgb_u8 = None
-            self._hq_idle_timer.stop()
+            self._invalidate_hq_preview()
             return
 
         canvas_h, canvas_w = ref.image_preview.shape[:2]
@@ -4828,7 +5105,7 @@ class MainWindow(QMainWindow):
                 self.canvas.clear_image()
                 self.histogram.clear()
                 self._last_preview_rgb_u8 = None
-                self._hq_idle_timer.stop()
+                self._invalidate_hq_preview()
                 return
             warped, pre_curve_toned, gcurve = self._warp_and_tone(solo_layer, canvas_size, ref)
             mask = imaging.warp_coverage_mask(
@@ -4849,6 +5126,8 @@ class MainWindow(QMainWindow):
             gray_u8 = imaging.to_uint8(toned)
             rgb_u8 = np.repeat(gray_u8[:, :, None], 3, axis=2)
             self.canvas.set_image_gray(gray_u8)
+            ref_h, ref_w = gray_u8.shape[:2]
+            self.canvas.set_reference_size(ref_w, ref_h, 1.0 / solo_layer.preview_scale)
             self.histogram.set_image(rgb_u8, valid_mask=mask > 0.5)
             self._last_preview_rgb_u8 = rgb_u8
             if update_curve_reference:
@@ -4863,7 +5142,7 @@ class MainWindow(QMainWindow):
             # No full-res path for Solo preview (see _recompute_hq_preview) -
             # make sure a HQ pass queued from before Solo was toggled on
             # doesn't fire and silently replace this with the composed RGB.
-            self._hq_idle_timer.stop()
+            self._invalidate_hq_preview()
             return
 
         images = [l.image_preview if l.has_image() else None for l in self.layers]
@@ -4894,6 +5173,8 @@ class MainWindow(QMainWindow):
             mask = imaging.apply_crop_rect(mask, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
         rgb_u8 = imaging.to_uint8(rgb)
         self.canvas.set_image_rgb(rgb_u8)
+        ref_h, ref_w = rgb_u8.shape[:2]
+        self.canvas.set_reference_size(ref_w, ref_h, 1.0 / ref.preview_scale)
         self.histogram.set_image(rgb_u8, valid_mask=mask > 0.5)
         self._last_preview_rgb_u8 = rgb_u8
 
@@ -4923,7 +5204,7 @@ class MainWindow(QMainWindow):
             self.canvas.clear_image()
             self.histogram.clear()
             self._last_preview_rgb_u8 = None
-            self._hq_idle_timer.stop()
+            self._invalidate_hq_preview()
             return
 
         image = imaging.apply_invert(layer.image_preview, layer.invert)
@@ -4943,6 +5224,8 @@ class MainWindow(QMainWindow):
             rgb = imaging.apply_crop_rect(rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
         rgb_u8 = imaging.to_uint8(rgb)
         self.canvas.set_image_rgb(rgb_u8)
+        ref_h, ref_w = rgb_u8.shape[:2]
+        self.canvas.set_reference_size(ref_w, ref_h, 1.0 / layer.preview_scale)
         self.histogram.set_image(rgb_u8)
         self._last_preview_rgb_u8 = rgb_u8
 
@@ -5067,30 +5350,6 @@ class MainWindow(QMainWindow):
             full = np.ascontiguousarray(np.rot90(full, layer.quarter_turns))
         return full
 
-    def _full_res_image_cached(self, layer) -> np.ndarray:
-        """Like _full_res_image, but also stashes the result on
-        layer.image_full so a *later* HQ pass on this same photo (another
-        slider tweak, still the active photo) reuses the already-decoded
-        array instead of re-reading/re-decoding from disk every single
-        time - the real cost for a batch-imported RAW source, where
-        rawpy's postprocess() can take a second or more per channel.
-        Deliberately not folded into _full_res_image itself, since
-        BatchExportWorker calls that one too and must NOT retain every
-        processed item's full-res array in memory during a big batch
-        export (see _full_res_image's own docstring)."""
-        full = self._full_res_image(layer)
-        if layer.image_full is None:
-            layer.image_full = full
-        return full
-
-    def _full_res_color_image_cached(self, layer) -> np.ndarray:
-        """Normal-mode counterpart of _full_res_image_cached - same caching
-        rationale, see that method's docstring."""
-        full = self._full_res_color_image(layer)
-        if layer.image_full is None:
-            layer.image_full = full
-        return full
-
     # ------------------------------------------------------------------
     # HQ Preview (on-demand full-resolution display pass)
     # ------------------------------------------------------------------
@@ -5100,82 +5359,157 @@ class MainWindow(QMainWindow):
             self._arm_hq_preview_if_enabled()
         else:
             self._hq_idle_timer.stop()
+            self._hq_result_stale = True
+            self._hide_hq_loading_indicator()
             # Revert to the fast low-res frame right away rather than
             # leaving whatever HQ frame is on screen until the next edit
-            # happens to call recompute_preview() anyway.
+            # happens to call recompute_preview() anyway. Any HQPreviewWorker
+            # still running is simply left to finish on its own - its result
+            # will be discarded by _on_hq_preview_result (_hq_result_stale).
             self.recompute_preview()
 
+    def _invalidate_hq_preview(self) -> None:
+        """Stops the idle timer and marks any in-flight/just-finished
+        HQPreviewWorker's result as stale, without touching
+        self.hq_preview_enabled or the button's checked state - used at
+        recompute_preview() exits that clear the canvas entirely (no image
+        loaded), where there is nothing left for a HQ pass to apply to. A
+        thread already running is simply left to finish and get discarded,
+        same as everywhere else this module deals with a stale HQ result."""
+        self._hq_idle_timer.stop()
+        self._hq_result_stale = True
+        self._hide_hq_loading_indicator()
+
     def _arm_hq_preview_if_enabled(self) -> None:
-        """(Re)start the idle countdown to a full-res HQ pass - called from
-        every recompute_preview()/_recompute_preview_normal() exit that just
-        pushed a fresh low-res frame, so a HQ pass always follows once edits
-        actually stop. QTimer.start() on an already-running single-shot
-        timer restarts its countdown, so calling this on every edit is what
-        turns it into a settle-delay (fires N ms after the *last* edit)
-        rather than the Curves throttle's fire-at-most-once-per-burst
-        behavior. No-op outside HQ Preview mode, in Solo mode (no full-res
-        path exists for it - see _recompute_hq_preview), or in Compare mode
-        (a transient before/after view, not worth a full-res pass)."""
+        """(Re)start the HQ idle countdown (_HQ_PREVIEW_IDLE_MS) - called
+        from every recompute_preview()/_recompute_preview_normal() exit
+        that just pushed a fresh low-res frame, so a HQ pass always follows
+        once edits actually stop. QTimer.start() on an already-running
+        single-shot timer restarts its countdown, so calling this on every
+        edit turns it into a settle-delay (fires N ms after the *last*
+        edit) rather than a throttle (contrast with the Curves tool's own
+        _CURVE_RECOMPUTE_THROTTLE_MS, which fires at most once per burst).
+        Also marks any in-flight/just-finished HQPreviewWorker's result as
+        stale - a new edit means whatever it's computing (or already
+        computed) no longer reflects the current state. No-op outside HQ
+        Preview mode, in Solo mode (no full-res path exists for it - see
+        _start_hq_preview), or in Compare mode (a transient before/after
+        view, not worth a full-res pass)."""
+        self._hq_result_stale = True
         if not self.hq_preview_enabled:
             return
         if any(l.solo for l in self.layers) or self._compare_active:
             return
         self._hq_idle_timer.start(_HQ_PREVIEW_IDLE_MS)
 
-    def _recompute_hq_preview(self) -> None:
-        """The idle timer's target - recomposes the active photo at full
-        resolution and swaps it into the canvas in place of the ~1400px
-        preview frame. Reuses imaging.compose_trichrome/compose_normal, the
-        same resolution-agnostic entry points export_worker.py calls for a
-        real export, so this is guaranteed to match the live preview's own
-        look, just sharper. Runs synchronously (with a wait cursor) rather
-        than in a background thread - simpler, and acceptable since it only
-        ever fires once after the user stops editing, never on every tick.
-        A batch-imported item's full-res source (reloaded from disk via
-        _full_res_image_cached/_full_res_color_image_cached, since only a
-        preview is normally kept for those) can make the *first* HQ pass on
-        a given photo noticeably slow - a RAW file's rawpy decode in
-        particular - but that decode is then cached onto the layer, so
-        every further tweak on the same photo only re-runs the (fast, pure
-        numpy) compose/crop step below, not the disk read."""
+    def _start_hq_preview(self) -> None:
+        """The idle timer's target - dispatches a background HQPreviewWorker
+        to recompose the active photo at its true native resolution (see
+        _HQ_PREVIEW_IDLE_MS's own comment for why this isn't done on the UI
+        thread: measured at ~2.9s for a single pass on a realistic 24MP
+        source). Reuses imaging.compose_trichrome/compose_normal, the same
+        resolution-agnostic entry points export_worker.py calls for a real
+        export, so the result is guaranteed to match the live preview's own
+        look, just sharper - see _on_hq_preview_result for how it's applied
+        once ready."""
         if not self.hq_preview_enabled:
             return
         if any(l.solo for l in self.layers) or self._compare_active:
+            return
+        if self._hq_thread is not None:
+            # Already computing one - this settle period doesn't get a
+            # refresh, the next one will (an edit before then already marks
+            # the in-flight result stale and re-arms the timer, so this
+            # can't turn into a growing pile of workers).
             return
         is_normal_mode = (0 <= self.batch_current_index < len(self.batch_items)
                            and self.batch_items[self.batch_current_index].mode == "normal")
         if is_normal_mode:
             if not self.normal_layer.has_image():
                 return
+            geo_params, ref_color_index = None, None
         else:
             ref = self._reference_layer()
             if ref is None or not ref.has_image():
                 return
+            geo_params = [self._full_res_params(l, ref) for l in self.layers]
+            ref_color_index = ref.color_index
 
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            if is_normal_mode:
-                layer = self.normal_layer
-                image = imaging.apply_invert(self._full_res_color_image_cached(layer), layer.invert)
-                rgb = imaging.compose_normal(image, self._current_global_params())
-            else:
-                images = [self._full_res_image_cached(l) if l.has_image() else None for l in self.layers]
-                geo_params = [self._full_res_params(l, ref) for l in self.layers]
-                rgb = imaging.compose_trichrome(
-                    images, geo_params, self._current_tone_params(), ref.color_index,
-                    self._current_global_params())
-            if self._crop_active:
-                # Same "show the full frame while cropping" exception as the
-                # live preview - see the matching comment in recompute_preview.
-                rgb = imaging.apply_straighten_mirror(
-                    rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v)
-            else:
-                rgb = imaging.apply_crop(
-                    rgb, self.crop.rotation, self.crop.mirror_h, self.crop.mirror_v,
-                    self.crop.x, self.crop.y, self.crop.width, self.crop.height)
-            self.canvas.set_image_rgb(imaging.to_uint8(rgb))
-        finally:
-            QApplication.restoreOverrideCursor()
+        self._hq_result_stale = False
+        self._hq_thread = QThread(self)
+        self._hq_worker = HQPreviewWorker(
+            is_normal_mode=is_normal_mode,
+            layers=self.layers,
+            normal_layer=self.normal_layer,
+            full_res_loader=self._full_res_image,
+            full_res_color_loader=self._full_res_color_image,
+            geo_params=geo_params,
+            tone_params=self._current_tone_params(),
+            global_params=self._current_global_params(),
+            ref_color_index=ref_color_index,
+            crop_active=self._crop_active,
+            crop_rotation=self.crop.rotation, crop_mirror_h=self.crop.mirror_h, crop_mirror_v=self.crop.mirror_v,
+            crop_x=self.crop.x, crop_y=self.crop.y, crop_width=self.crop.width, crop_height=self.crop.height,
+        )
+        self._hq_worker.moveToThread(self._hq_thread)
+        self._hq_thread.started.connect(self._hq_worker.run)
+        self._hq_worker.result_ready.connect(self._on_hq_preview_result)
+        self._hq_worker.failed.connect(self._on_hq_preview_failed)
+        self._hq_worker.finished.connect(self._hq_thread.quit)
+        self._hq_worker.finished.connect(self._hq_worker.deleteLater)
+        # Same QThread lifecycle rule as batch import/export: only drop refs
+        # (and hide the loading bar) once the thread itself reports
+        # finished, not merely the worker's own finished signal.
+        self._hq_thread.finished.connect(self._hq_thread.deleteLater)
+        self._hq_thread.finished.connect(self._clear_hq_thread_refs)
+        self._show_hq_loading_indicator()
+        self._hq_thread.start()
+
+    def _on_hq_preview_result(self, rgb_u8: np.ndarray, newly_loaded: list) -> None:
+        # newly_loaded is a list of (layer, full-res array) pairs
+        # HQPreviewWorker just decoded (only for layers that had no cached
+        # image_full at dispatch time - not a dict, since ChannelLayer is a
+        # plain unhashable dataclass) - caching the decode here, back on the
+        # main thread, means a later HQ pass on the same photo skips the
+        # disk read (a RAW source's rawpy decode in particular can take a
+        # second or more per channel) without ever mutating layer.image_full
+        # from the worker thread itself.
+        for layer, full in newly_loaded:
+            if layer.image_full is None:
+                layer.image_full = full
+        if self._hq_result_stale or not self.hq_preview_enabled:
+            return
+        # set_hq_image_rgb, not set_image_rgb - this swaps in a sharper
+        # array for the *same* photo/crop state without redefining the
+        # zoom-percentage reference (see CanvasWidget.set_reference_size),
+        # so the on-screen box size doesn't jump when this native-res
+        # result lands or gets replaced by the next low-res edit.
+        self.canvas.set_hq_image_rgb(rgb_u8)
+
+    def _on_hq_preview_failed(self, message: str) -> None:
+        if self._hq_result_stale or not self.hq_preview_enabled:
+            return
+        self.statusBar().showMessage(i18n.tr("hq_preview_failed", error=message), 5000)
+
+    def _clear_hq_thread_refs(self) -> None:
+        self._hq_thread = None
+        self._hq_worker = None
+        self._hide_hq_loading_indicator()
+
+    def _show_hq_loading_indicator(self) -> None:
+        self.hq_loading_bar_container.setVisible(True)
+        self._hq_spin_angle = 0.0
+        self.hq_loading_icon.set_rotation(0.0)
+        self._hq_spin_timer.start()
+
+    def _hide_hq_loading_indicator(self) -> None:
+        self._hq_spin_timer.stop()
+        self.hq_loading_icon.set_rotation(0.0)
+        self.hq_loading_bar_container.setVisible(False)
+
+    def _on_hq_spin_tick(self) -> None:
+        self._hq_spin_angle = (self._hq_spin_angle - _HQ_SPIN_DEGREES_PER_SEC * _HQ_SPIN_TICK_MS / 1000.0) % 360.0
+        self.hq_loading_icon.set_rotation(self._hq_spin_angle)
 
     def _current_export_base_name(self) -> str:
         if 0 <= self.batch_current_index < len(self.batch_items):

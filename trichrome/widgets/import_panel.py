@@ -1,4 +1,4 @@
-"""Top-of-sidebar panel: a single Mode selector (Solo / B&W Trichrome /
+"""Top-of-sidebar panel: a single Mode selector (Solo / Classic Trichrome /
 Color Trichrome), then either load the 3 channel images (either Trichrome
 variant) or a single photo (Solo). Auto Align and Lock Layer Position moved
 to the top of the "Trichrome Process" block (main_window.py's
@@ -20,16 +20,17 @@ own per-item icon folded the separate icon label the first pass had into
 the combo itself later the same day, once Qt's own item-icon support made
 that redundant):
 **Solo** (BatchItem.mode == "normal" - a single already-composed photo),
-**B&W Trichrome** (mode == "trichrome", ChannelLayer.harris_shutter ==
+**Classic Trichrome** (mode == "trichrome", ChannelLayer.harris_shutter ==
 False - the classic case, 3 B&W photos through color filters), **Color
 Trichrome** (mode == "trichrome", harris_shutter == True - 3 real color
 photos, each keeping its own R/G/B channel). See CLAUDE.md's Harris
 Shutter Effect section for the full processing-difference explanation."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Signal
+from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, Signal
+from PySide6.QtGui import QDrag, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
 from .. import i18n
@@ -38,7 +39,190 @@ from .block_header_bar import finish_block_chrome, start_block_chrome
 from .channel_panel import CHANNEL_COLORS, CHANNEL_KEY
 from .controls import ElidingLabel
 from .info_bubble import InfoButton
-from .svg_icons import raw_svg_icon
+from .svg_icons import SvgToolButton, raw_svg_icon
+
+# Drag-and-drop channel swap (2026-09-09): dragging a channel's own grip
+# handle onto another channel's file block swaps which photo - and its own
+# alignment/tone edits, see MainWindow._swap_channel_layers - is loaded into
+# each of the two channels (e.g. swap the Red and Blue channel images).
+# Mime payload is just the source channel index (0/1/2), utf-8 encoded -
+# same shape as block_header_bar.BLOCK_REORDER_MIME's own single-value mime,
+# a completely separate mechanism/mime type from that block-reorder drag.
+_CHANNEL_SWAP_MIME = "application/x-trichrome-channel-index"
+
+
+def _swap_source_index(mime: QMimeData) -> int | None:
+    if not mime.hasFormat(_CHANNEL_SWAP_MIME):
+        return None
+    try:
+        return int(bytes(mime.data(_CHANNEL_SWAP_MIME)).decode("utf-8"))
+    except ValueError:
+        return None
+
+
+def _translucent_grab(widget: QWidget, opacity: float = 0.55) -> QPixmap:
+    """A plain screen-grab of ``widget``, redrawn into a fresh pixmap at
+    reduced opacity - used as the channel-swap drag pixmap so the dragged
+    visual is exactly the filename+handle block being moved (Finder-style:
+    you see what you're picking up), rather than a synthesized stand-in.
+    No border (per the user's own ask, 2026-09-09) - a target channel's own
+    blue drop-highlight sits directly under this while hovering, and needs
+    to stay visible through it rather than being fully covered."""
+    source = widget.grab()
+    result = QPixmap(source.size())
+    result.setDevicePixelRatio(source.devicePixelRatio())
+    result.fill(Qt.transparent)
+    painter = QPainter(result)
+    painter.setOpacity(opacity)
+    painter.drawPixmap(0, 0, source)
+    painter.end()
+    return result
+
+
+# Highlight styles for a channel's _ChannelFileBlock (filename + swap handle,
+# grouped into one visual unit per the user's own "le bouton et le chemin
+# d'accès ne forme qu'un bloc" ask, 2026-09-09 - an earlier pass framed only
+# the filename label, and before that the whole row including the unrelated
+# Load/Change Image button, both reverted) as a live preview of the pending
+# swap while a drag is in progress - "source" (dashed, the block being
+# picked up) on the dragged channel for the whole drag, "target" (solid
+# accent-blue, the same accent used by the block drag-reorder insertion
+# line) on whichever channel's block the cursor is currently over, so both
+# halves of the prospective swap are visible before the drop actually
+# commits to anything. All 3 share the same border width/radius so
+# toggling the highlight never changes the block's own size.
+_FILE_BLOCK_BASE_STYLE = "border: 1px solid transparent; border-radius: 4px; padding: 1px 2px;"
+_FILE_BLOCK_SOURCE_STYLE = "border: 1px dashed rgba(255, 255, 255, 90); border-radius: 4px; padding: 1px 2px;"
+_FILE_BLOCK_TARGET_STYLE = (
+    "border: 1px solid #5b9bd5; border-radius: 4px; padding: 1px 2px; "
+    "background: rgba(91, 155, 213, 40);"
+)
+
+
+class _ChannelSwapHandle(SvgToolButton):
+    """Small drag grip, part of a channel's _ChannelFileBlock - starts the
+    channel-swap drag. Reuses the same grip-vertical glyph as a block's own
+    drag handle (block_header_bar.BlockDragHandle) so the two "drag this to
+    reorder/reassign" affordances read as the same visual language, even
+    though this one drags a channel index, not a block key, and drops onto
+    another channel's file block rather than a BlockReorderZone.
+
+    Not a drop target itself - see _ChannelFileBlock, which owns the whole
+    block's drag-over/drop handling so the filename and this handle always
+    highlight and drag together as one unit."""
+
+    def __init__(self, channel_index: int, block: "_ChannelFileBlock", panel: "ImportPanel",
+                 parent: QWidget | None = None):
+        super().__init__("Global/grip-vertical.svg", size=(16, 16), icon_size=12, parent=parent)
+        self.channel_index = channel_index
+        self._block = block
+        self._panel = panel
+        self.setCursor(Qt.OpenHandCursor)
+        self.setToolTip(i18n.tr("channel_swap_handle_tooltip"))
+        self._drag_start_pos: QPoint | None = None
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_start_pos is not None and (event.buttons() & Qt.LeftButton):
+            delta = event.position().toPoint() - self._drag_start_pos
+            if delta.manhattanLength() >= QApplication.startDragDistance():
+                # Hotspot in the block's own coordinates, computed from
+                # where the grip sits within it, so the dragged block
+                # tracks the cursor at the same relative point it was
+                # grabbed from instead of jumping to its top-left (same
+                # convention as BlockDragHandle._start_drag).
+                hotspot = self.mapTo(self._block, event.position().toPoint())
+                self._drag_start_pos = None
+                # Grabbed before the "source" highlight is applied, so the
+                # dragged visual shows the block's normal (not highlighted)
+                # appearance - the highlight is left behind on the block's
+                # original position instead, like a Finder drag.
+                pixmap = _translucent_grab(self._block)
+                drag = QDrag(self)
+                mime = QMimeData()
+                mime.setData(_CHANNEL_SWAP_MIME, str(self.channel_index).encode("utf-8"))
+                drag.setMimeData(mime)
+                drag.setPixmap(pixmap)
+                drag.setHotSpot(hotspot)
+                self._panel._set_filename_drag_state(self.channel_index, "source")
+                drag.exec(Qt.MoveAction)
+                self._panel._clear_filename_drag_states()
+                # QDrag.exec() consumes the mouse release - without this the
+                # button is left visually stuck "down" (same gotcha as
+                # BlockDragHandle._start_drag).
+                self.setDown(False)
+                return
+        super().mouseMoveEvent(event)
+
+
+class _ChannelFileBlock(QWidget):
+    """A channel's filename label and its swap handle, grouped into a
+    single visual/interactive block: the whole block (not just the label)
+    highlights on drag-hover, and the whole block (not a synthesized text
+    tag) is what's grabbed for the drag pixmap - see _ChannelSwapHandle and
+    ImportPanel._set_filename_drag_state.
+
+    Owns all drag-over/drop handling for the block (dropping on either the
+    filename or the handle behaves identically, since only this container
+    accepts drops - Qt bubbles an unaccepted drag event up to the nearest
+    ancestor that does)."""
+
+    def __init__(self, channel_index: int, panel: "ImportPanel", parent: QWidget | None = None):
+        super().__init__(parent)
+        self.channel_index = channel_index
+        self._panel = panel
+        self.setAcceptDrops(True)
+        # A plain QWidget doesn't paint its own stylesheet border/background
+        # by default (only specific widget types like QLabel/QPushButton do)
+        # - without this, Qt's style-sheet cascade instead let the border
+        # leak onto whichever child widget happens to render it (here,
+        # filename_label, since it has no competing border of its own),
+        # covering only that child's rect rather than the whole block, while
+        # swap_handle's own explicit "border: none" (SvgToolButton's base
+        # style) opted it out entirely - confirmed empirically (2026-09-09)
+        # by grabbing the block and inspecting the rendered pixels.
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(_FILE_BLOCK_BASE_STYLE)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        self.filename_label = ElidingLabel()
+        # Explicit "border: none; background: transparent" so the label
+        # doesn't independently pick up the block's own border/background
+        # via the stylesheet cascade now that the block paints them itself
+        # - without this, highlighting the block would draw two nested
+        # frames again (the block's real one plus the label's inherited
+        # one), the exact "des cadres dans des cadres" problem from before.
+        self.filename_label.setStyleSheet(
+            "color: #888; font-size: 11px; border: none; background: transparent;")
+        layout.addWidget(self.filename_label, stretch=1)
+        self.swap_handle = _ChannelSwapHandle(channel_index, self, panel)
+        layout.addWidget(self.swap_handle)
+
+    def dragEnterEvent(self, event) -> None:
+        source_index = _swap_source_index(event.mimeData())
+        if source_index is not None and source_index != self.channel_index:
+            event.acceptProposedAction()
+            self._panel._set_filename_drag_state(self.channel_index, "target")
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._panel._set_filename_drag_state(self.channel_index, "")
+
+    def dropEvent(self, event) -> None:
+        source_index = _swap_source_index(event.mimeData())
+        self._panel._set_filename_drag_state(self.channel_index, "")
+        if source_index is None or source_index == self.channel_index:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._panel.channel_swap_requested.emit(source_index, self.channel_index)
+
 
 # Size the combo's own item icons are rendered at - matches the 18px
 # default SvgIconLabel used before the Mode row folded its separate icon
@@ -104,7 +288,7 @@ QComboBox QAbstractItemView {{
 # outline layers-outline.svg these 2 files used to derive from until
 # 2026-09-07) with its 2 <path> elements split into 3 (the original has
 # the top+bottom shapes sharing one path, same structure layers-outline.svg
-# had) so each layer can carry its own explicit fill: B&W Trichrome grades
+# had) so each layer can carry its own explicit fill: Classic Trichrome grades
 # from white at the front down to darker light-grays at the back
 # (#ffffff/#e5e5e5/#cccccc - "white", "90% gray", "80% gray"); Color
 # Trichrome colors each layer in its real R/G/B channel color (matching
@@ -140,8 +324,10 @@ class ImportPanel(QGroupBox):
     # _on_mode_combo_changed. Call set_mode_selection() to reflect the
     # actual outcome afterward (including a reverted/cancelled switch).
     mode_change_requested = Signal(str)
-    load_normal_requested = Signal()
     harris_shutter_toggled = Signal(bool)
+    # Emitted (from_index, to_index) when a channel's drag handle is dropped
+    # onto another channel's file block - see _ChannelSwapHandle/_ChannelFileBlock.
+    channel_swap_requested = Signal(int, int)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -158,7 +344,7 @@ class ImportPanel(QGroupBox):
         header_row.addStretch(1)
         self.body, root, self.collapse_button, self.close_button = finish_block_chrome(outer, header_row)
 
-        # --- Mode row: the Solo/B&W Trichrome/Color Trichrome combo, its
+        # --- Mode row: the Solo/Classic Trichrome/Color Trichrome combo, its
         # "?" info button, and the 3 quick per-photo toggles (B&W Film,
         # Color Film, Negative) all on one line (2026-09-07, user's own
         # ask: "retire le mot 'Mode'... mets les boutons... sur la même
@@ -166,12 +352,13 @@ class ImportPanel(QGroupBox):
         # combo's own icon (see below) already identifies what the control
         # is without needing a text label next to it, same reasoning any
         # icon-only toolbar button in this app already relies on.
-        # AdjustToContents sizes the combo to its *widest* item
-        # ("Color Trichrome"/"Trichromie Couleur"), not just whichever one
-        # happens to be selected - confirmed empirically stable across
-        # every selection - which is what leaves room for the 3 toggle
-        # buttons on the same line without the combo eating all the
-        # available width the way its previous stretch=1 did.
+        # AdjustToContents sizes the combo to its *widest* item, not just
+        # whichever one happens to be selected - which is what leaves room
+        # for the 3 toggle buttons on the same line without the combo
+        # eating all the available width the way its previous stretch=1
+        # did. retranslate_ui() also enforces an explicit minimum width
+        # computed from font metrics - see the comment there for why
+        # AdjustToContents alone isn't enough.
         mode_row = QHBoxLayout()
         self.mode_combo = QComboBox()
         self.mode_combo.setStyleSheet(_MODE_COMBO_STYLE)
@@ -201,8 +388,10 @@ class ImportPanel(QGroupBox):
         self.channel_labels: list[QLabel] = []
         self.filename_labels: list[ElidingLabel] = []
         self.load_buttons: list[QPushButton] = []
+        self.channel_file_blocks: list[_ChannelFileBlock] = []
 
         for label in ("R", "G", "B"):
+            idx = len(self.channel_labels)
             row = QHBoxLayout()
             color = CHANNEL_COLORS.get(label, "#888")
             channel_label = QLabel()
@@ -210,30 +399,38 @@ class ImportPanel(QGroupBox):
             channel_label.setFixedWidth(50)
             row.addWidget(channel_label)
 
-            filename_label = ElidingLabel()
-            filename_label.setStyleSheet("color: #888; font-size: 11px;")
-            row.addWidget(filename_label, stretch=1)
+            file_block = _ChannelFileBlock(idx, self)
+            row.addWidget(file_block, stretch=1)
 
             load_button = QPushButton()
-            load_button.clicked.connect(lambda _checked=False, i=len(self.channel_labels): self.load_requested.emit(i))
+            load_button.clicked.connect(lambda _checked=False, i=idx: self.load_requested.emit(i))
             row.addWidget(load_button)
 
             trichrome_layout.addLayout(row)
             self.channel_labels.append(channel_label)
-            self.filename_labels.append(filename_label)
+            self.filename_labels.append(file_block.filename_label)
             self.load_buttons.append(load_button)
+            self.channel_file_blocks.append(file_block)
 
         # --- Normal mode: a single photo, no alignment/recompose ---
         self.normal_container = QWidget()
         normal_layout = QVBoxLayout(self.normal_container)
         normal_layout.setContentsMargins(0, 0, 0, 0)
         normal_row = QHBoxLayout()
+        self.normal_path_label = QLabel()
+        # Same font-size as normal_filename_label (only the weight differs) -
+        # otherwise the two labels' differing line-heights get centered
+        # around the row's own cross-axis independently, landing their text
+        # baselines a couple pixels apart instead of visually "on the same
+        # line" (reported 2026-09-10, more visible with real macOS font
+        # metrics than in headless testing - see the font-metrics gotcha in
+        # CLAUDE.md). The explicit AlignVCenter further pins both to the
+        # row's exact vertical center regardless of platform font quirks.
+        self.normal_path_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        normal_row.addWidget(self.normal_path_label, alignment=Qt.AlignVCenter)
         self.normal_filename_label = ElidingLabel()
         self.normal_filename_label.setStyleSheet("color: #888; font-size: 11px;")
-        normal_row.addWidget(self.normal_filename_label, stretch=1)
-        self.load_normal_button = QPushButton()
-        self.load_normal_button.clicked.connect(self.load_normal_requested.emit)
-        normal_row.addWidget(self.load_normal_button)
+        normal_row.addWidget(self.normal_filename_label, stretch=1, alignment=Qt.AlignVCenter)
         normal_layout.addLayout(normal_row)
         root.addWidget(self.normal_container)
         self.normal_container.hide()
@@ -247,6 +444,28 @@ class ImportPanel(QGroupBox):
         # exists, so this only matters before that first sync.
         self.set_mode_selection("trichrome", False)
 
+    def _set_filename_drag_state(self, index: int, state: str) -> None:
+        """Highlights channel_file_blocks[index] - the filename+swap-handle
+        block as a whole, see _ChannelFileBlock - as a live preview of a
+        pending channel swap: "source" for the channel currently being
+        dragged, "target" for whichever channel's block the cursor is over,
+        "" to clear. Called from _ChannelSwapHandle (drag start/end) and
+        _ChannelFileBlock (drag enter/leave/drop) - see those for when each
+        state applies."""
+        style = {
+            "source": _FILE_BLOCK_SOURCE_STYLE,
+            "target": _FILE_BLOCK_TARGET_STYLE,
+        }.get(state, _FILE_BLOCK_BASE_STYLE)
+        self.channel_file_blocks[index].setStyleSheet(style)
+
+    def _clear_filename_drag_states(self) -> None:
+        """Resets every channel's file-block highlight - called once a drag
+        ends (dropped or cancelled) so a target highlight left over from a
+        drop that didn't fire a proper dragLeaveEvent (e.g. the drag was
+        cancelled outside any widget) can't get stuck showing."""
+        for file_block in self.channel_file_blocks:
+            file_block.setStyleSheet(_FILE_BLOCK_BASE_STYLE)
+
     def set_filename(self, index: int, text: str) -> None:
         self._has_image[index] = bool(text)
         self.filename_labels[index].setText(text or i18n.tr("no_image_loaded"))
@@ -256,8 +475,6 @@ class ImportPanel(QGroupBox):
     def set_normal_filename(self, text: str) -> None:
         self._has_normal_image = bool(text)
         self.normal_filename_label.setText(text or i18n.tr("no_image_loaded"))
-        self.load_normal_button.setText(
-            i18n.tr("change_image_button") if text else i18n.tr("load_image_button"))
 
     def is_harris_shutter_active(self) -> bool:
         """Whether the combo's current selection is Color Trichrome - the
@@ -313,13 +530,27 @@ class ImportPanel(QGroupBox):
             self.mode_combo.addItem(icon, i18n.tr(MODE_LABEL_KEYS[key]))
         self.mode_combo.setCurrentIndex(max(0, current))
         self.mode_combo.blockSignals(False)
+        # AdjustToContents alone isn't reliable here once a stylesheet is
+        # applied (Qt's QStyleSheetStyle doesn't always fold the QSS's own
+        # padding/arrow-box width back into the size-hint computation it
+        # feeds AdjustToContents) - confirmed empirically (2026-09-09) once
+        # "Classic Trichrome"/"Trichromie Classique" became the widest item
+        # and started getting clipped. Computing the needed width directly
+        # from font metrics + the QSS's own known padding/icon/arrow
+        # dimensions and enforcing it as a minimum sidesteps that entirely,
+        # regardless of what AdjustToContents itself comes up with.
+        metrics = self.mode_combo.fontMetrics()
+        widest_text = max(metrics.horizontalAdvance(i18n.tr(MODE_LABEL_KEYS[key])) for key in MODE_KEYS)
+        # icon + icon-text gap + QSS "padding: 3px 4px 3px 6px" (left+right)
+        # + the QSS drop-down arrow's own 20px width + a small safety margin.
+        chrome_width = _MODE_COMBO_ICON_SIZE + 4 + 10 + 20 + 10
+        self.mode_combo.setMinimumWidth(widest_text + chrome_width)
         for i, label in enumerate(("R", "G", "B")):
             self.channel_labels[i].setText(i18n.tr(CHANNEL_KEY[label]) + ":")
             self.load_buttons[i].setText(
                 i18n.tr("change_image_button") if self._has_image[i] else i18n.tr("load_image_button"))
             if not self._has_image[i]:
                 self.filename_labels[i].setText(i18n.tr("no_image_loaded"))
-        self.load_normal_button.setText(
-            i18n.tr("change_image_button") if self._has_normal_image else i18n.tr("load_image_button"))
+        self.normal_path_label.setText(i18n.tr("normal_file_path_label"))
         if not self._has_normal_image:
             self.normal_filename_label.setText(i18n.tr("no_image_loaded"))

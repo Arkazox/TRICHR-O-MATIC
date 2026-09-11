@@ -10,6 +10,18 @@ import cv2
 import rawpy
 from PIL import Image
 
+# The resolution every live edit (sliders, curves, crop, alignment) actually
+# recomposes at - main_window.py's recompute_preview() only ever reads
+# layer.image_preview/normal_layer.image_preview, never the full-res source
+# (see HQ Preview in CLAUDE.md for the separate, idle-triggered pass that
+# does go higher). This value trades off directly against live
+# responsiveness, not just sharpness. **Tried and reverted (2026-09-09)**:
+# raising it to 1920 measured at ~120ms -> ~220ms for a single synthetic
+# compose_trichrome pass, and live slider/curve dragging felt noticeably
+# less snappy in the built app - reverted back to 1400 the same day. Don't
+# raise this again without first addressing the live-recompute cost itself
+# (the HQ Preview idle-pass mechanism below is the sharpness fix that
+# doesn't cost live responsiveness).
 MAX_PREVIEW_DIM = 1400
 
 _EXIF_DATETIME_ORIGINAL = 36867

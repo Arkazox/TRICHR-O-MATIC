@@ -409,6 +409,30 @@ class CanvasWidget(QScrollArea):
         self.zoom = 1.0
         self._qimage: QImage | None = None
         self._showing_placeholder = False
+        # The "100%"/zoom-percentage reference size - deliberately NOT
+        # self._qimage's own width/height, so swapping between the live
+        # ~1400px preview and an HQ Preview native-resolution pass for the
+        # *same* photo/crop state (see MainWindow's HQ Preview) doesn't
+        # change the on-screen box size, only how sharp the content inside
+        # it is (2026-09-09 - it used to jump/shrink visibly on every such
+        # swap). Set via set_reference_size(), called by
+        # MainWindow.recompute_preview()/_recompute_preview_normal()
+        # alongside set_image_rgb/set_image_gray - never by
+        # set_hq_image_rgb, which intentionally leaves it untouched.
+        self._ref_width = 0
+        self._ref_height = 0
+        # zoom_100()'s own target zoom value - "how many reference-space
+        # pixels make up one native pixel" (1/preview_scale for the active
+        # reference channel), so Real Size means true 1:1 native-pixel-to-
+        # screen-pixel, not "100% of the capped preview" (which was never
+        # actually real size to begin with - just the sharpest the live
+        # pipeline could show before HQ Preview existed).
+        self._native_zoom = 1.0
+        # Whether Fit-to-window is the active persistent mode (see
+        # zoom_fit()) - re-applied by set_reference_size() on every new
+        # photo/crop state, not just computed once. Exited by any manual
+        # zoom (set_zoom and everything that calls it).
+        self._fit_mode = False
 
     def _on_zoom_delta(self, factor: float) -> None:
         self.set_zoom(self.zoom * factor)
@@ -452,11 +476,44 @@ class CanvasWidget(QScrollArea):
     def set_histogram_pick_enabled(self, enabled: bool) -> None:
         self.image_label.set_histogram_pick_enabled(enabled)
 
+    def set_reference_size(self, width: int, height: int, native_zoom: float = 1.0) -> None:
+        """Redefines what the zoom percentage/Real Size are relative to -
+        see the matching comment on self._ref_width in __init__. Called by
+        MainWindow alongside set_image_rgb/set_image_gray (the live
+        ~1400px-preview path), never alongside set_hq_image_rgb. While Fit
+        mode is active (self._fit_mode, see zoom_fit()), re-applies it for
+        the new dimensions instead of leaving the previous photo's own fit
+        zoom value in place - a landscape photo's fit zoom shown at a
+        portrait photo's own aspect ratio (or vice versa) doesn't actually
+        fit it. Also re-paints either way (this used to only take effect on
+        the *next* repaint, one frame behind set_image_rgb's own paint with
+        the still-stale reference)."""
+        self._ref_width = max(1, width)
+        self._ref_height = max(1, height)
+        self._native_zoom = max(MIN_ZOOM, native_zoom)
+        if self._fit_mode:
+            self._apply_fit_zoom()
+        else:
+            self._refresh_pixmap()
+
     def set_image_rgb(self, rgb_uint8: np.ndarray) -> None:
         if self._showing_placeholder:
             self.setWidgetResizable(False)
         self._showing_placeholder = False
         self.image_label.set_accept_file_drops(False)
+        rgb_uint8 = np.ascontiguousarray(rgb_uint8)
+        h, w, _ = rgb_uint8.shape
+        qimg = QImage(rgb_uint8.data, w, h, w * 3, QImage.Format_RGB888).copy()
+        self._qimage = qimg
+        self._refresh_pixmap()
+
+    def set_hq_image_rgb(self, rgb_uint8: np.ndarray) -> None:
+        """HQ Preview's own entry point (see MainWindow._on_hq_preview_result)
+        - swaps in a sharper array for the *same* photo/crop state without
+        touching the zoom reference (set_reference_size) - same on-screen
+        box size as just before, just a sharper fill. Never used for an
+        actually different photo/crop; callers use set_image_rgb for that,
+        which is always paired with a matching set_reference_size call."""
         rgb_uint8 = np.ascontiguousarray(rgb_uint8)
         h, w, _ = rgb_uint8.shape
         qimg = QImage(rgb_uint8.data, w, h, w * 3, QImage.Format_RGB888).copy()
@@ -492,17 +549,34 @@ class CanvasWidget(QScrollArea):
     def _refresh_pixmap(self) -> None:
         if self._qimage is None:
             return
-        w = max(1, int(self._qimage.width() * self.zoom))
-        h = max(1, int(self._qimage.height() * self.zoom))
+        # Target on-screen size comes from the stable reference dimensions,
+        # not self._qimage's own (possibly HQ-swapped) size - see
+        # set_reference_size. .scaled() still resamples whatever resolution
+        # self._qimage actually holds into that fixed box, so a higher-res
+        # source here reads sharper without changing the box size itself.
+        w = max(1, int(self._ref_width * self.zoom))
+        h = max(1, int(self._ref_height * self.zoom))
         pix = QPixmap.fromImage(self._qimage).scaled(
             w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.image_label.setPixmap(pix)
         self.image_label.resize(pix.size())
-        self.image_label.display_scale = pix.width() / self._qimage.width() if self._qimage.width() else 1.0
+        # Screen pixels per *reference*-space pixel, not per self._qimage
+        # pixel - align-drag deltas (mouseMoveEvent) get divided by this to
+        # land in ChannelLayer.dx/dy's own unit, which is always preview-
+        # space regardless of which resolution is currently on screen.
+        self.image_label.display_scale = pix.width() / self._ref_width if self._ref_width else 1.0
 
-    def set_zoom(self, zoom: float) -> None:
+    def _set_zoom_raw(self, zoom: float) -> None:
+        """Applies a zoom value without touching self._fit_mode - the
+        shared tail for both a manual zoom (set_zoom, which exits Fit mode)
+        and Fit mode's own internal recompute (_apply_fit_zoom, which must
+        NOT exit the very mode it's maintaining)."""
         self.zoom = max(MIN_ZOOM, min(MAX_ZOOM, zoom))
         self._refresh_pixmap()
+
+    def set_zoom(self, zoom: float) -> None:
+        self._fit_mode = False
+        self._set_zoom_raw(zoom)
 
     def zoom_in(self) -> None:
         self.set_zoom(self.zoom * 1.25)
@@ -510,12 +584,32 @@ class CanvasWidget(QScrollArea):
     def zoom_out(self) -> None:
         self.set_zoom(self.zoom / 1.25)
 
-    def zoom_fit(self) -> None:
-        if self._qimage is None or self._qimage.width() == 0:
-            return
+    def _fit_zoom_value(self) -> float:
         avail = self.viewport().size()
-        scale = min(avail.width() / self._qimage.width(), avail.height() / self._qimage.height())
-        self.set_zoom(scale if scale > 0 else 1.0)
+        scale = min(avail.width() / self._ref_width, avail.height() / self._ref_height)
+        return scale if scale > 0 else 1.0
+
+    def _apply_fit_zoom(self) -> None:
+        self._set_zoom_raw(self._fit_zoom_value())
+
+    def zoom_fit(self) -> None:
+        """Fit-to-window is a persistent *mode* (self._fit_mode), not a
+        one-time zoom value - set_reference_size() re-applies it on every
+        new photo/crop state, so switching from e.g. a landscape to a
+        portrait photo keeps actually fitting the viewport instead of
+        reusing the previous photo's own fit zoom number (2026-09-09 fix -
+        that reuse is what made some photos show too small/only partially
+        visible right after this whole zoom-stability rework landed).
+        Exited by any manual zoom (set_zoom, and therefore zoom_in/out/
+        wheel/pinch/Real Size)."""
+        if self._qimage is None or self._ref_width == 0:
+            return
+        self._fit_mode = True
+        self._apply_fit_zoom()
 
     def zoom_100(self) -> None:
-        self.set_zoom(1.0)
+        """"Real Size" - true 1:1 native-pixel-to-screen-pixel, via
+        self._native_zoom (see set_reference_size) - not literally
+        zoom==1.0, which would just be 100% of the (possibly much smaller)
+        reference/preview size."""
+        self.set_zoom(self._native_zoom)

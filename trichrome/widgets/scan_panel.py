@@ -22,9 +22,9 @@ this session" history list + "Add to Current Session" button - the user
 asked to drop the intermediate list entirely). `_finish_capture` still
 emits `add_to_session_requested` internally, right after logging to
 `manifest.append_entry` - MainWindow owns the actual BatchItem construction
-(imaging/model.py), same "panel emits, MainWindow builds" split as
-import_panel.py's load_normal_requested. The standalone tool's own
-history list + "Add to Current Session" button are
+(imaging/model.py), same "panel emits, MainWindow builds" split
+import_panel.py itself uses elsewhere (e.g. load_requested). The
+standalone tool's own history list + "Add to Current Session" button are
 untouched - it has no MainWindow to hand off to, and keeps its own
 original UI. The standalone tool's optional "processed JPG preview"
 (process.py/ProcessWorker) was deliberately dropped from this integrated
@@ -217,6 +217,8 @@ class ScanPanel(QGroupBox):
         self._cameras: list[gphoto_backend.DetectedCamera] = []
         self._capturing = False
         self._quality_config_path: str | None = None
+        self._white_balance_config_path: str | None = None
+        self._shutter_speed_config_path: str | None = None
         self._backlight_window: BacklightWindow | None = None
         self._rgb_sequence_active = False
         self._rgb_sequence_step = 0
@@ -298,19 +300,48 @@ class ScanPanel(QGroupBox):
         status_row.addWidget(self.status_dot)
         self.status_label = QLabel()
         status_row.addWidget(self.status_label, 1)
-        self.refresh_button = SvgToolButton("Tools/Scan/refresh.svg")
+        self.refresh_button = SvgToolButton("Global/refresh.svg")
         self.refresh_button.clicked.connect(self._on_refresh_clicked)
         status_row.addWidget(self.refresh_button)
         device_content.addLayout(status_row)
         self.camera_combo = QComboBox()
         self.camera_combo.currentIndexChanged.connect(self._on_camera_selected)
         device_content.addWidget(self.camera_combo)
+
+        layout.addWidget(_make_hairline())
+
+        # Camera Settings (2026-09-09) - the 3 config nodes ScanPanel can
+        # detect generically on the connected camera (see
+        # gphoto_backend.find_quality_config/find_white_balance_config/
+        # find_shutter_speed_config): RAW/JPEG format, White Balance,
+        # Shutter Speed. Grouped in their own section, below Device, since
+        # they're all "camera-side capture settings" as opposed to Device's
+        # own connection/selection controls. Each label+combo pair is only
+        # shown once _on_camera_selected finds that node with real choices
+        # on the currently selected camera - hidden entirely otherwise
+        # (a camera/firmware that doesn't expose it, or a mode where it
+        # isn't settable, e.g. shutter speed with the camera's own dial
+        # not in Manual).
+        self.camera_settings_section = self._make_section(layout)
+        camera_settings_content = self.camera_settings_section.content_layout
         self.quality_label = QLabel()
-        device_content.addWidget(self.quality_label)
+        camera_settings_content.addWidget(self.quality_label)
         self.quality_combo = QComboBox()
         self.quality_combo.currentTextChanged.connect(self._on_quality_changed)
         self.quality_combo.hide()
-        device_content.addWidget(self.quality_combo)
+        camera_settings_content.addWidget(self.quality_combo)
+        self.white_balance_label = QLabel()
+        camera_settings_content.addWidget(self.white_balance_label)
+        self.white_balance_combo = QComboBox()
+        self.white_balance_combo.currentTextChanged.connect(self._on_white_balance_changed)
+        self.white_balance_combo.hide()
+        camera_settings_content.addWidget(self.white_balance_combo)
+        self.shutter_speed_label = QLabel()
+        camera_settings_content.addWidget(self.shutter_speed_label)
+        self.shutter_speed_combo = QComboBox()
+        self.shutter_speed_combo.currentTextChanged.connect(self._on_shutter_speed_changed)
+        self.shutter_speed_combo.hide()
+        camera_settings_content.addWidget(self.shutter_speed_combo)
 
         layout.addWidget(_make_hairline())
 
@@ -501,6 +532,7 @@ class ScanPanel(QGroupBox):
         self.wip_notice_label.setText(i18n.tr("scan_wip_notice"))
         self.device_section.setTitle(i18n.tr("scan_device_group"))
         self.refresh_button.setToolTip(i18n.tr("scan_device_refresh"))
+        self.camera_settings_section.setTitle(i18n.tr("scan_camera_settings_group"))
         self.mode_section.setTitle(i18n.tr("scan_mode_group"))
         for btn, (_key, label_key, _invert) in zip(self._mode_buttons, MODES):
             # QPushButton treats a single "&" as a mnemonic marker (would
@@ -531,6 +563,10 @@ class ScanPanel(QGroupBox):
         # whatever text happened to be set last.
         if self.quality_label.isVisible():
             self.quality_label.setText(i18n.tr("scan_quality_label"))
+        if self.white_balance_label.isVisible():
+            self.white_balance_label.setText(i18n.tr("scan_white_balance_label"))
+        if self.shutter_speed_label.isVisible():
+            self.shutter_speed_label.setText(i18n.tr("scan_shutter_speed_label"))
         if not self._cameras:
             self.status_label.setText(i18n.tr("scan_device_not_connected"))
         elif self.status_label.text():
@@ -568,6 +604,7 @@ class ScanPanel(QGroupBox):
         # after desyncing its widgets from what's on disk is what actually
         # reproduced it).
         device_expanded = self._settings.value("section_expanded_device", True, type=bool)
+        camera_settings_expanded = self._settings.value("section_expanded_camera_settings", True, type=bool)
         film_expanded = self._settings.value("section_expanded_film", True, type=bool)
         light_expanded = self._settings.value("section_expanded_light", True, type=bool)
         location_expanded = self._settings.value("section_expanded_location", True, type=bool)
@@ -606,10 +643,11 @@ class ScanPanel(QGroupBox):
         # regardless of whether the value actually changed, so this also
         # correctly re-persists mode_index/light_mode_index (already
         # loaded above) alongside each section's own restored state -
-        # by the time the last of these 4 calls runs, every field
+        # by the time the last of these 5 calls runs, every field
         # _save_settings() reads is already correct, so the net result on
         # disk is fully consistent again.
         self.device_section.setChecked(device_expanded)
+        self.camera_settings_section.setChecked(camera_settings_expanded)
         self.mode_section.setChecked(film_expanded)
         self.light_section.setChecked(light_expanded)
         self.location_section.setChecked(location_expanded)
@@ -691,6 +729,7 @@ class ScanPanel(QGroupBox):
         self._settings.setValue("mode_index", self.mode_group.checkedId())
         self._settings.setValue("light_mode_index", self.light_mode_group.checkedId())
         self._settings.setValue("section_expanded_device", self.device_section.isChecked())
+        self._settings.setValue("section_expanded_camera_settings", self.camera_settings_section.isChecked())
         self._settings.setValue("section_expanded_film", self.mode_section.isChecked())
         self._settings.setValue("section_expanded_light", self.light_section.isChecked())
         self._settings.setValue("section_expanded_location", self.location_section.isChecked())
@@ -907,6 +946,10 @@ class ScanPanel(QGroupBox):
             self.camera_combo.clear()
             self.quality_label.hide()
             self.quality_combo.hide()
+            self.white_balance_label.hide()
+            self.white_balance_combo.hide()
+            self.shutter_speed_label.hide()
+            self.shutter_speed_combo.hide()
             self.capture_button.setEnabled(False)
             return
 
@@ -926,45 +969,84 @@ class ScanPanel(QGroupBox):
     def _on_camera_selected(self, _index: int) -> None:
         port = self._selected_port()
         self._quality_config_path = None
+        self._white_balance_config_path = None
+        self._shutter_speed_config_path = None
         self.quality_label.hide()
         self.quality_combo.hide()
+        self.white_balance_label.hide()
+        self.white_balance_combo.hide()
+        self.shutter_speed_label.hide()
+        self.shutter_speed_combo.hide()
         if not port:
             return
+        self._quality_config_path = self._populate_config_combo(
+            port, gphoto_backend.find_quality_config, self.quality_label, self.quality_combo,
+            "scan_quality_label", fallback_hint="raw",
+        )
+        self._white_balance_config_path = self._populate_config_combo(
+            port, gphoto_backend.find_white_balance_config,
+            self.white_balance_label, self.white_balance_combo, "scan_white_balance_label",
+        )
+        self._shutter_speed_config_path = self._populate_config_combo(
+            port, gphoto_backend.find_shutter_speed_config,
+            self.shutter_speed_label, self.shutter_speed_combo, "scan_shutter_speed_label",
+        )
+
+    def _populate_config_combo(
+        self, port: str, finder, label: QLabel, combo: QComboBox,
+        label_key: str, fallback_hint: str | None = None,
+    ) -> str | None:
+        """Shared body behind Quality/White Balance/Shutter Speed detection
+        - each is a config node found generically on the connected camera
+        (see gphoto_backend's own leaf-hint constants for why no path is
+        ever hardcoded), hidden entirely when the camera doesn't expose it
+        or exposes it with no real choices (e.g. Shutter Speed often needs
+        the camera's own mode dial in Manual first). Returns the resolved
+        config path (for later _set_camera_config calls) or None."""
         try:
-            path = gphoto_backend.find_quality_config(port, timeout=5.0)
+            path = finder(port, timeout=5.0)
             if not path:
-                return
+                return None
             info = gphoto_backend.get_config(port, path, timeout=5.0)
         except gphoto_backend.GPhotoError:
-            return
+            return None
         if not info.choices:
-            return
-        self._quality_config_path = path
-        self.quality_label.setText(i18n.tr("scan_quality_label"))
-        self.quality_label.show()
-        self.quality_combo.blockSignals(True)
-        self.quality_combo.clear()
-        self.quality_combo.addItems(info.choices)
+            return None
         current_index = info.choices.index(info.current) if info.current in info.choices else -1
-        if current_index < 0:
-            # Best-effort default to a RAW-looking choice when the camera's
-            # own reported current value doesn't match any listed choice
-            # verbatim (seen on some PTP drivers).
+        if current_index < 0 and fallback_hint:
+            # Best-effort default (e.g. a RAW-looking choice for Quality)
+            # when the camera's own reported current value doesn't match
+            # any listed choice verbatim (seen on some PTP drivers).
             for i, choice in enumerate(info.choices):
-                if "raw" in choice.lower():
+                if fallback_hint in choice.lower():
                     current_index = i
                     break
+        label.setText(i18n.tr(label_key))
+        label.show()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(info.choices)
         if current_index >= 0:
-            self.quality_combo.setCurrentIndex(current_index)
-        self.quality_combo.blockSignals(False)
-        self.quality_combo.show()
+            combo.setCurrentIndex(current_index)
+        combo.blockSignals(False)
+        combo.show()
+        return path
 
     def _on_quality_changed(self, value: str) -> None:
+        self._set_camera_config(self._quality_config_path, value)
+
+    def _on_white_balance_changed(self, value: str) -> None:
+        self._set_camera_config(self._white_balance_config_path, value)
+
+    def _on_shutter_speed_changed(self, value: str) -> None:
+        self._set_camera_config(self._shutter_speed_config_path, value)
+
+    def _set_camera_config(self, path: str | None, value: str) -> None:
         port = self._selected_port()
-        if not port or not self._quality_config_path or not value:
+        if not port or not path or not value:
             return
         try:
-            gphoto_backend.set_config(port, self._quality_config_path, value, timeout=5.0)
+            gphoto_backend.set_config(port, path, value, timeout=5.0)
         except gphoto_backend.GPhotoError as exc:
             show_alert(self, i18n.tr("scan_error_title"), str(exc))
 

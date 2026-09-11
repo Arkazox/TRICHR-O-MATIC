@@ -9,7 +9,7 @@ generally, a photo-editing app built around that trichromy workflow.
 ### Modes
 - **Solo** — a single, already-composed photo (color or B&W), loaded and
   edited as-is, no channel recomposition.
-- **B&W Trichrome** — the classic case: 3 black & white shots taken through
+- **Classic Trichrome** — the classic case: 3 black & white shots taken through
   R/G/B (or IR/Aerochrome/custom) filters, recomposed into one color image.
 - **Color Trichrome** — 3 real color photos, each keeping its own R, G or B
   channel instead of being flattened to grayscale, for a genuine
@@ -19,8 +19,8 @@ generally, a photo-editing app built around that trichromy workflow.
 - Load photos individually (**Trichrome Process** block), or drag image files
   from Finder straight onto the thumbnail strip (added as Solo photos).
 - **Import Images…** (batch import window): pick a Processing Mode (Solo /
-  B&W Trichrome / Color Trichrome), then match R/G/B triplets **Automatic**ally
-  by filename (Classic, IR Trichrome, Aerochrome or a fully custom
+  Classic Trichrome / Color Trichrome), then match R/G/B triplets **Automatic**ally
+  by filename (RGB Trichrome, IR Trichrome, Aerochrome or a fully custom
   filter-to-channel mapping), **Sequential**ly (files already in R, G, B
   order), or **Manual**ly (pick each column yourself) — or just select
   individual images/a whole folder for Solo mode.
@@ -94,8 +94,7 @@ you want a standalone, double-clickable copy.
 
 The app is generated at `dist/Trichr-o-matic.app`. Bump the version string in
 `trichrome.spec` (`CFBundleShortVersionString`) before a release build — see
-`CHANGELOG_EN.md` / `CHANGELOG_FR.md` for the user-facing history of each
-version.
+`CHANGELOG_EN.md` for the user-facing history of each version.
 
 ## Usage notes
 
@@ -115,11 +114,11 @@ version.
 Open it from the sidebar's **Import Images…** button (⌘I). It processes many
 photos in one run:
 
-1. Choose a **Processing Mode** for the whole batch — Solo, B&W Trichrome, or
+1. Choose a **Processing Mode** for the whole batch — Solo, Classic Trichrome, or
    Color Trichrome.
 2. In a Trichrome mode, point it at a folder of R/G/B files (matched
    automatically by a filter keyword in the filename, or manually), pick the
-   **Import Rules** (which filter feeds which channel — Classic, IR,
+   **Import Rules** (which filter feeds which channel — RGB Trichrome, IR,
    Aerochrome, or a custom mapping), and optionally auto-align each triplet
    on import. In Solo mode, just select the individual images or a folder.
 3. Click **Import** — the new photos are added to the filmstrip, ready to

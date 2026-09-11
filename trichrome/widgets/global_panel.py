@@ -17,7 +17,7 @@ model purity over what a user would actually go looking for.
 
 Black & White toggle (`ColorPanel.black_white_button`), added the same
 day: deliberately NOT the same thing as Trichrome's own B&W/Color choice
-(the Files-block Mode combo's "B&W Trichrome"/"Color Trichrome" entries -
+(the Files-block Mode combo's "Classic Trichrome"/"Color Trichrome" entries -
 `import_panel.py`'s `bw_film_button`/`color_film_button` used to offer a
 quicker shortcut to the same choice, removed 2026-09-07 once this toggle
 made them fully redundant), which still controls Harris Shutter/decode

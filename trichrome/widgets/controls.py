@@ -15,13 +15,24 @@ STEPS = 1000
 
 
 class ArrowKeyScrollArea(QScrollArea):
-    """A QScrollArea that only scrolls via wheel/trackpad/scrollbar - Left/Right
-    are handed off to the parent (MainWindow) so they can navigate the
-    filmstrip instead of being swallowed by whichever scroll area currently
-    contains the focused widget."""
+    """A QScrollArea that only scrolls via wheel/trackpad/scrollbar - the
+    keys in ignore_keys (Left/Right by default) are handed off to the
+    parent (MainWindow) instead of being swallowed by whichever scroll
+    area currently contains the focused widget (a real click on a card -
+    confirmed via QTest, not just reasoned about - leaves keyboard focus
+    on the scroll area itself, whose own native QScrollArea.keyPressEvent
+    would otherwise consume Up/Down/PageUp/etc. to scroll its viewport
+    before MainWindow ever sees them). The carousel's own grid_scroll (see
+    CarouselWidget.__init__) additionally ignores Up/Down, since grid mode
+    also uses those to move a row at a time between photos."""
+
+    def __init__(self, parent: QWidget | None = None,
+                 ignore_keys: tuple = (Qt.Key_Left, Qt.Key_Right)):
+        super().__init__(parent)
+        self._ignore_keys = ignore_keys
 
     def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key_Left, Qt.Key_Right):
+        if event.key() in self._ignore_keys:
             event.ignore()
             return
         super().keyPressEvent(event)

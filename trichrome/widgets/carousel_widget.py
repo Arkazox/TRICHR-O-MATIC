@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QMimeData, QPointF, Qt, Signal
+from PySide6.QtCore import QEventLoop, QMimeData, QPointF, Qt, Signal
 from PySide6.QtGui import QDrag, QPixmap
 from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
@@ -213,6 +213,7 @@ class CarouselWidget(QWidget):
     delete_requested = Signal(list)
     reset_requested = Signal(list)
     duplicate_requested = Signal(int)
+    convert_to_trichrome_requested = Signal(list)
     reordered = Signal(list)  # order[new_position] = old_index
     files_dropped = Signal(list)  # local file paths dragged in from Finder
 
@@ -225,6 +226,11 @@ class CarouselWidget(QWidget):
         # Only true once something's been copied that carries crop settings -
         # gates whether "Paste Crop" shows in the context menu at all.
         self._paste_crop_available = False
+        # Kept in lockstep with _cards by set_items() (always given together,
+        # same as the bases list) - the context menu needs each item's mode
+        # to decide whether "Convert to Trichrome" applies, but the carousel
+        # otherwise has no visibility into BatchItem data at all.
+        self._item_modes: list[str] = []
         self._grid_mode = False
         self._grid_columns = 0  # 0 = not yet initialized; picked on first grid layout
         self._grid_cell_size = THUMB_W
@@ -260,7 +266,10 @@ class CarouselWidget(QWidget):
         # so the margins either side stay equal regardless of how wide the
         # container is (see set_grid_mode(), toggled by MainWindow as this
         # widget's own "fullscreen" mode).
-        self.grid_scroll = ArrowKeyScrollArea()
+        # Also hands off Up/Down (not just Left/Right) to MainWindow, since
+        # grid mode uses those to move a row at a time between photos - see
+        # ArrowKeyScrollArea's own docstring for why this is needed at all.
+        self.grid_scroll = ArrowKeyScrollArea(ignore_keys=(Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down))
         self.grid_scroll.setWidgetResizable(True)
         self.grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -387,12 +396,13 @@ class CarouselWidget(QWidget):
     # ------------------------------------------------------------------
     # Items / selection / activation
     # ------------------------------------------------------------------
-    def set_items(self, bases: list[str]) -> None:
+    def set_items(self, bases: list[str], modes: list[str] | None = None) -> None:
         for card in self._cards:
             card.setParent(None)
             card.deleteLater()
         self._cards = []
         self._selected = set()
+        self._item_modes = list(modes) if modes is not None else ["trichrome"] * len(bases)
 
         for i, base in enumerate(bases):
             card = _CarouselCard(i, base)
@@ -434,6 +444,18 @@ class CarouselWidget(QWidget):
         if self._current_index != index:
             self.set_current(index)
             self.current_changed.emit(index)
+            # current_changed's own handler (MainWindow.activate_batch_item)
+            # already recomputes and repaints the newly-active photo
+            # synchronously - but that repaint is only *scheduled*
+            # (QWidget.update()), and menu.exec() below opens a modal loop
+            # that can otherwise swallow a still-pending repaint until the
+            # menu closes (a real, seen-in-the-app Qt/macOS quirk - a plain
+            # click doesn't have this problem since nothing else grabs the
+            # loop right after it). Flushing pending paint/timer events now
+            # (not new mouse/keyboard input, to avoid any reentrancy risk)
+            # guarantees the display has already switched before the menu
+            # even appears, instead of only catching up once it's closed.
+            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
         # Right-clicking a lone selected (or unselected) photo replaces the
         # selection, same as a plain click would, so the menu acts on only
         # this card. But right-clicking *into* an existing multi-selection
@@ -452,6 +474,15 @@ class CarouselWidget(QWidget):
         menu.addSeparator()
         reset_action = menu.addAction(i18n.tr("menu_reset_all"))
         duplicate_action = menu.addAction(i18n.tr("menu_duplicate"))
+        # "Convert to Trichrome" only makes sense for 1-3 Solo photos, none
+        # of which is already a Trichrome photo - per the user's own spec
+        # (2026-09-10): more than 3 has nowhere to go (only 3 R/G/B slots),
+        # and mixing in an already-Trichrome photo would be ambiguous about
+        # which of its own 3 channels to use.
+        convert_action = None
+        if 1 <= len(targets) <= 3 and all(
+                0 <= i < len(self._item_modes) and self._item_modes[i] == "normal" for i in targets):
+            convert_action = menu.addAction(i18n.tr("menu_convert_to_trichrome"))
         menu.addSeparator()
         delete_action = menu.addAction(i18n.tr("menu_edit_delete"))
         chosen = menu.exec(global_pos)
@@ -467,6 +498,8 @@ class CarouselWidget(QWidget):
             # Duplicate always acts on the single active photo, never the
             # whole multi-selection - unlike Copy/Paste/Reset/Delete above.
             self.duplicate_requested.emit(index)
+        elif convert_action is not None and chosen is convert_action:
+            self.convert_to_trichrome_requested.emit(targets)
         elif chosen is delete_action:
             self.delete_requested.emit(targets)
 
@@ -489,6 +522,12 @@ class CarouselWidget(QWidget):
     def _reorder(self, from_index: int, target: int) -> None:
         order = list(range(len(self._cards)))
         order.insert(target, order.pop(from_index))
+        # Keep _item_modes in the same order as _cards - on_carousel_reordered
+        # (main_window.py) reorders batch_items to match but never calls
+        # set_items() again, so this is the only place that would otherwise
+        # go stale after a drag-and-drop reorder.
+        if len(self._item_modes) == len(self._cards):
+            self._item_modes.insert(target, self._item_modes.pop(from_index))
 
         current_card = self._cards[self._current_index] if 0 <= self._current_index < len(self._cards) else None
         selected_cards = {self._cards[i] for i in self._selected}
@@ -554,6 +593,14 @@ class CarouselWidget(QWidget):
     def set_paste_crop_available(self, available: bool) -> None:
         self._paste_crop_available = available
 
+    def set_item_mode(self, index: int, mode: str) -> None:
+        """Keeps one item's cached mode (see _item_modes) in sync without a
+        full set_items() rebuild - call this wherever BatchItem.mode changes
+        for an already-shown item outside of that (the Mode-switch handlers
+        in main_window.py)."""
+        if 0 <= index < len(self._item_modes):
+            self._item_modes[index] = mode
+
     def selected_indices(self) -> list[int]:
         return sorted(self._selected)
 
@@ -580,6 +627,31 @@ class CarouselWidget(QWidget):
             self._extend_selection_to(prv)
         else:
             self._on_card_clicked(prv)
+
+    def go_up(self, extend_selection: bool = False) -> None:
+        """Grid mode only - moves to whichever photo sits one row above the
+        current one, i.e. back by however many columns the grid is
+        currently showing (see _reflow_grid) - meaningless in strip mode,
+        a single row, so a no-op there."""
+        if not self._grid_mode or not self._cards or self._grid_columns <= 0:
+            return
+        current = self._current_index if self._current_index >= 0 else 0
+        target = max(0, current - self._grid_columns)
+        if extend_selection:
+            self._extend_selection_to(target)
+        else:
+            self._on_card_clicked(target)
+
+    def go_down(self, extend_selection: bool = False) -> None:
+        """The go_up() counterpart - one row below, same column."""
+        if not self._grid_mode or not self._cards or self._grid_columns <= 0:
+            return
+        current = self._current_index if self._current_index >= 0 else 0
+        target = min(len(self._cards) - 1, current + self._grid_columns)
+        if extend_selection:
+            self._extend_selection_to(target)
+        else:
+            self._on_card_clicked(target)
 
     def _extend_selection_to(self, index: int) -> None:
         """Finder-style Shift+arrow range selection: grows/shrinks the
