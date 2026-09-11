@@ -123,3 +123,7 @@ photos in one run:
    on import. In Solo mode, just select the individual images or a folder.
 3. Click **Import** — the new photos are added to the filmstrip, ready to
    edit and export like any other photo in the session.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
