@@ -1,0 +1,15 @@
+# Pinned for the app's minimum macOS (LSMinimumSystemVersion in
+# trichrome.spec, 12.0). build_mac.sh fails the build if any bundled binary
+# needs a newer macOS, so check that before upgrading one of these.
+#
+# PySide6 6.10+ bindings are built for macOS 15 (whatever their wheel tag
+# says); 6.9.x is the last line built for macOS 12.
+PySide6==6.9.3
+# OpenCV 4.11+ needs macOS 13.
+opencv-python-headless==4.10.0.84
+# pip picks numpy's macOS 14 wheel (Accelerate BLAS) on a macOS 14+ build
+# machine; the macOS 11 wheel (OpenBLAS) is named explicitly instead.
+numpy @ https://files.pythonhosted.org/packages/60/2e/b5aee50a1f74ac815cf8331812cb8251e29024025de462e0c047641c614c/numpy-2.5.2-cp312-cp312-macosx_11_0_arm64.whl#sha256=4bbd96c833ecc8cc069ce518078fc8c60cb9cbfb0fea5b7a803ad65035596d03
+Pillow==12.3.0
+rawpy==0.27.1
+pyinstaller==6.22.2
