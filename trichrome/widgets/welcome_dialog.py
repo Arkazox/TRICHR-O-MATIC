@@ -9,13 +9,14 @@ from __future__ import annotations
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QHBoxLayout, QLabel, QLayout, QPushButton, QVBoxLayout,
+    QDialog, QHBoxLayout, QLabel, QLayout, QPushButton, QVBoxLayout,
 )
 
 from .. import i18n
 from ..paths import resource_path
 from ..version import __version__
 from .button_style import style_primary_button, style_secondary_button
+from .checkbox import CheckBox
 
 # QSettings key (main app domain) - True by default, re-armed by every
 # build_mac.sh run so a fresh build always shows the welcome window again.
@@ -79,7 +80,7 @@ class WelcomeDialog(QDialog):
 
         row = QHBoxLayout()
         row.setSpacing(6)  # same gap as the tour callout's own Back/Next pair
-        self.startup_checkbox = QCheckBox(i18n.tr("quick_tour_open_at_startup"))
+        self.startup_checkbox = CheckBox(i18n.tr("quick_tour_open_at_startup"))
         self.startup_checkbox.setChecked(show_at_startup_enabled(org_name, app_name))
         self.startup_checkbox.toggled.connect(self._on_startup_toggled)
         row.addWidget(self.startup_checkbox)

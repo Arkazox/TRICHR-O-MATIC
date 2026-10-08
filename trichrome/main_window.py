@@ -20,7 +20,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPalette, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QApplication, QButtonGroup, QCheckBox, QDialog, QFileDialog, QFrame, QGroupBox,
+    QAbstractSpinBox, QApplication, QButtonGroup, QDialog, QFileDialog, QFrame, QGroupBox,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMenu, QPushButton, QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QStatusBar,
     QToolButton, QVBoxLayout, QWidget,
@@ -78,6 +78,7 @@ from .widgets.svg_icons import (
     tinted_svg_icon,
 )
 from .widgets.unsaved_changes_dialog import UnsavedChangesDialog
+from .widgets.checkbox import CheckBox
 
 # Neutral tone/global-correction values used by "Compare" mode to preview
 # the original: black, white, gamma, exposure, brightness, contrast,
@@ -740,16 +741,15 @@ class MainWindow(QMainWindow):
         for key, action in self.block_menu_actions.items():
             action.setText(i18n.tr(_BLOCK_MENU_LABEL_KEYS[key]))
         self.view_menu.setTitle(i18n.tr("menu_view"))
-        self.view_zoom_in_action.setText(i18n.tr("menu_view_zoom_in"))
-        self.view_zoom_out_action.setText(i18n.tr("menu_view_zoom_out"))
-        self.view_zoom_fit_action.setText(i18n.tr("menu_view_zoom_fit"))
-        self.view_zoom_100_action.setText(i18n.tr("menu_view_zoom_100"))
-        self.view_hq_preview_action.setText(i18n.tr("menu_view_hq_preview"))
-        self.view_compare_action.setText(i18n.tr("menu_view_compare"))
-        self.view_fullscreen_action.setText(
-            i18n.tr("menu_view_exit_fullscreen") if self._is_focus_mode else i18n.tr("menu_view_fullscreen"))
-        self.view_thumbnails_action.setText(i18n.tr("menu_view_thumbnails"))
-        self.view_grid_action.setText(i18n.tr("menu_view_grid"))
+        self.view_zoom_in_action.setText(i18n.tr("menu_view_zoom_in") + "\t⌘=")
+        self.view_zoom_out_action.setText(i18n.tr("menu_view_zoom_out") + "\t⌘-")
+        self.view_zoom_fit_action.setText(i18n.tr("menu_view_zoom_fit") + "\tF")
+        self.view_zoom_100_action.setText(i18n.tr("menu_view_zoom_100") + "\tZ")
+        self.view_hq_preview_action.setText(i18n.tr("menu_view_hq_preview") + "\tH")
+        self.view_compare_action.setText(i18n.tr("menu_view_compare") + "\t:")
+        self._update_fullscreen_action_text()
+        self.view_thumbnails_action.setText(i18n.tr("menu_view_thumbnails") + "\tP")
+        self.view_grid_action.setText(i18n.tr("menu_view_grid") + "\tG")
         self.window_menu.setTitle(i18n.tr("menu_window"))
         self.window_close_action.setText(i18n.tr("menu_window_close") + "\t⌘W")
         self.window_left_panel_action.setText(i18n.tr("menu_window_left_panel") + "\tI")
@@ -977,7 +977,8 @@ class MainWindow(QMainWindow):
         # the toolbar button's own click) - setting a second real QKeySequence
         # here would risk Qt's "ambiguous shortcut" conflict, same reasoning as
         # delete_selection_action/window_close_action above, so the shortcut is
-        # baked into each label's own i18n text instead, display-only. Actual
+        # appended after a tab in retranslate_ui() instead, display-only (the
+        # tab puts it in the menu's shortcut column). Actual
         # signal wiring (handler + the 4 checkable ones' bidirectional
         # checked-state sync) is deferred to _connect_signals(), once the
         # preview-bar buttons these mirror actually exist (built later in
@@ -1230,7 +1231,7 @@ class MainWindow(QMainWindow):
         # workflow preference for the *action*, not project content, same
         # reasoning as Light Mode/Layout Presets.
         apply_distortion_row = QHBoxLayout()
-        self.auto_align_apply_distortion_checkbox = QCheckBox()
+        self.auto_align_apply_distortion_checkbox = CheckBox()
         self.auto_align_apply_distortion_checkbox.setStyleSheet("QCheckBox { color: #888; font-size: 11px; }")
         self.auto_align_apply_distortion_checkbox.setChecked(
             QSettings(ORG_NAME, APP_NAME).value("auto_align_apply_distortion", False, type=bool))
@@ -2324,12 +2325,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Fullscreen / focus mode
     # ------------------------------------------------------------------
+    def _update_fullscreen_action_text(self) -> None:
+        key = "menu_view_exit_fullscreen" if self._is_focus_mode else "menu_view_fullscreen"
+        self.view_fullscreen_action.setText(i18n.tr(key) + "\t⌘F")
+
     def toggle_focus_mode(self) -> None:
         self._is_focus_mode = not self._is_focus_mode
         self.fullscreen_btn.setChecked(self._is_focus_mode)
         self.view_fullscreen_action.setChecked(self._is_focus_mode)
-        self.view_fullscreen_action.setText(
-            i18n.tr("menu_view_exit_fullscreen") if self._is_focus_mode else i18n.tr("menu_view_fullscreen"))
+        self._update_fullscreen_action_text()
         if self._is_focus_mode:
             self.left_scroll.setVisible(False)
             self.right_scroll.setVisible(False)

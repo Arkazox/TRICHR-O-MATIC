@@ -8,12 +8,17 @@ generally, a photo-editing app built around that trichromy workflow.
 
 ## Download
 
-**[Download the latest version](https://github.com/Arkazox/Trichr-o-matic/releases/latest)**
-(the `.zip` under *Assets*), unzip it, and move `Trichr-o-matic.app` to your
-Applications folder.
+**[Download the latest version](https://github.com/Arkazox/Trichr-o-matic/releases/latest)**:
+under *Assets*, pick the `.zip` for your Mac, unzip it, and move
+`Trichr-o-matic.app` to your Applications folder.
 
-**Requirements:** a Mac with Apple Silicon (M1 or later) running macOS 12
-Monterey or later.
+- `Trichr-o-matic-vX.Y.Z-AppleSilicon.zip` for Macs with an M1 chip or later.
+- `Trichr-o-matic-vX.Y.Z-Intel.zip` for Macs with an Intel processor.
+
+Not sure which Mac you have? Open the Apple menu ▸ **About This Mac**: it shows either
+**Chip** (Apple M1, M2, …) or **Processor** (Intel).
+
+**Requirements:** macOS 12 Monterey or later.
 
 ### First launch
 
@@ -149,10 +154,11 @@ you want a standalone, double-clickable copy.
 ## Building the macOS app
 
 ```bash
-./build_mac.sh
+./build_mac.sh          # Apple Silicon -> dist-applesilicon/Trichr-o-matic.app
+./build_mac.sh intel    # Intel (under Rosetta) -> dist-intel/Trichr-o-matic.app
 ```
 
-The app is generated at `dist/Trichr-o-matic.app`. Bump the version string in
+Bump the version string in
 `trichrome/version.py` (the single source of truth, read by both the app
 itself and `trichrome.spec`'s `CFBundleShortVersionString`) before a
 release build — see `CHANGELOG.md` for the history of each version.

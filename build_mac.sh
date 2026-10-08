@@ -1,27 +1,52 @@
 #!/usr/bin/env bash
 # Build "Trichr-o-matic.app" for macOS.
+#
+#   ./build_mac.sh          Apple Silicon -> dist-applesilicon/Trichr-o-matic.app
+#   ./build_mac.sh intel    Intel         -> dist-intel/Trichr-o-matic.app
+#
+# The Intel build runs every step under Rosetta (`arch -x86_64`) with its own
+# venv (venv-intel/), so pip installs x86_64 wheels and PyInstaller bundles
+# x86_64 binaries. The python.org Python 3.12 is universal2, so the same
+# interpreter serves both. The two builds never share a folder.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
+case "${1:-arm64}" in
+    arm64) ARCH=arm64; VENV=venv; DIST=dist-applesilicon; WORK=build ;;
+    intel) ARCH=x86_64; VENV=venv-intel; DIST=dist-intel; WORK=build-intel ;;
+    *) echo "Usage: $0 [intel]" >&2; exit 1 ;;
+esac
+run() { arch "-$ARCH" "$@"; }
+
+if [ ! -d "$VENV" ]; then
+    run python3 -m venv "$VENV"
 fi
-source venv/bin/activate
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
+PY="$VENV/bin/python3"
+if [ "$(run "$PY" -c 'import platform; print(platform.machine())')" != "$ARCH" ]; then
+    echo "$PY doesn't run as $ARCH. Is Rosetta installed (softwareupdate --install-rosetta)?" >&2
+    exit 1
+fi
+run "$PY" -m pip install --upgrade pip -q
+run "$PY" -m pip install -r requirements.txt -q
 
-rm -rf build dist
-pyinstaller trichrome.spec --noconfirm
+rm -rf "$WORK" "$DIST"
+run "$PY" -m PyInstaller trichrome.spec --noconfirm --distpath "$DIST" --workpath "$WORK"
 
-# Every Mach-O file in the bundle must run on the macOS the app claims to
-# support. A wheel's platform tag isn't proof (PySide6 6.10+ is tagged
-# macOS 13 but built for 15), so read each binary's own minimum (minos, or
-# LC_VERSION_MIN_MACOSX's version on older binaries) and fail the build on
-# any that is newer than LSMinimumSystemVersion.
-APP="dist/Trichr-o-matic.app"
+# Every Mach-O file in the bundle must contain the target architecture and
+# run on the macOS the app claims to support. A wheel's platform tag isn't
+# proof (PySide6 6.10+ is tagged macOS 13 but built for 15), so read each
+# binary's own minimum (minos, or LC_VERSION_MIN_MACOSX's version on older
+# binaries) and fail the build on any that is newer than
+# LSMinimumSystemVersion.
+APP="$DIST/Trichr-o-matic.app"
 MIN_MACOS=$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")
-TOO_NEW=$(find "$APP" -type f -print0 | while IFS= read -r -d '' f; do
-    v=$(otool -arch arm64 -l "$f" 2>/dev/null | awk '
+BAD=$(find "$APP" -type f -print0 | while IFS= read -r -d '' f; do
+    archs=$(lipo -archs "$f" 2>/dev/null) || continue  # not a Mach-O file
+    if [[ " $archs " != *" $ARCH "* ]]; then
+        echo "  no $ARCH ($archs)  ${f#$APP/}"
+        continue
+    fi
+    v=$(otool -arch "$ARCH" -l "$f" 2>/dev/null | awk '
         /LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX/ { cmd = 1 }
         cmd && ($1 == "minos" || $1 == "version") { print $2; exit }')
     [ -z "$v" ] && continue
@@ -29,13 +54,13 @@ TOO_NEW=$(find "$APP" -type f -print0 | while IFS= read -r -d '' f; do
         echo "  macOS $v  ${f#$APP/}"
     fi
 done)
-if [ -n "$TOO_NEW" ]; then
+if [ -n "$BAD" ]; then
     echo ""
-    echo "Build error: these binaries need a newer macOS than LSMinimumSystemVersion ($MIN_MACOS):"
-    echo "$TOO_NEW"
+    echo "Build error: these binaries won't run on $ARCH Macs with macOS $MIN_MACOS (LSMinimumSystemVersion):"
+    echo "$BAD"
     exit 1
 fi
-echo "Every bundled binary runs on macOS $MIN_MACOS or later."
+echo "Every bundled binary is $ARCH and runs on macOS $MIN_MACOS or later."
 
 # Reset the remembered session (last opened .trirgb path, and the legacy
 # QSettings item-array fallback used when there's no remembered path) so
@@ -52,7 +77,7 @@ echo "Every bundled binary runs on macOS $MIN_MACOS or later."
 # Deliberately still narrow otherwise: language, panel/block layout,
 # window geometry, and every other QSettings key in the same domain is
 # left completely untouched.
-python3 - <<'PY'
+run "$PY" - <<'PY'
 from PySide6.QtCore import QSettings
 from trichrome.main_window import ORG_NAME, APP_NAME
 settings = QSettings(ORG_NAME, APP_NAME)
@@ -76,4 +101,4 @@ for key in settings.allKeys():
 PY
 
 echo ""
-echo "App créée : dist/Trichr-o-matic.app"
+echo "App créée : $APP"

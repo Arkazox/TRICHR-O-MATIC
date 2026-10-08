@@ -4,7 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QFrame, QHBoxLayout,
+    QApplication, QFrame, QHBoxLayout,
     QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -12,6 +12,7 @@ from .. import i18n
 from .controls import CollapsibleSection, SliderSpin
 from .info_bubble import InfoButton
 from .svg_icons import HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgToolButton
+from .checkbox import CheckBox
 
 CHANNEL_COLORS = {"R": "#e05555", "G": "#3fae4a", "B": "#4a7fe0"}
 CHANNEL_KEY = {"R": "channel_r", "G": "channel_g", "B": "channel_b"}
@@ -393,7 +394,7 @@ class ChannelPanel(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
-        self.active_checkbox = QCheckBox()
+        self.active_checkbox = CheckBox()
         self.active_checkbox.toggled.connect(self.active_toggled.emit)
         self.active_info_button = InfoButton("active_layer_info")
 
@@ -403,7 +404,7 @@ class ChannelPanel(QWidget):
         # imaging.apply_stretch_warp) - see MainWindow.stretch_index/
         # on_stretch_toggled for the mutual-exclusion-with-Move-on-Canvas and
         # cross-tab-follow behavior, mirroring active_index exactly.
-        self.stretch_checkbox = QCheckBox()
+        self.stretch_checkbox = CheckBox()
         self.stretch_checkbox.toggled.connect(self.stretch_toggled.emit)
         self.stretch_info_button = InfoButton("stretch_layer_info")
         # Resets only stretch_pins, not the 4 Distortion sliders - separate
@@ -529,7 +530,7 @@ class ChannelPanel(QWidget):
         # edit sections above it.
         root.addSpacing(6)
         solo_row = QHBoxLayout()
-        self.solo_checkbox = QCheckBox()
+        self.solo_checkbox = CheckBox()
         self.solo_checkbox.setStyleSheet("QCheckBox { color: #888; font-size: 11px; }")
         self.solo_checkbox.toggled.connect(self.solo_toggled.emit)
         solo_row.addWidget(self.solo_checkbox)

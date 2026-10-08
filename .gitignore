@@ -5,10 +5,14 @@ __pycache__/
 
 # Virtual environment
 venv/
+venv-intel/
 
 # Build artifacts (PyInstaller)
 build/
 dist/
+dist-applesilicon/
+build-intel/
+dist-intel/
 
 # macOS
 .DS_Store

@@ -49,7 +49,7 @@ import tempfile
 from PySide6.QtCore import QSettings, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QKeySequence, QLinearGradient, QShortcut
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout,
+    QButtonGroup, QComboBox, QFileDialog, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QRadioButton, QSpinBox, QWidget,
 )
 
@@ -78,6 +78,8 @@ from .controls import CollapsibleSection
 from .svg_icons import (
     SvgCheckableToolButton, SvgToolButton, gradient_tinted_svg_icon, tinted_svg_icon,
 )
+from .checkbox import CheckBox
+from .combo_box import ComboBox
 
 # Muted, small-caps-weight label for a section inside the block - since the
 # whole Scan tool already lives inside one block's own bordered chrome,
@@ -295,7 +297,7 @@ class ScanPanel(QGroupBox):
         self.refresh_button.clicked.connect(self._on_refresh_clicked)
         status_row.addWidget(self.refresh_button)
         device_content.addLayout(status_row)
-        self.camera_combo = QComboBox()
+        self.camera_combo = ComboBox()
         self.camera_combo.currentIndexChanged.connect(self._on_camera_selected)
         device_content.addWidget(self.camera_combo)
 
@@ -317,19 +319,19 @@ class ScanPanel(QGroupBox):
         camera_settings_content = self.camera_settings_section.content_layout
         self.quality_label = QLabel()
         camera_settings_content.addWidget(self.quality_label)
-        self.quality_combo = QComboBox()
+        self.quality_combo = ComboBox()
         self.quality_combo.currentTextChanged.connect(self._on_quality_changed)
         self.quality_combo.hide()
         camera_settings_content.addWidget(self.quality_combo)
         self.white_balance_label = QLabel()
         camera_settings_content.addWidget(self.white_balance_label)
-        self.white_balance_combo = QComboBox()
+        self.white_balance_combo = ComboBox()
         self.white_balance_combo.currentTextChanged.connect(self._on_white_balance_changed)
         self.white_balance_combo.hide()
         camera_settings_content.addWidget(self.white_balance_combo)
         self.shutter_speed_label = QLabel()
         camera_settings_content.addWidget(self.shutter_speed_label)
-        self.shutter_speed_combo = QComboBox()
+        self.shutter_speed_combo = ComboBox()
         self.shutter_speed_combo.currentTextChanged.connect(self._on_shutter_speed_changed)
         self.shutter_speed_combo.hide()
         camera_settings_content.addWidget(self.shutter_speed_combo)
@@ -445,7 +447,7 @@ class ScanPanel(QGroupBox):
         self.film_base_status_label.setWordWrap(True)
         self.film_base_status_label.setStyleSheet("color: #888; font-size: 11px;")
         light_content.addWidget(self.film_base_status_label)
-        self.apply_film_base_checkbox = QCheckBox()
+        self.apply_film_base_checkbox = CheckBox()
         self.apply_film_base_checkbox.setChecked(True)
         light_content.addWidget(self.apply_film_base_checkbox)
         self.apply_film_base_button = QPushButton()
@@ -478,7 +480,7 @@ class ScanPanel(QGroupBox):
         subfolder_row.addWidget(self.subfolder_edit, 1)
         location_content.addLayout(subfolder_row)
 
-        self.use_roll_subfolder_checkbox = QCheckBox()
+        self.use_roll_subfolder_checkbox = CheckBox()
         self.use_roll_subfolder_checkbox.toggled.connect(self._on_use_roll_subfolder_toggled)
         location_content.addWidget(self.use_roll_subfolder_checkbox)
 

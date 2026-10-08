@@ -17,7 +17,7 @@ from typing import Callable
 from PySide6.QtCore import QSettings, Qt, QThread, QTimer
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout,
+    QButtonGroup, QFileDialog, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -27,6 +27,8 @@ from ..widgets.button_style import style_primary_button, style_secondary_button
 from . import gphoto_backend, manifest, naming, process
 from .capture_worker import CaptureWorker
 from .process_worker import ProcessWorker
+from ..widgets.checkbox import CheckBox
+from ..widgets.combo_box import ComboBox
 
 ORG_NAME = "TrichromeMaker"
 APP_NAME = "ScanTool"
@@ -142,12 +144,12 @@ class ScanToolWindow(QWidget):
         self.refresh_button.clicked.connect(self._poll_devices)
         status_row.addWidget(self.refresh_button)
         device_layout.addLayout(status_row)
-        self.camera_combo = QComboBox()
+        self.camera_combo = ComboBox()
         self.camera_combo.currentIndexChanged.connect(self._on_camera_selected)
         device_layout.addWidget(self.camera_combo)
         self.quality_label = QLabel()
         device_layout.addWidget(self.quality_label)
-        self.quality_combo = QComboBox()
+        self.quality_combo = ComboBox()
         self.quality_combo.currentTextChanged.connect(self._on_quality_changed)
         self.quality_combo.hide()
         device_layout.addWidget(self.quality_combo)
@@ -197,7 +199,7 @@ class ScanToolWindow(QWidget):
         self.light_note_label.setStyleSheet("color: #888; font-size: 11px;")
         self.light_note_label.hide()
         light_layout.addWidget(self.light_note_label)
-        self.process_checkbox = QCheckBox(i18n.tr("scan_process_checkbox"))
+        self.process_checkbox = CheckBox(i18n.tr("scan_process_checkbox"))
         self.process_checkbox.setToolTip(i18n.tr("scan_process_tooltip"))
         self.process_checkbox.toggled.connect(lambda _checked: self._save_settings())
         light_layout.addWidget(self.process_checkbox)
@@ -224,7 +226,7 @@ class ScanToolWindow(QWidget):
         subfolder_row.addWidget(self.subfolder_edit, 1)
         location_layout.addLayout(subfolder_row)
 
-        self.use_roll_subfolder_checkbox = QCheckBox(i18n.tr("scan_use_roll_as_subfolder"))
+        self.use_roll_subfolder_checkbox = CheckBox(i18n.tr("scan_use_roll_as_subfolder"))
         self.use_roll_subfolder_checkbox.toggled.connect(self._on_use_roll_subfolder_toggled)
         location_layout.addWidget(self.use_roll_subfolder_checkbox)
 

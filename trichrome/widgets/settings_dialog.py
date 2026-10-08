@@ -8,8 +8,8 @@ from __future__ import annotations
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel, QLayout,
-    QLineEdit, QPushButton, QRadioButton, QStyle, QVBoxLayout, QWidget,
+    QButtonGroup, QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel, QLayout,
+    QLineEdit, QPushButton, QStyle, QVBoxLayout, QWidget,
 )
 
 from .. import i18n
@@ -17,6 +17,8 @@ from .button_style import style_primary_button
 from .dialog_style import PANEL_PADDING, make_panel, make_section_title
 from .info_bubble import InfoButton
 from .welcome_dialog import SHOW_AT_STARTUP_KEY
+from .checkbox import CheckBox, RadioButton
+from .combo_box import ComboBox
 
 # QSettings keys (main app domain) owned by this window. The export ones are
 # also read and written by ExportDialog, so its last-used values and these
@@ -78,11 +80,11 @@ class SettingsDialog(QDialog):
         # A radio pair, not a dropdown - only ever 2 languages, so both choices
         # can stay in view at once.
         self.language_button_group = QButtonGroup(self)
-        self.language_radios: dict[str, QRadioButton] = {}
+        self.language_radios: dict[str, RadioButton] = {}
         language_row = QHBoxLayout()
         language_row.setSpacing(14)
         for code, name in _LANGUAGES:
-            radio = QRadioButton(name)
+            radio = RadioButton(name)
             radio.toggled.connect(
                 lambda checked, c=code: self._on_language_changed(c) if checked else None)
             self.language_button_group.addButton(radio)
@@ -119,7 +121,7 @@ class SettingsDialog(QDialog):
         export_grid.setHorizontalSpacing(12)
         export_grid.setVerticalSpacing(8)
         self.format_label = QLabel()
-        self.format_combo = QComboBox()
+        self.format_combo = ComboBox()
         self.format_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.format_combo.currentIndexChanged.connect(self._on_format_changed)
         self.suffix_label = QLabel()
@@ -154,7 +156,7 @@ class SettingsDialog(QDialog):
         # overlapped the box on macOS, since the row had no spacing.
         scan_row = QHBoxLayout()
         scan_row.setContentsMargins(0, 0, 0, 0)
-        self.scan_tool_checkbox = QCheckBox()
+        self.scan_tool_checkbox = CheckBox()
         self.scan_tool_checkbox.toggled.connect(self._on_scan_tool_toggled)
         scan_row.addWidget(self.scan_tool_checkbox)
         scan_row.addStretch(1)
@@ -184,8 +186,8 @@ class SettingsDialog(QDialog):
         title = make_section_title(layout)
         return title, make_panel(layout)
 
-    def _checkbox(self, layout: QVBoxLayout, key: str, last: bool = False) -> QCheckBox:
-        checkbox = QCheckBox()
+    def _checkbox(self, layout: QVBoxLayout, key: str, last: bool = False) -> CheckBox:
+        checkbox = CheckBox()
         checkbox.toggled.connect(lambda checked: self._settings().setValue(key, checked))
         checkbox.setProperty("settings_key", key)
         layout.addWidget(checkbox)

@@ -4,14 +4,16 @@ from __future__ import annotations
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton,
-    QRadioButton, QVBoxLayout, QWidget,
+    QDialog, QFileDialog, QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton,
+    QVBoxLayout, QWidget,
 )
 
 from .. import i18n
 from .alert_dialog import show_alert
 from .button_style import style_primary_button, style_secondary_button
 from .settings_dialog import DEFAULT_EXPORT_SUFFIX, EXPORT_FORMAT_KEY, EXPORT_SUFFIX_KEY
+from .checkbox import CheckBox, RadioButton
+from .combo_box import ComboBox
 
 ORG_NAME = "TrichromeMaker"
 APP_NAME = "TrichromeMaker"
@@ -39,7 +41,7 @@ class ExportDialog(QDialog):
 
         out_row = QHBoxLayout()
         self.output_folder_label = QLabel()
-        self.same_as_source_checkbox = QCheckBox()
+        self.same_as_source_checkbox = CheckBox()
         self.same_as_source_checkbox.toggled.connect(self._on_same_as_source_toggled)
         self.browse_output_button = QPushButton()
         style_secondary_button(self.browse_output_button)
@@ -63,15 +65,15 @@ class ExportDialog(QDialog):
 
         format_row = QHBoxLayout()
         self.format_label = QLabel()
-        self.format_combo = QComboBox()
+        self.format_combo = ComboBox()
         format_row.addWidget(self.format_label)
         format_row.addWidget(self.format_combo, stretch=1)
         root.addLayout(format_row)
 
         self._batch_active = len(self.main_window.batch_items) >= 2
-        self.scope_current_radio = QRadioButton()
-        self.scope_selected_radio = QRadioButton()
-        self.scope_all_radio = QRadioButton()
+        self.scope_current_radio = RadioButton()
+        self.scope_selected_radio = RadioButton()
+        self.scope_all_radio = RadioButton()
         self._scope_radios = {
             "current": self.scope_current_radio,
             "selected": self.scope_selected_radio,
@@ -85,7 +87,7 @@ class ExportDialog(QDialog):
             rb.setVisible(self._batch_active)
             rb.toggled.connect(lambda checked, key=key: self._on_scope_toggled(key, checked))
 
-        self.reveal_in_finder_checkbox = QCheckBox()
+        self.reveal_in_finder_checkbox = CheckBox()
         root.addWidget(self.reveal_in_finder_checkbox)
 
         footer = QHBoxLayout()

@@ -19,6 +19,7 @@ from .svg_icons import (
     HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE,
     SvgCheckableToolButton, SvgIconLabel, SvgToolButton,
 )
+from .combo_box import ComboBox
 
 # Ordered most-square to widest (original/free/custom aren't numeric so they
 # sit outside that ordering, at their existing spots).
@@ -114,7 +115,7 @@ class CropPanel(QGroupBox):
         ratio_row.addWidget(self.aspect_ratio_icon)
         self.aspect_ratio_label = QLabel()
         ratio_row.addWidget(self.aspect_ratio_label)
-        self.aspect_ratio_combo = QComboBox()
+        self.aspect_ratio_combo = ComboBox()
         self.aspect_ratio_combo.currentIndexChanged.connect(lambda _i: self._on_ratio_changed())
         ratio_row.addWidget(self.aspect_ratio_combo, stretch=1)
         self.invert_orientation_button = SvgToolButton(
@@ -151,7 +152,7 @@ class CropPanel(QGroupBox):
         grid_mirror_row = QHBoxLayout()
         self.grid_label = SvgIconLabel(_GRID_ICONS["off"])
         grid_mirror_row.addWidget(self.grid_label)
-        self.grid_combo = QComboBox()
+        self.grid_combo = ComboBox()
         self.grid_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.grid_combo.currentIndexChanged.connect(lambda _i: self._on_grid_changed())
         grid_mirror_row.addWidget(self.grid_combo)

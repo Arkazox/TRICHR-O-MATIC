@@ -34,8 +34,8 @@ from .. import i18n, imaging
 from .controls import ArrowKeyScrollArea
 
 THUMB_W, THUMB_H = 96, 64
-CURRENT_COLOR = "#f2c40c"
-SELECTED_COLOR = "#8a7a3a"
+CURRENT_COLOR = "#5b9bd5"
+SELECTED_COLOR = "#3f6d96"
 DEFAULT_COLOR = "#444"
 
 # Grid mode (fullscreen) sizing - cards fill the available width, Zoom
@@ -440,7 +440,7 @@ class CarouselWidget(QWidget):
         self.selection_changed.emit()
 
     def _on_card_context_menu(self, index: int, global_pos, cmd_held: bool) -> None:
-        # Right-clicking moves the "current" (yellow) highlight to the
+        # Right-clicking moves the "current" (accent blue) highlight to the
         # clicked card first, same as a left click - so the menu always
         # opens on what's now visibly current.
         if self._current_index != index:

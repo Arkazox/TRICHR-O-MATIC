@@ -8,7 +8,7 @@ import os
 from PySide6.QtCore import QSize, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout,
+    QAbstractItemView, QApplication, QButtonGroup, QComboBox, QFileDialog, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QPushButton, QRadioButton, QScrollArea, QSizePolicy, QStyle, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
@@ -45,6 +45,8 @@ from .widgets.controls import CollapsibleSection
 from .widgets.import_panel import MODE_ICONS, MODE_KEYS, MODE_LABEL_KEYS
 from .widgets.info_bubble import InfoButton, show_list_bubble
 from .widgets.svg_icons import SvgToolButton, raw_svg_icon, tinted_svg_icon
+from .widgets.checkbox import CheckBox, RadioButton
+from .widgets.combo_box import ComboBox
 
 ORG_NAME = "TrichromeMaker"
 APP_NAME = "TrichromeMaker"
@@ -404,12 +406,12 @@ class BatchWindow(QMainWindow):
         input_layout = QVBoxLayout(self.input_group)
 
         mode_row = QHBoxLayout()
-        self.mode_auto_radio = QRadioButton()
+        self.mode_auto_radio = RadioButton()
         self.mode_auto_radio.setChecked(True)
         self.mode_auto_radio.toggled.connect(self._on_mode_changed)
-        self.mode_semi_radio = QRadioButton()
+        self.mode_semi_radio = RadioButton()
         self.mode_semi_radio.toggled.connect(self._on_mode_changed)
-        self.mode_manual_radio = QRadioButton()
+        self.mode_manual_radio = RadioButton()
         self.mode_manual_radio.toggled.connect(self._on_mode_changed)
         mode_row.addWidget(self.mode_auto_radio)
         mode_row.addSpacing(24)
@@ -541,7 +543,7 @@ class BatchWindow(QMainWindow):
         self.advanced_mode_radios: dict[str, QRadioButton] = {}
         mode_row2 = QHBoxLayout()
         for mode_id in ADVANCED_MODE_IDS:
-            radio = QRadioButton()
+            radio = RadioButton()
             mode_row2.addWidget(radio)
             self.advanced_mode_radios[mode_id] = radio
         mode_row2.addStretch(1)
@@ -592,7 +594,7 @@ class BatchWindow(QMainWindow):
         mapping_col.addStretch(1)
         self.mapping_combos: dict[str, QComboBox] = {}
         for row, channel in enumerate(CHANNEL_LETTERS):
-            combo = QComboBox()
+            combo = ComboBox()
             combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
             combo.currentIndexChanged.connect(lambda _i, ch=channel: self._on_mapping_combo_changed(ch))
             arrow_label = QLabel("→")
@@ -743,7 +745,7 @@ class BatchWindow(QMainWindow):
         self.semi_order_radios: dict[str, QRadioButton] = {}
         semi_order_row = QHBoxLayout()
         for order in SEMI_ORDER_PERMUTATIONS:
-            radio = QRadioButton("/".join(order))
+            radio = RadioButton("/".join(order))
             radio.toggled.connect(lambda checked: self._refresh_semi_triplets() if checked else None)
             radio.toggled.connect(lambda checked, o=order: self._save_semi_order_setting(o) if checked else None)
             semi_order_row.addWidget(radio)
@@ -917,7 +919,7 @@ class BatchWindow(QMainWindow):
         self.align_group = QGroupBox()
         self.align_group.setFont(QApplication.font())  # same title font as Preferences
         align_layout = QVBoxLayout(self.align_group)
-        self.auto_align_checkbox = QCheckBox()
+        self.auto_align_checkbox = CheckBox()
         self.auto_align_checkbox.setChecked(True)
         self.auto_align_checkbox.toggled.connect(
             lambda checked: QSettings(ORG_NAME, APP_NAME).setValue("batch_auto_align", checked))
@@ -933,7 +935,7 @@ class BatchWindow(QMainWindow):
         # greyed out via Qt's own default disabled look) whenever Auto Align
         # itself is unchecked, since it has no effect on its own - see
         # _on_auto_align_toggled.
-        self.auto_align_apply_distortion_checkbox = QCheckBox()
+        self.auto_align_apply_distortion_checkbox = CheckBox()
         self.auto_align_apply_distortion_checkbox.toggled.connect(
             lambda checked: QSettings(ORG_NAME, APP_NAME).setValue("batch_auto_align_apply_distortion", checked))
         align_layout.addWidget(self.auto_align_apply_distortion_checkbox)
