@@ -9,6 +9,8 @@ import urllib.request
 
 from PySide6.QtCore import QObject, Signal
 
+from .self_update import ssl_context
+
 REPO = "Arkazox/Trichr-o-matic"
 _API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 _TIMEOUT_SECONDS = 8
@@ -35,8 +37,9 @@ def parse_version(text: str) -> tuple[int, ...]:
 
 
 class UpdateCheckWorker(QObject):
-    # latest_version ("0.6.4", no leading "v"), release_html_url
-    result_ready = Signal(str, str)
+    # latest_version ("0.6.4", no leading "v"), release_html_url,
+    # {asset file name: download URL} (used by self_update)
+    result_ready = Signal(str, str, object)
     failed = Signal(str)
     finished = Signal()
 
@@ -46,13 +49,17 @@ class UpdateCheckWorker(QObject):
                 _API_URL,
                 headers={"Accept": "application/vnd.github+json", "User-Agent": "Trichr-o-matic"},
             )
-            with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as response:
+            with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS, context=ssl_context()) as response:
                 data = json.loads(response.read().decode("utf-8"))
             tag = str(data.get("tag_name", "")).strip()
             url = str(data.get("html_url", "")).strip()
             if not tag:
                 raise ValueError("release has no tag_name")
-            self.result_ready.emit(tag[1:] if tag[:1] in ("v", "V") else tag, url)
+            assets = {
+                str(asset.get("name", "")): str(asset.get("browser_download_url", ""))
+                for asset in data.get("assets") or []
+            }
+            self.result_ready.emit(tag[1:] if tag[:1] in ("v", "V") else tag, url, assets)
         except Exception as exc:
             self.failed.emit(str(exc))
         finally:

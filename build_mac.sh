@@ -39,6 +39,11 @@ run "$PY" -m PyInstaller trichrome.spec --noconfirm --distpath "$DIST" --workpat
 # binaries) and fail the build on any that is newer than
 # LSMinimumSystemVersion.
 APP="$DIST/Trichr-o-matic.app"
+
+# Some source files (icons downloaded from the web) carry the quarantine
+# flag, which the bundle and its release zip would otherwise keep.
+xattr -dr com.apple.quarantine "$APP"
+
 MIN_MACOS=$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")
 BAD=$(find "$APP" -type f -print0 | while IFS= read -r -d '' f; do
     archs=$(lipo -archs "$f" 2>/dev/null) || continue  # not a Mach-O file

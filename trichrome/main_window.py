@@ -32,6 +32,7 @@ from .quick_tour import finish_quick_tour, open_quick_tour
 from .hq_preview_worker import HQPreviewWorker
 from .export_worker import BatchExportWorker
 from . import preview_cache
+from . import self_update
 from .preview_upgrade_worker import PreviewUpgradeWorker, preview_decode_workers
 from .import_worker import BatchImportWorker
 from .update_checker import UpdateCheckWorker, parse_version
@@ -7905,7 +7906,21 @@ class MainWindow(QMainWindow):
         SettingsDialog(self, ORG_NAME, APP_NAME, parent=self).exec()
 
     def show_check_updates_dialog(self) -> None:
-        UpdateCheckDialog(self).exec()
+        self._run_update_dialog(UpdateCheckDialog(self))
+
+    def _run_update_dialog(self, dialog: UpdateCheckDialog) -> None:
+        """Shows the dialog; if it ends with a downloaded, checked update
+        (Restart Now), quits through the normal close path - unsaved changes,
+        running export and so on all still ask - and only then starts the
+        bundle swap (self_update.launch_installer). If the user cancels the
+        quit, the staged update is dropped."""
+        if dialog.exec() != QDialog.Accepted or dialog.staged_update is None:
+            return
+        if self.close():
+            self_update.launch_installer(dialog.staged_update)
+            QApplication.instance().quit()
+        else:
+            self_update.discard_staged_update(dialog.staged_update)
 
     def start_update_check_at_startup(self) -> None:
         """Launch-time entry point (main.py), while Preferences > General >
@@ -7929,7 +7944,7 @@ class MainWindow(QMainWindow):
         self._startup_update_worker = None
         self._startup_update_thread = None
 
-    def _on_startup_update_result(self, latest_version: str, release_url: str) -> None:
+    def _on_startup_update_result(self, latest_version: str, release_url: str, assets: dict) -> None:
         # Quick Tour always has priority over this prompt - main.py already
         # sequences the check to start after the tour is done, but a slow
         # request can still resolve while the user has since opened the tour
@@ -7938,7 +7953,7 @@ class MainWindow(QMainWindow):
         if (parse_version(latest_version) > parse_version(__version__)
                 and self.isVisible() and QApplication.activeModalWidget() is None
                 and getattr(self, "_quick_tour", None) is None):
-            UpdateCheckDialog(self, initial_result=(latest_version, release_url)).exec()
+            self._run_update_dialog(UpdateCheckDialog(self, initial_result=(latest_version, release_url, assets)))
 
     def _stop_startup_update_check(self) -> None:
         """Called on quit: never let the QThread be destroyed while running
