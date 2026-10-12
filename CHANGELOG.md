@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.1 — 2026-10-12
+
+- The window now fits smaller screens at launch (opens maximized when the
+  default size doesn't fit).
+- New app description in the welcome window.
+
 ## v1.1.0 — 2026-10-12
 
 - **Windows version** (Windows 10 and 11, 64-bit), with an installer and

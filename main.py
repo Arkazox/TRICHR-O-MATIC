@@ -154,7 +154,7 @@ def main() -> int:
     # that case explicitly rather than losing the request.
     if app.pending_open_path:
         _open_session_file(window, app.pending_open_path)
-    window.show()
+    window.show_fitted_to_screen()
 
     def _startup_sequence() -> None:
         # Quick Tour welcome window, while "Open at startup" is checked -

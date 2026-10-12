@@ -29,7 +29,10 @@ fi
 run "$PY" -m pip install --upgrade pip -q
 run "$PY" -m pip install -r requirements.txt -q
 
-rm -rf "$WORK" "$DIST"
+# Clear only what a build or publish_public.sh writes: $DIST/_old/ is an
+# archive of earlier builds and must survive every build.
+rm -rf "$WORK" "$DIST/Trichr-o-matic" "$DIST/Trichr-o-matic.app"
+rm -f "$DIST"/Trichr-o-matic-v*.zip
 run "$PY" -m PyInstaller trichrome.spec --noconfirm --distpath "$DIST" --workpath "$WORK"
 
 # Every Mach-O file in the bundle must contain the target architecture and

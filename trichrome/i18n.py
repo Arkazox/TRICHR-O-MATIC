@@ -299,7 +299,7 @@ EN = {
     "quick_tour_welcome_title": "Welcome to Trichr-o-matic",
     "quick_tour_version": "Version {version}",
     "quick_tour_welcome_text": (
-        "Trichr-o-matic is an app built for processing trichrome photography. Importing the Red, Green and Blue layers, aligning them and color-grading your photos: all of this is possible with Trichr-o-matic, and much more.\n\nStart the tour to learn more."
+        "Trichr-o-matic is an app designed for trichrome photography.\nFrom three black and white shots to the recomposed color image, its complete set of tools keeps every step simple: import, align, edit and export your photos with ease.\n\nStart the tour to learn more."
     ),
     "quick_tour_open_at_startup": "Open at startup",
     "quick_tour_close": "Close",
@@ -1195,7 +1195,7 @@ FR = {
     "quick_tour_welcome_title": "Bienvenue dans Trichr-o-matic",
     "quick_tour_version": "Version {version}",
     "quick_tour_welcome_text": (
-        "Trichr-o-matic est une application pensée pour le traitement de la photographie trichrome. Importer les couches R/V/B, les aligner et étalonner vos photos : tout cela est possible avec Trichr-o-matic, et bien plus encore.\n\nCommencez la présentation pour en savoir plus."
+        "Trichr-o-matic est une app pensée pour la photographie trichrome.\nDe trois photographies noir et blanc à l'image couleur recomposée, sa palette d'outils complète simplifie chaque étape : importez, alignez, retouchez et exportez vos photos en toute facilité.\n\nCommencez la présentation pour en savoir plus."
     ),
     "quick_tour_open_at_startup": "Ouvrir au démarrage",
     "quick_tour_close": "Fermer",

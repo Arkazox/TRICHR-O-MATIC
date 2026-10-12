@@ -2373,6 +2373,26 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Fullscreen / focus mode
     # ------------------------------------------------------------------
+    # Room left around the default-size window for its title bar and frame:
+    # below this the window opens maximized instead.
+    _SCREEN_FIT_MARGIN = 80
+
+    def show_fitted_to_screen(self) -> None:
+        """First show: the default size, centered, when it fits the screen's
+        usable area, else maximized. 1500x950 is larger than common Windows
+        laptops (1366x768, or 1920x1080 at 150% scaling = 1280x720)."""
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            self.show()
+            return
+        available = screen.availableGeometry()
+        if (self.width() + self._SCREEN_FIT_MARGIN > available.width()
+                or self.height() + self._SCREEN_FIT_MARGIN > available.height()):
+            self.showMaximized()
+            return
+        self.move(available.center() - self.rect().center())
+        self.show()
+
     def _update_fullscreen_action_text(self) -> None:
         key = "menu_view_exit_fullscreen" if self._is_focus_mode else "menu_view_fullscreen"
         self.view_fullscreen_action.setText(i18n.tr(key) + os_integration.platform_text("\t⌘F"))
