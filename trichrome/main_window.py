@@ -7,8 +7,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import re
-import subprocess
-import sys
 import time
 import unicodedata
 from html import escape as _html_escape
@@ -26,7 +24,7 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
-from . import alignment, i18n, imaging
+from . import alignment, i18n, imaging, os_integration, theme
 from .batch_window import BatchWindow
 from .quick_tour import finish_quick_tour, open_quick_tour
 from .hq_preview_worker import HQPreviewWorker
@@ -513,6 +511,9 @@ def _session_state_key(key_prefix: str, suffix: str) -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # Appearance first: every widget built below reads its colors from it.
+        theme.install(QApplication.instance(), QSettings(ORG_NAME, APP_NAME).value(
+            theme.APPEARANCE_KEY, theme.DEFAULT_APPEARANCE, type=str))
         self._load_language_setting()
         self._app_menu_translator = _AppMenuTranslator(self)
         QCoreApplication.installTranslator(self._app_menu_translator)
@@ -671,7 +672,9 @@ class MainWindow(QMainWindow):
         # Preferences > Experimental. Off: Scan is unreachable (see
         # _apply_scan_tool_ui_state); block_visible["scan"] is left alone so
         # turning it back on restores the block where it was.
-        self.scan_tool_enabled = setting_bool(ORG_NAME, APP_NAME, SCAN_TOOL_ENABLED_KEY, default=False)
+        self.scan_tool_enabled = (
+            os_integration.SCAN_TOOL_AVAILABLE
+            and setting_bool(ORG_NAME, APP_NAME, SCAN_TOOL_ENABLED_KEY, default=False))
         # Preferences > General > Check for updates at startup. The thread
         # refs follow the same "None when idle" convention as the other
         # background workers (_hq_thread, _export_thread, etc.).
@@ -728,7 +731,7 @@ class MainWindow(QMainWindow):
         self.save_session_as_action.setText(i18n.tr("menu_save_session_as"))
         self.export_action.setText(i18n.tr("export_button"))
         self.batch_action.setText(i18n.tr("menu_batch"))
-        self.quit_action.setText(i18n.tr("menu_quit"))
+        self.quit_action.setText(i18n.tr("menu_quit") + self._quit_shortcut_label())
         self.settings_action.setText(i18n.tr("menu_settings"))
         self.edit_menu.setTitle(i18n.tr("menu_edit"))
         self.undo_action.setText(i18n.tr("menu_undo"))
@@ -737,22 +740,26 @@ class MainWindow(QMainWindow):
         self.paste_action.setText(i18n.tr("menu_edit_paste"))
         self.rotate_right_action.setText(i18n.tr("menu_edit_rotate_right"))
         self.rotate_left_action.setText(i18n.tr("menu_edit_rotate_left"))
-        self.delete_selection_action.setText(i18n.tr("menu_edit_delete") + "\t⌘⌫")
+        self.delete_selection_action.setText(i18n.tr("menu_edit_delete") + os_integration.platform_text("\t⌘⌫"))
         self.tools_menu.setTitle(i18n.tr("menu_tools"))
         for key, action in self.block_menu_actions.items():
             action.setText(i18n.tr(_BLOCK_MENU_LABEL_KEYS[key]))
         self.view_menu.setTitle(i18n.tr("menu_view"))
-        self.view_zoom_in_action.setText(i18n.tr("menu_view_zoom_in") + "\t⌘=")
-        self.view_zoom_out_action.setText(i18n.tr("menu_view_zoom_out") + "\t⌘-")
+        self.view_zoom_in_action.setText(i18n.tr("menu_view_zoom_in") + os_integration.platform_text("\t⌘="))
+        self.view_zoom_out_action.setText(i18n.tr("menu_view_zoom_out") + os_integration.platform_text("\t⌘-"))
         self.view_zoom_fit_action.setText(i18n.tr("menu_view_zoom_fit") + "\tF")
         self.view_zoom_100_action.setText(i18n.tr("menu_view_zoom_100") + "\tZ")
         self.view_hq_preview_action.setText(i18n.tr("menu_view_hq_preview") + "\tH")
-        self.view_compare_action.setText(i18n.tr("menu_view_compare") + "\t:")
+        # macOS remaps a menu-bar key equivalent to the same physical key of
+        # the current keyboard layout (":" read "°" on a French one); a
+        # fullwidth colon is on no layout, so it stays as drawn.
+        compare_key = ":" if os_integration.IS_WINDOWS else "\uff1a"
+        self.view_compare_action.setText(i18n.tr("menu_view_compare") + "\t" + compare_key)
         self._update_fullscreen_action_text()
         self.view_thumbnails_action.setText(i18n.tr("menu_view_thumbnails") + "\tP")
         self.view_grid_action.setText(i18n.tr("menu_view_grid") + "\tG")
         self.window_menu.setTitle(i18n.tr("menu_window"))
-        self.window_close_action.setText(i18n.tr("menu_window_close") + "\t⌘W")
+        self.window_close_action.setText(i18n.tr("menu_window_close") + os_integration.platform_text("\t⌘W"))
         self.window_left_panel_action.setText(i18n.tr("menu_window_left_panel") + "\tI")
         self.window_right_panel_action.setText(i18n.tr("menu_window_right_panel") + "\tO")
         self.window_thumbnails_action.setText(i18n.tr("menu_window_thumbnails") + "\tP")
@@ -765,7 +772,7 @@ class MainWindow(QMainWindow):
         self.reset_layout_action.setText(i18n.tr("menu_window_reset_layout"))
         self.help_menu.setTitle(i18n.tr("menu_help"))
         self.quick_tour_action.setText(i18n.tr("menu_quick_tour_action"))
-        self.quickstart_action.setText(i18n.tr("menu_quickstart_action"))
+        self.quickstart_action.setText(i18n.tr("menu_quickstart_action") + "\tF1")
         self.shortcuts_action.setText(i18n.tr("menu_shortcuts_action"))
         self.check_updates_action.setText(i18n.tr("menu_check_updates_action"))
         self.light_mode_toggle_action.setText(
@@ -846,7 +853,13 @@ class MainWindow(QMainWindow):
     # UI construction
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
+        # Windows has no application menu: a first menu named after the app
+        # holds what macOS puts there (Preferences, Keyboard Shortcuts, Check
+        # for Updates, Quit). On macOS those stay in File, and their menu
+        # roles move them into the application menu.
+        self.app_menu = self.menuBar().addMenu("Trichr-o-matic") if os_integration.IS_WINDOWS else None
         self.file_menu = self.menuBar().addMenu(i18n.tr("menu_file"))
+        app_items_menu = self.app_menu if self.app_menu is not None else self.file_menu
         self.load_actions: list[QAction] = []
         for i in range(3):
             act = QAction(i18n.tr("menu_load_channel", channel=i18n.channel_name(i)), self)
@@ -880,7 +893,8 @@ class MainWindow(QMainWindow):
         self.batch_action.setShortcut(QKeySequence("Ctrl+I"))
         self.batch_action.triggered.connect(self.open_batch_window)
         self.file_menu.addAction(self.batch_action)
-        self.file_menu.addSeparator()
+        if self.app_menu is None:
+            self.file_menu.addSeparator()
         # Preferences… - PreferencesRole moves it into the macOS application
         # menu (Trichr-o-matic > Preferences…), where Cmd+, is the standard
         # shortcut. Its title there comes from _AppMenuTranslator.
@@ -890,26 +904,28 @@ class MainWindow(QMainWindow):
         self.settings_action.setShortcut(QKeySequence(Qt.CTRL | Qt.Key_Comma))
         self.settings_action.setMenuRole(QAction.PreferencesRole)
         self.settings_action.triggered.connect(self.open_settings_dialog)
-        self.file_menu.addAction(self.settings_action)
+        app_items_menu.addAction(self.settings_action)
         # Keyboard Shortcuts sits right under Preferences in the macOS
         # application menu. ApplicationSpecificRole is what makes Qt's Cocoa
-        # plugin move it there (on other platforms it stays in File).
+        # plugin move it there (on Windows it goes in the Trichr-o-matic menu).
         self.shortcuts_action = QAction(i18n.tr("menu_shortcuts_action"), self)
         self.shortcuts_action.setMenuRole(QAction.ApplicationSpecificRole)
         self.shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
-        self.file_menu.addAction(self.shortcuts_action)
+        app_items_menu.addAction(self.shortcuts_action)
         # Check for Updates sits right under Shortcuts in the macOS
         # application menu - same ApplicationSpecificRole trick, added
         # right after it so Qt's Cocoa plugin keeps that order.
         self.check_updates_action = QAction(i18n.tr("menu_check_updates_action"), self)
         self.check_updates_action.setMenuRole(QAction.ApplicationSpecificRole)
         self.check_updates_action.triggered.connect(self.show_check_updates_dialog)
-        self.file_menu.addAction(self.check_updates_action)
-        self.quit_action = QAction(i18n.tr("menu_quit"), self)
+        app_items_menu.addAction(self.check_updates_action)
+        self.quit_action = QAction(i18n.tr("menu_quit") + self._quit_shortcut_label(), self)
         self.quit_action.setShortcut(QKeySequence.Quit)
         self.quit_action.setMenuRole(QAction.QuitRole)
         self.quit_action.triggered.connect(self.close)
-        self.file_menu.addAction(self.quit_action)
+        if self.app_menu is not None:
+            self.app_menu.addSeparator()
+        app_items_menu.addAction(self.quit_action)
 
         self.edit_menu = self.menuBar().addMenu(i18n.tr("menu_edit"))
         self.undo_action = QAction(i18n.tr("menu_undo"), self)
@@ -919,6 +935,11 @@ class MainWindow(QMainWindow):
         self.edit_menu.addAction(self.undo_action)
         self.redo_action = QAction(i18n.tr("menu_redo"), self)
         self.redo_action.setShortcut(QKeySequence.Redo)
+        if os_integration.IS_WINDOWS:
+            # QKeySequence.Redo resolves to Ctrl+Y alone on Windows; keep
+            # Ctrl+Shift+Z too, the binding the Guide documents.
+            self.redo_action.setShortcuts(
+                [QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])
         self.redo_action.triggered.connect(self.redo)
         self.redo_action.setEnabled(False)
         self.edit_menu.addAction(self.redo_action)
@@ -1110,6 +1131,9 @@ class MainWindow(QMainWindow):
 
         fullscreen_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         fullscreen_shortcut.activated.connect(self.toggle_focus_mode)
+        if os_integration.IS_WINDOWS:
+            # F11 is the usual full-screen key on Windows.
+            QShortcut(QKeySequence("F11"), self).activated.connect(self.toggle_focus_mode)
         help_shortcut = QShortcut(QKeySequence("F1"), self)
         help_shortcut.activated.connect(self.show_quickstart_dialog)
 
@@ -1454,6 +1478,11 @@ class MainWindow(QMainWindow):
         # Only ever scrolls vertically - content must fit the column's width,
         # not spill sideways into a horizontal scrollbar.
         self.right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.left_scroll.setObjectName("leftPanelScroll")
+        self.right_scroll.setObjectName("rightPanelScroll")
+        self._apply_panel_hairlines()
+        theme.on_change(self._apply_toolbar_style)
+        theme.on_change(self._apply_panel_hairlines)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.left_scroll)
@@ -1703,6 +1732,27 @@ class MainWindow(QMainWindow):
     _TOP_TOOLBAR_BTN_SIZE = (32, _TOP_TOOLBAR_HEIGHT)
     _TOP_TOOLBAR_ICON_SIZE = 24
 
+    def _apply_toolbar_style(self) -> None:
+        # Fusion (Windows) adds a bottom hairline: macOS gets that line from
+        # the native frames of the panels and preview right below.
+        bottom = (f"border-bottom: 1px solid {theme.hairline_color()}; "
+                  if theme.USES_FUSION else "")
+        self.top_toolbar.setStyleSheet(
+            "#topToolbarBar { border: none; "
+            f"border-top: 1px solid rgba(128, 128, 128, 90); {bottom}}}"
+        )
+
+    def _apply_panel_hairlines(self) -> None:
+        """Fusion (Windows) only: the line between each side panel and the
+        preview, which the native macOS scroll-area frame draws by itself."""
+        if not theme.USES_FUSION:
+            return
+        line = f"1px solid {theme.hairline_color()}"
+        self.left_scroll.setStyleSheet(
+            f"#leftPanelScroll {{ border: none; border-right: {line}; }}")
+        self.right_scroll.setStyleSheet(
+            f"#rightPanelScroll {{ border: none; border-left: {line}; }}")
+
     def _build_top_toolbar(self) -> None:
         """A plain-widget bar sitting below the native title bar, mirroring
         the bottom bar's borderless SVG icon-button style. Left cluster:
@@ -1732,10 +1782,7 @@ class MainWindow(QMainWindow):
         # wherever the preview canvas's own frame starts right below, not
         # inside a second, narrower box this line would draw. Only border-top
         # remains, for the hairline under the title bar.
-        self.top_toolbar.setStyleSheet(
-            "#topToolbarBar { border: none; "
-            "border-top: 1px solid rgba(128, 128, 128, 90); }"
-        )
+        self._apply_toolbar_style()
         toolbar_layout = QHBoxLayout(self.top_toolbar)
         # 0, not 10px side margins: real fixed-width spacer widgets (below)
         # are used instead for guaranteed, symmetric edge spacing - a plain
@@ -2328,7 +2375,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _update_fullscreen_action_text(self) -> None:
         key = "menu_view_exit_fullscreen" if self._is_focus_mode else "menu_view_fullscreen"
-        self.view_fullscreen_action.setText(i18n.tr(key) + "\t⌘F")
+        self.view_fullscreen_action.setText(i18n.tr(key) + os_integration.platform_text("\t⌘F"))
 
     def toggle_focus_mode(self) -> None:
         self._is_focus_mode = not self._is_focus_mode
@@ -2338,10 +2385,19 @@ class MainWindow(QMainWindow):
         if self._is_focus_mode:
             self.left_scroll.setVisible(False)
             self.right_scroll.setVisible(False)
+            # Remembered so leaving restores it: a maximized (or already full
+            # screen) window must not drop back to its normal size.
+            self._window_state_before_focus = self.windowState()
             self.showFullScreen()
             self.fullscreen_btn.setToolTip(i18n.tr("exit_fullscreen_button"))
         else:
-            self.showNormal()
+            previous = getattr(self, "_window_state_before_focus", Qt.WindowNoState)
+            if previous & Qt.WindowFullScreen:
+                pass  # it was already full screen: only the panels come back
+            elif previous & Qt.WindowMaximized:
+                self.showMaximized()
+            else:
+                self.showNormal()
             # Respect whatever the left/right panel toggle buttons were set
             # to before entering fullscreen, rather than forcing both back
             # on - except the right panel, which must stay hidden in Light
@@ -2654,6 +2710,13 @@ class MainWindow(QMainWindow):
             _GENERAL_SHORTCUTS_PLACEHOLDER, self._general_shortcuts_html())
         self._show_shortcuts_dialog(i18n.tr("help_shortcuts_title"), content)
 
+    @staticmethod
+    def _quit_shortcut_label() -> str:
+        """QKeySequence.Quit is empty on Windows: Alt+F4 is handled by the
+        window manager and closes the main window, which runs the same
+        closeEvent as Quit. The menu shows it as display-only text."""
+        return "\tAlt+F4" if os_integration.IS_WINDOWS else ""
+
     def _shortcut_key_text(self, action: QAction) -> str:
         """Display text for a live QAction shortcut (e.g. "Cmd+Shift+S"),
         used by _general_shortcuts_html() so the Shortcuts dialog can't
@@ -2661,10 +2724,12 @@ class MainWindow(QMainWindow):
         bit the arrow-key alignment nudge earlier. QKeySequence.PortableText
         always spells the modifier as "Ctrl"/"Shift" regardless of platform
         or language, so both get substituted for this app's own display
-        convention (mac "Cmd", and Shift translated for the current UI
-        language)."""
+        convention (mac "Cmd", Windows "Ctrl", and Shift translated for the
+        current UI language)."""
         text = action.shortcut().toString(QKeySequence.PortableText)
-        return text.replace("Ctrl", "Cmd").replace("Shift", i18n.tr("shortcut_key_shift"))
+        if os_integration.IS_MAC:
+            text = text.replace("Ctrl", "Cmd")
+        return text.replace("Shift", i18n.tr("shortcut_key_shift"))
 
     def _general_shortcuts_html(self) -> str:
         """The Shortcuts dialog's "Files & Edit" section is part static text
@@ -3049,7 +3114,8 @@ class MainWindow(QMainWindow):
             styled_body = re.sub(r"<h4>", f'<h4 style="color:{normal};">', styled_body)
             styled_body = re.sub(
                 r"<kbd>(.*?)</kbd>",
-                rf'<span style="background-color:{kbd_bg}; color:{normal}; font-weight:600;">'
+                rf'<span style="background-color:{kbd_bg}; color:{normal}; font-weight:600;'
+                rf'{os_integration.KBD_FONT_CSS}">'
                 r"&nbsp;\1&nbsp;</span>",
                 styled_body)
             body_label = QLabel(f'<div style="color:{muted};">{styled_body}</div>')
@@ -5216,36 +5282,16 @@ class MainWindow(QMainWindow):
         self._show_save_status()
 
     def _play_delete_sound(self) -> None:
-        if sys.platform == "darwin" and setting_bool(ORG_NAME, APP_NAME, PLAY_SOUNDS_KEY):
-            try:
-                subprocess.Popen(
-                    ["afplay", "/System/Library/Sounds/Pop.aiff"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
+        if setting_bool(ORG_NAME, APP_NAME, PLAY_SOUNDS_KEY):
+            os_integration.play_sound("delete")
 
     def _play_export_done_sound(self) -> None:
-        # Hero.aiff, not Glass (saving) or Pop (deleting), so a finished
-        # export is told apart by ear.
-        if sys.platform == "darwin" and setting_bool(ORG_NAME, APP_NAME, PLAY_SOUNDS_KEY):
-            try:
-                subprocess.Popen(
-                    ["afplay", "/System/Library/Sounds/Hero.aiff"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
+        if setting_bool(ORG_NAME, APP_NAME, PLAY_SOUNDS_KEY):
+            os_integration.play_sound("export_done")
 
     def _show_save_status(self) -> None:
-        if sys.platform == "darwin" and setting_bool(ORG_NAME, APP_NAME, PLAY_SOUNDS_KEY):
-            try:
-                subprocess.Popen(
-                    ["afplay", "/System/Library/Sounds/Glass.aiff"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
+        if setting_bool(ORG_NAME, APP_NAME, PLAY_SOUNDS_KEY):
+            os_integration.play_sound("save")
         # No "Session Saved" text afterward - the bottom-left "Saving session…"
         # activity (kept up 1.5s minimum) plus this sound are the whole
         # feedback.
@@ -7902,6 +7948,12 @@ class MainWindow(QMainWindow):
         self._apply_block_layout()
         return enabled
 
+    def set_appearance(self, appearance: str) -> None:
+        """Preferences > General > Appearance: applies at once, every
+        theme-dependent widget restyles through theme.on_change()."""
+        QSettings(ORG_NAME, APP_NAME).setValue(theme.APPEARANCE_KEY, appearance)
+        theme.apply(appearance)
+
     def open_settings_dialog(self) -> None:
         SettingsDialog(self, ORG_NAME, APP_NAME, parent=self).exec()
 
@@ -8056,11 +8108,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(i18n.tr("status_export_finished", status=message), 8000)
         if ok and self._export_reveal and not cancelled:
             if ok == 1:
-                subprocess.run(["open", "-R", self._export_ok_paths[0]])
+                os_integration.reveal_file(self._export_ok_paths[0])
             elif self._export_output_dir:
                 # Nothing to reveal for "same as source" batches - each item
                 # lands next to its own source file, no single shared folder.
-                subprocess.run(["open", self._export_output_dir])
+                os_integration.open_folder(self._export_output_dir)
         if not cancelled:
             self._play_export_done_sound()
         if failed and not cancelled:

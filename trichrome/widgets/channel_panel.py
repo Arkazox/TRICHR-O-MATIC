@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
-from .. import i18n
+from .. import i18n, theme
 from .controls import CollapsibleSection, SliderSpin
 from .info_bubble import InfoButton
 from .svg_icons import HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgToolButton
@@ -216,9 +216,6 @@ class ChannelTabFrame(QFrame):
     # between its own Alignment/Light sections. Left/right/bottom stay at plain
     # _CONTENT_MARGIN.
     _TOP_EXTRA_GAP = 8
-    _SHELF_COLOR = QColor(255, 255, 255, 16)
-    _DIVIDER_COLOR = QColor(255, 255, 255, 40)
-    _PANE_BG = QColor("#232227")
 
     def __init__(self, labels: list[str], content: QWidget, parent: QWidget | None = None):
         super().__init__(parent)
@@ -279,7 +276,7 @@ class ChannelTabFrame(QFrame):
         self._paint_shelf(painter)
 
         path = self._folder_path()
-        painter.fillPath(path, self._PANE_BG)
+        painter.fillPath(path, theme.channel_pane_colors()["pane"])
         # No colored border stroke - just the fill silhouette. See the notes
         # above for the full pen/path setup if a border comes back.
         painter.end()
@@ -324,10 +321,11 @@ class ChannelTabFrame(QFrame):
             round_left = start == 0
             round_right = end == n
             painter.fillPath(
-                self._shelf_segment_path(x0, x1, shelf_h, round_left, round_right), self._SHELF_COLOR)
+                self._shelf_segment_path(x0, x1, shelf_h, round_left, round_right),
+                theme.channel_pane_colors()["shelf"])
             if end - start == 2:
                 mid, _ = self._tab_bounds(start + 1)
-                painter.setPen(QPen(self._DIVIDER_COLOR, 1))
+                painter.setPen(QPen(theme.channel_pane_colors()["divider"], 1))
                 painter.drawLine(QPointF(mid, 4), QPointF(mid, shelf_h - 4))
 
     def _shelf_segment_path(self, x0: float, x1: float, h: float, round_left: bool, round_right: bool) -> QPainterPath:

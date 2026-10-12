@@ -24,11 +24,21 @@ and other apps that opt in set it), so the new version opens without the
 first-launch Gatekeeper prompt. The flag is still stripped from the staged
 bundle in case an extracted file carried it from the build machine.
 
+Windows: the release ships an Inno Setup installer (installer/trichrome.iss)
+that installs per user, without an administrator prompt. The signed list
+covers it like the zips; once checked it is the staged update itself, and
+launch_installer() runs a hidden PowerShell command that waits for this
+process to exit, then runs it silently with /RELAUNCH=1 (the installer
+reopens the app). Inno Setup rolls back a failed install by itself, and the
+old version is reopened then. A file this app downloads gets no "downloaded
+from the internet" mark either, so SmartScreen doesn't step in.
+
 can_self_update() says when this can't work, and the dialog then falls
-back to opening the release page: running from source, not macOS, no
-public key compiled in, the app running from a translocated (read-only)
-copy because it was never moved out of Downloads, or a folder the user
-can't write to."""
+back to opening the release page: running from source, no public key
+compiled in, on macOS the app running from a translocated (read-only) copy
+because it was never moved out of Downloads or a folder the user can't
+write to, on Windows a copy that wasn't installed by the installer (no
+uninstaller beside it)."""
 from __future__ import annotations
 
 import hashlib
@@ -81,6 +91,8 @@ def _architecture() -> str:
 
 
 def asset_name(version: str) -> str:
+    if sys.platform == "win32":
+        return f"Trichr-o-matic-v{version}-Windows-Setup.exe"
     flavor = "AppleSilicon" if _architecture() == "arm64" else "Intel"
     return f"Trichr-o-matic-v{version}-{flavor}.zip"
 
@@ -94,11 +106,20 @@ def current_bundle_path() -> str | None:
     return bundle if bundle.endswith(".app") else None
 
 
+def _installed_by_installer() -> bool:
+    """Windows: a frozen app with Inno Setup's uninstaller beside it."""
+    if not getattr(sys, "frozen", False):
+        return False
+    return os.path.isfile(os.path.join(os.path.dirname(sys.executable), "unins000.exe"))
+
+
 def can_self_update(assets: dict[str, str], version: str) -> bool:
-    if sys.platform != "darwin" or not UPDATE_PUBLIC_KEY:
+    if sys.platform not in ("darwin", "win32") or not UPDATE_PUBLIC_KEY:
         return False
     if not all(name in assets for name in (SUMS_ASSET, SIGNATURE_ASSET, asset_name(version))):
         return False  # a release published before self-update existed
+    if sys.platform == "win32":
+        return _installed_by_installer()
     bundle = current_bundle_path()
     if bundle is None or "/AppTranslocation/" in bundle:
         return False
@@ -155,8 +176,7 @@ class UpdateDownloadWorker(QObject):
         if expected_hash is None:
             raise ValueError(f"{zip_name} isn't in the signed list")
 
-        bundle = current_bundle_path()
-        self.staging_dir = tempfile.mkdtemp(prefix="Trichr-o-matic-update-")
+        self.staging_dir = tempfile.mkdtemp(prefix=_STAGING_PREFIX)
         zip_path = os.path.join(self.staging_dir, zip_name)
         digest = hashlib.sha256()
         with open_url(self._assets[zip_name]) as response, open(zip_path, "wb") as out:
@@ -174,6 +194,9 @@ class UpdateDownloadWorker(QObject):
                 self.progress.emit(received, total)
         if digest.hexdigest() != expected_hash:
             raise ValueError("the download is corrupted (checksum mismatch)")
+        if sys.platform == "win32":
+            return zip_path  # the signed installer is the staged update
+        bundle = current_bundle_path()
 
         extract_dir = os.path.join(self.staging_dir, "extracted")
         subprocess.run(["ditto", "-x", "-k", zip_path, extract_dir], check=True, capture_output=True)
@@ -199,14 +222,25 @@ class UpdateDownloadWorker(QObject):
         return new_app
 
 
+_STAGING_PREFIX = "Trichr-o-matic-update-"
+
+
 def discard_staging(staging_dir: str | None) -> None:
-    if staging_dir and os.path.basename(staging_dir).startswith("Trichr-o-matic-update-"):
+    if staging_dir and os.path.basename(staging_dir).startswith(_STAGING_PREFIX):
         shutil.rmtree(staging_dir, ignore_errors=True)
+
+
+def _staging_dir_of(path: str) -> str | None:
+    while path and os.path.dirname(path) != path:
+        if os.path.basename(path).startswith(_STAGING_PREFIX):
+            return path
+        path = os.path.dirname(path)
+    return None
 
 
 def discard_staged_update(new_app: str) -> None:
     """Drops a staged update that won't be installed (quit cancelled)."""
-    discard_staging(os.path.dirname(os.path.dirname(new_app)))
+    discard_staging(_staging_dir_of(new_app))
 
 
 _INSTALLER_SCRIPT = """#!/bin/sh
@@ -226,13 +260,43 @@ open "$old_app"
 """
 
 
-def launch_installer(new_app: str) -> None:
-    """Starts the detached swap script. Call right before quitting."""
+def _powershell_quote(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _launch_windows_installer(installer: str, pid: int, app_exe: str) -> None:
+    staging = _staging_dir_of(installer) or os.path.dirname(installer)
+    command = (
+        f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; "
+        f"$p = Start-Process -FilePath {_powershell_quote(installer)} -PassThru "
+        "-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/RELAUNCH=1'; "
+        # WaitForExit, not Start-Process -Wait: -Wait also waits for every
+        # process the installer starts, the relaunched app included. Reading
+        # Handle first keeps ExitCode available after exit.
+        "$null = $p.Handle; $p.WaitForExit(); "
+        # The installer relaunches the app itself; on failure it has rolled
+        # back, so reopen the old version.
+        f"if ($p.ExitCode -ne 0) {{ Start-Process -FilePath {_powershell_quote(app_exe)} }}; "
+        f"Remove-Item -LiteralPath {_powershell_quote(staging)} -Recurse -Force -ErrorAction SilentlyContinue"
+    )
+    subprocess.Popen(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", command],
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+
+
+def launch_installer(new_app: str, pid: int | None = None, app_exe: str | None = None) -> None:
+    """Starts the detached install step. Call right before quitting.
+    ``pid`` / ``app_exe`` default to this process and its executable (the CI
+    test passes a stand-in process instead)."""
+    if sys.platform == "win32":
+        _launch_windows_installer(new_app, pid or os.getpid(), app_exe or sys.executable)
+        return
     bundle = current_bundle_path()
     staging = os.path.dirname(os.path.dirname(new_app))
     script = os.path.join(staging, "install.sh")
     with open(script, "w") as f:
         f.write(_INSTALLER_SCRIPT)
     subprocess.Popen(
-        ["/bin/sh", script, str(os.getpid()), bundle, new_app, staging],
+        ["/bin/sh", script, str(pid or os.getpid()), bundle, new_app, staging],
         start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

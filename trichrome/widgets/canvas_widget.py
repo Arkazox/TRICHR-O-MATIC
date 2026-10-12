@@ -11,7 +11,7 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QScrollArea
 
-from .. import i18n, imaging
+from .. import i18n, imaging, os_integration
 from .svg_icons import tinted_svg_pixmap
 
 MIN_ZOOM = 0.05
@@ -659,7 +659,11 @@ class _ImageLabel(QLabel):
             self.scale_delta.emit(max(0.01, factor))
             event.accept()
         elif self.align_enabled and (modifiers & Qt.AltModifier):
-            self.rotate_delta.emit(event.angleDelta().y() / 1200.0 * 5.0)
+            delta = event.angleDelta().y()
+            if os_integration.IS_WINDOWS and not delta:
+                # Qt on Windows turns an Alt+wheel turn into a horizontal one.
+                delta = event.angleDelta().x()
+            self.rotate_delta.emit(delta / 1200.0 * 5.0)
             event.accept()
         elif modifiers & Qt.ControlModifier:
             factor = 1.0 + (event.angleDelta().y() / 1000.0)

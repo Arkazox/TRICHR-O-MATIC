@@ -26,7 +26,7 @@ from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QWidget
 
 from .. import i18n, imaging
 from .block_header_bar import finish_block_chrome, start_block_chrome
-from .curve_editor import CURVE_CHANNEL_COLORS, CurveEditor
+from .curve_editor import CurveEditor, curve_channel_color
 from .svg_icons import HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgLetterToggleButton, SvgToolButton
 
 _CHANNELS = ("Y", "R", "G", "B")
@@ -61,7 +61,7 @@ class CurvesPanel(QGroupBox):
         channel_row = QHBoxLayout()
         self._channel_buttons: dict[str, SvgLetterToggleButton] = {}
         for ch in _CHANNELS:
-            btn = SvgLetterToggleButton(ch, CURVE_CHANNEL_COLORS[ch], size=(32, 28), icon_size=22)
+            btn = SvgLetterToggleButton(ch, lambda ch=ch: curve_channel_color(ch), size=(32, 28), icon_size=22)
             btn.setCheckable(False)
             btn.set_active(ch == self._active_channel)
             btn.clicked.connect(lambda _checked=False, c=ch: self._select_channel(c))

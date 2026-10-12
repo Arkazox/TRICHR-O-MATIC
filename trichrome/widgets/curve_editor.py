@@ -33,19 +33,18 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from .. import imaging
+from .. import imaging, theme
 from .channel_panel import CHANNEL_COLORS
 
 _IDENTITY_POINTS = [(0.0, 0.0), (1.0, 1.0)]
 
 # Same colors HistogramPanel's own Y/R/G/B channel buttons use - Y has no
 # real "channel" color of its own, just a light neutral gray.
-CURVE_CHANNEL_COLORS = {
-    "Y": QColor(220, 220, 220),
-    "R": QColor(CHANNEL_COLORS["R"]),
-    "G": QColor(CHANNEL_COLORS["G"]),
-    "B": QColor(CHANNEL_COLORS["B"]),
-}
+_RGB_COLORS = {ch: QColor(CHANNEL_COLORS[ch]) for ch in "RGB"}
+
+
+def curve_channel_color(ch: str) -> QColor:
+    return theme.luminance_channel_color() if ch == "Y" else _RGB_COLORS[ch]
 
 _MARGIN = 10.0
 _HANDLE_RADIUS = 5.5  # matches _ResettableSlider.HANDLE_RADIUS exactly
@@ -200,13 +199,14 @@ class CurveEditor(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = self._plot_rect()
 
-        painter.setPen(QPen(QColor(90, 90, 96), 1.0))
-        painter.setBrush(QColor(38, 38, 42))
+        plot = theme.plot_colors()
+        painter.setPen(QPen(plot["border"], 1.0))
+        painter.setBrush(plot["curve_bg"])
         painter.drawRect(rect)
 
         # Faint quarter grid, same quiet always-on tonal reference spirit as
         # the histogram's own shadow/midtone/highlight divider lines.
-        grid_pen = QPen(QColor(255, 255, 255, 22), 1.0)
+        grid_pen = QPen(plot["grid"], 1.0)
         painter.setPen(grid_pen)
         for frac in (0.25, 0.5, 0.75):
             gx = rect.left() + frac * rect.width()
@@ -215,10 +215,10 @@ class CurveEditor(QWidget):
             painter.drawLine(QPointF(rect.left(), gy), QPointF(rect.right(), gy))
 
         # Diagonal identity reference (input == output).
-        painter.setPen(QPen(QColor(255, 255, 255, 40), 1.0, Qt.DashLine))
+        painter.setPen(QPen(plot["diagonal"], 1.0, Qt.DashLine))
         painter.drawLine(self._to_widget(0.0, 0.0), self._to_widget(1.0, 1.0))
 
-        channel_color = CURVE_CHANNEL_COLORS.get(self._channel, CURVE_CHANNEL_COLORS["Y"])
+        channel_color = curve_channel_color(self._channel if self._channel in _RGB_COLORS else "Y")
 
         # The *input* histogram (the pipeline's state right before the curve
         # applies - see CurveEditor's own module docstring and
@@ -262,8 +262,8 @@ class CurveEditor(QWidget):
         # Handles last, same recipe as _ResettableSlider's own handle -
         # hollow ring at rest, filled solid while the point is held.
         enabled = self.isEnabled()
-        handle_color = QColor(232, 232, 232) if enabled else QColor(140, 140, 144)
-        bg = self.palette().color(self.backgroundRole())
+        handle_color = theme.slider_colors(enabled)["handle"]
+        bg = plot["curve_bg"]
         for i, (x, y) in enumerate(self._points):
             center = self._to_widget(x, y)
             if i == self._drag_index:

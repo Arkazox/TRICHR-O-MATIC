@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QStyle, QVBoxLayout, QWidget,
 )
 
-from .. import i18n
+from .. import i18n, os_integration, theme
 from .button_style import style_primary_button
 from .dialog_style import PANEL_PADDING, make_panel, make_section_title
 from .info_bubble import InfoButton
@@ -37,10 +37,13 @@ SCAN_TOOL_ENABLED_KEY = "scan_tool_enabled"
 _CONTENT_WIDTH = 420
 _BOX_PADDING = PANEL_PADDING
 _INNER_WIDTH = _CONTENT_WIDTH - 2 * _BOX_PADDING
-_HELP_STYLE = "color: #888; font-size: 11px;"
+_HELP_STYLE = "color: {color}; font-size: 11px;"
 # Same yellow as the status bar's "mode is active" indicators.
 _EXPERIMENTAL_RGB = "242, 196, 12"
 _LANGUAGES = (("en", "English"), ("fr", "Français"))
+# theme.APPEARANCES order, with each choice's i18n key.
+_APPEARANCE_KEYS = (("dark", "settings_appearance_dark"), ("light", "settings_appearance_light"),
+                    ("system", "settings_appearance_system"))
 
 
 def setting_bool(org_name: str, app_name: str, key: str, default: bool = True) -> bool:
@@ -53,7 +56,9 @@ class SettingsDialog(QDialog):
         self.main_window = main_window
         self._org_name = org_name
         self._app_name = app_name
+        self._help_labels: list[QLabel] = []
         self._build_ui()
+        theme.on_change(self._apply_theme)
         self._load_values()
         self.retranslate_ui()
         QShortcut(QKeySequence.Close, self, activated=self.close)
@@ -93,6 +98,21 @@ class SettingsDialog(QDialog):
         language_row.addStretch(1)
         grid.addWidget(self.language_label, 0, 0)
         grid.addLayout(language_row, 0, 1)
+        self.appearance_label = QLabel()
+        self.appearance_button_group = QButtonGroup(self)
+        self.appearance_radios: dict[str, RadioButton] = {}
+        appearance_row = QHBoxLayout()
+        appearance_row.setSpacing(14)
+        for value, _key in _APPEARANCE_KEYS:
+            radio = RadioButton()
+            radio.toggled.connect(
+                lambda checked, v=value: self._on_appearance_changed(v) if checked else None)
+            self.appearance_button_group.addButton(radio)
+            self.appearance_radios[value] = radio
+            appearance_row.addWidget(radio)
+        appearance_row.addStretch(1)
+        grid.addWidget(self.appearance_label, 1, 0)
+        grid.addLayout(appearance_row, 1, 1)
         grid.setColumnStretch(1, 1)
         box.addLayout(grid)
         box.addSpacing(10)
@@ -163,6 +183,10 @@ class SettingsDialog(QDialog):
         scan_row.addWidget(InfoButton("settings_experimental_info"))
         box.addLayout(scan_row)
         self.scan_tool_help = self._help_label(box, indent)
+        if not os_integration.SCAN_TOOL_AVAILABLE:
+            # Scan is the section's only entry, so the whole section goes.
+            self.experimental_title.hide()
+            experimental_panel.hide()
 
         # --- Footer --------------------------------------------------
         root.addSpacing(20)
@@ -198,7 +222,8 @@ class SettingsDialog(QDialog):
     def _help_label(self, layout: QVBoxLayout, indent: int = 0) -> QLabel:
         layout.addSpacing(4)
         label = QLabel()
-        label.setStyleSheet(_HELP_STYLE)
+        label.setStyleSheet(_HELP_STYLE.format(color=theme.muted_text_color()))
+        self._help_labels.append(label)
         label.setWordWrap(True)
         # Fixed (not maximum) width, so the wrapped height is computed
         # correctly (the same approach as ModeSwitchDialog's detail label).
@@ -223,6 +248,10 @@ class SettingsDialog(QDialog):
         radio.blockSignals(True)
         radio.setChecked(True)
         radio.blockSignals(False)
+        radio = self.appearance_radios.get(theme.current_appearance(), self.appearance_radios["dark"])
+        radio.blockSignals(True)
+        radio.setChecked(True)
+        radio.blockSignals(False)
         self.suffix_edit.setText(settings.value(EXPORT_SUFFIX_KEY, DEFAULT_EXPORT_SUFFIX, type=str))
         self.scan_tool_checkbox.blockSignals(True)
         self.scan_tool_checkbox.setChecked(settings.value(SCAN_TOOL_ENABLED_KEY, False, type=bool))
@@ -232,6 +261,9 @@ class SettingsDialog(QDialog):
         self.setWindowTitle(i18n.tr("settings_title"))
         self.general_title.setText(i18n.tr("settings_section_general"))
         self.language_label.setText(i18n.tr("settings_language"))
+        self.appearance_label.setText(i18n.tr("settings_appearance"))
+        for value, key in _APPEARANCE_KEYS:
+            self.appearance_radios[value].setText(i18n.tr(key))
         self.reopen_checkbox.setText(i18n.tr("settings_reopen_last_session"))
         self.quick_tour_checkbox.setText(i18n.tr("settings_quick_tour_at_startup"))
         self.check_updates_checkbox.setText(i18n.tr("settings_check_updates_at_startup"))
@@ -249,7 +281,7 @@ class SettingsDialog(QDialog):
         self.done_button.setText(i18n.tr("settings_done_button"))
         # The two grids (General, Export) share one label-column width, so
         # every dropdown/field starts at the same x.
-        labels = (self.language_label, self.format_label, self.suffix_label)
+        labels = (self.language_label, self.appearance_label, self.format_label, self.suffix_label)
         for label in labels:
             label.setMinimumWidth(0)
         width = max(label.sizeHint().width() for label in labels)
@@ -268,6 +300,13 @@ class SettingsDialog(QDialog):
     def _on_language_changed(self, code: str) -> None:
         self.main_window.change_language(code)
         self.retranslate_ui()
+
+    def _on_appearance_changed(self, value: str) -> None:
+        self.main_window.set_appearance(value)
+
+    def _apply_theme(self) -> None:
+        for label in self._help_labels:
+            label.setStyleSheet(_HELP_STYLE.format(color=theme.muted_text_color()))
 
     def _on_scan_tool_toggled(self, checked: bool) -> None:
         # The main window may refuse (a capture is running): resync the box.

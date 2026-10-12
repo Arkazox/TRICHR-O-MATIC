@@ -50,11 +50,13 @@ button/Tools menu.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QHBoxLayout, QLabel, QStyle, QStyleOptionGroupBox, QVBoxLayout, QWidget,
+)
 
-from .. import i18n
+from .. import i18n, theme
 from .svg_icons import SvgToolButton
 
 BLOCK_REORDER_MIME = "application/x-trichrome-block-key"
@@ -80,6 +82,40 @@ _BLOCK_MARGIN = 4
 _DRAG_HANDLE_ICON_INSET = 2
 
 
+# Light theme only: the native group-box fill barely separates a block from
+# the light-gray window, so a translucent shade is painted under it (before
+# the native frame, which then draws on top). Fusion's own fill is fainter
+# than macOS's, hence a stronger shade there. Dark is left as it is.
+_LIGHT_BLOCK_SHADE_ALPHA = {"fusion": 14, "native": 9}
+_BLOCK_SHADE_RADIUS = 6.0
+
+
+class _BlockShade(QObject):
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Paint and not theme.is_dark():
+            opt = QStyleOptionGroupBox()
+            opt.initFrom(obj)
+            rect = obj.style().subControlRect(QStyle.CC_GroupBox, opt, QStyle.SC_GroupBoxFrame, obj)
+            if not rect.isValid():
+                rect = obj.rect()
+            # The style reserves room above the frame for a title these
+            # blocks never set; the native fill reaches the top edge, so the
+            # shade does too (same inset as the sides).
+            rect.setTop(obj.rect().top() + rect.left() - obj.rect().left())
+            painter = QPainter(obj)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(Qt.NoPen)
+            alpha = _LIGHT_BLOCK_SHADE_ALPHA["fusion" if theme.USES_FUSION else "native"]
+            painter.setBrush(QColor(0, 0, 0, alpha))
+            painter.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5),
+                                    _BLOCK_SHADE_RADIUS, _BLOCK_SHADE_RADIUS)
+            painter.end()
+        return False
+
+
+_block_shade = _BlockShade()
+
+
 def start_block_chrome(block: QWidget, block_key: str, title_i18n_key: str | None):
     """Sets up block's own top-level QVBoxLayout (tight top+bottom margins) and
     starts its header row with the drag handle, then an optional title. Returns
@@ -101,6 +137,7 @@ def start_block_chrome(block: QWidget, block_key: str, title_i18n_key: str | Non
     # its own title text, reused here as the reference so every side reads as
     # the same margin.
     outer.setContentsMargins(_BLOCK_MARGIN, _BLOCK_MARGIN, _BLOCK_MARGIN, _BLOCK_MARGIN)
+    block.installEventFilter(_block_shade)
 
     header_row = QHBoxLayout()
     header_row.addWidget(BlockDragHandle(block_key, block))

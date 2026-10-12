@@ -14,7 +14,7 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLayout, QPushButton, QVBoxLayout
 
-from .. import i18n
+from .. import i18n, theme
 from .button_style import style_primary_button
 from .channel_panel import CHANNEL_COLORS, CHANNEL_KEY
 from .svg_icons import tinted_svg_icon, tinted_svg_pixmap
@@ -23,24 +23,25 @@ _ICON_SIZE = 36
 _ICON_COLOR = QColor("#f2c40c")
 
 # Icon size and rounded/translucent look matching ImportPanel's own Mode combo
-# (import_panel.py's _MODE_COMBO_ICON_SIZE/_MODE_COMBO_STYLE), so these
+# (import_panel.py's _MODE_COMBO_ICON_SIZE/_mode_combo_style), so these
 # channel-choice buttons read as the same "icon + text, rounded corners" family
 # as that Mode selector, rather than the plain flat rectangle + colored
 # left-border strip they used before.
 _CHANNEL_BUTTON_ICON_SIZE = 18
-_CHANNEL_BUTTON_STYLE = """
-QPushButton {
+def _channel_button_style() -> str:
+    return f"""
+QPushButton {{
     text-align: left;
     padding: 8px 12px;
-    background: rgba(255, 255, 255, 14);
-    border: 1px solid rgba(255, 255, 255, 35);
+    background: {theme.overlay(14)};
+    border: 1px solid {theme.overlay(35)};
     border-radius: 4px;
-    color: #f0f0f0;
-}
-QPushButton:hover {
-    background: rgba(255, 255, 255, 24);
-    border: 1px solid rgba(255, 255, 255, 60);
-}
+    color: {theme.text_color().name()};
+}}
+QPushButton:hover {{
+    background: {theme.overlay(24)};
+    border: 1px solid {theme.overlay(60)};
+}}
 """
 
 
@@ -112,7 +113,7 @@ class ModeSwitchDialog(QDialog):
             btn.setIcon(tinted_svg_icon(f"Global/circle-letter-{label.lower()}.svg",
                                          _CHANNEL_BUTTON_ICON_SIZE, QColor(color), dpr))
             btn.setIconSize(QSize(_CHANNEL_BUTTON_ICON_SIZE, _CHANNEL_BUTTON_ICON_SIZE))
-            btn.setStyleSheet(_CHANNEL_BUTTON_STYLE)
+            btn.setStyleSheet(_channel_button_style())
             btn.clicked.connect(lambda _checked=False, idx=i: self._resolve(idx))
             root.addWidget(btn)
             self.channel_buttons.append(btn)

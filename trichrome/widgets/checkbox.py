@@ -8,7 +8,8 @@ own label and ignores the app's accent; this fixes that without an SVG asset:
   between indicator and label (about 0.7 cap height) scales with it.
 - The fill is a subtle top-to-bottom qlineargradient: a muted grey when
   unchecked, a shade lighter than ACCENT fading down to ACCENT when checked.
-- The drop shadow QSS can't draw (no box-shadow) is hand-painted: a few
+- In the dark theme, the drop shadow QSS can't draw (no box-shadow) is
+  hand-painted: a few
   translucent black shapes, offset a touch down, painted *before* the real
   indicator so only their edges show past it.
 - The mark is painted at fixed fractions of the indicator rect, so it scales
@@ -25,20 +26,34 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QCheckBox, QRadioButton, QStyle, QStyleOptionButton
 
+from .. import theme
+
 ACCENT = "#5b9bd5"
 ACCENT_LIGHT = "#6fa9de"  # a shade lighter than ACCENT, the checked gradient's top stop
 
 _INDICATOR_QSS = (
     "{cls} {{ spacing: {spacing}px; }} "
-    "{cls}::indicator {{ width: {size}px; height: {size}px; border-radius: {radius}px; border: none;"
+    "{cls}::indicator {{ width: {size}px; height: {size}px; border-radius: {radius}px;"
+    " border: none;"
     " background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-    " stop:0 rgba(127, 127, 127, 100), stop:1 rgba(127, 127, 127, 60)); }}"
+    " stop:0 {off_top}, stop:1 {off_bottom}); }}"
     " {cls}::indicator:checked {{"
     " background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
     " stop:0 {light}, stop:1 {accent}); }}"
-    " {cls}::indicator:disabled {{ background: rgba(127, 127, 127, 40); }}"
+    " {cls}::indicator:disabled {{ background: {off_disabled}; }}"
     " {cls}::indicator:checked:disabled {{ background: rgba(91, 155, 213, 90); }}"
 )
+
+# Unchecked indicator per theme: a muted gray fill on a dark surface; on a
+# light one, a near-white fill with a thin outline (a gray fill read as a
+# solid dark dot there). The outline isn't a QSS border (a 1px rounded QSS
+# border renders soft and uneven): it's painted over the indicator, on the
+# half pixel, in paintEvent, so it never changes the box's size either.
+_OFF_DARK = {"off_top": "rgba(127, 127, 127, 100)", "off_bottom": "rgba(127, 127, 127, 60)",
+             "off_disabled": "rgba(127, 127, 127, 40)"}
+_OFF_LIGHT = {"off_top": "#fbfbfb", "off_bottom": "#d2d2d2", "off_disabled": "rgba(0, 0, 0, 18)"}
+_LIGHT_OUTLINE = QColor(0, 0, 0, 85)
+_LIGHT_OUTLINE_CHECKED = QColor("#4a8ac4")
 
 
 class _AccentIndicatorMixin:
@@ -53,6 +68,7 @@ class _AccentIndicatorMixin:
         self._own_qss = ""
         self._indicator_size = 0
         self._apply_qss()
+        theme.on_change(self._apply_qss)
 
     def setStyleSheet(self, qss: str) -> None:
         self._own_qss = qss
@@ -68,7 +84,8 @@ class _AccentIndicatorMixin:
         super().setStyleSheet(self._own_qss + " " + _INDICATOR_QSS.format(
             cls=self._QSS_CLASS, light=ACCENT_LIGHT, accent=ACCENT,
             size=size, radius=size // 2 if self._ROUND else 3,
-            spacing=max(5, round(self.fontMetrics().capHeight() * 0.7))))
+            spacing=max(5, round(self.fontMetrics().capHeight() * 0.7)),
+            **theme.pick(_OFF_DARK, _OFF_LIGHT)))
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
@@ -83,7 +100,9 @@ class _AccentIndicatorMixin:
     def paintEvent(self, event) -> None:
         rect = self._indicator_rect()
 
-        if self.isEnabled():
+        # The drop shadow is the dark theme's only: on the light gray, the
+        # outline painted below sets the box apart instead.
+        if self.isEnabled() and theme.is_dark():
             shadow = QPainter(self)
             shadow.setRenderHint(QPainter.Antialiasing, True)
             shadow.setPen(Qt.NoPen)
@@ -97,11 +116,21 @@ class _AccentIndicatorMixin:
 
         super().paintEvent(event)  # the QSS gradient indicator and the label
 
-        if not self.isChecked():
-            return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        self._paint_mark(painter, rect, QColor(255, 255, 255, 255 if self.isEnabled() else 140))
+        if not theme.is_dark():
+            color = QColor(_LIGHT_OUTLINE_CHECKED if self.isChecked() else _LIGHT_OUTLINE)
+            if not self.isEnabled():
+                color.setAlpha(color.alpha() // 2)
+            painter.setPen(QPen(color, 1.0))
+            painter.setBrush(Qt.NoBrush)
+            outline = QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5)
+            if self._ROUND:
+                painter.drawEllipse(outline)
+            else:
+                painter.drawRoundedRect(outline, 2.5, 2.5)
+        if self.isChecked():
+            self._paint_mark(painter, rect, QColor(255, 255, 255, 255 if self.isEnabled() else 140))
         painter.end()
 
 

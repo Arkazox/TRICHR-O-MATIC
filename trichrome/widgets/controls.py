@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
-from .. import i18n
+from .. import i18n, theme
 from .svg_icons import rotated_tinted_svg_pixmap
 
 STEPS = 1000
@@ -156,26 +156,25 @@ class _ResettableSlider(QSlider):
 
         enabled = self.isEnabled()
 
-        groove_color = QColor(74, 74, 80) if enabled else QColor(58, 58, 62)
+        colors = theme.slider_colors(enabled)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(groove_color)
+        painter.setBrush(colors["groove"])
         painter.drawRoundedRect(
             QRectF(x0, cy - groove_h / 2, usable, groove_h), groove_h / 2, groove_h / 2)
 
-        fill_color = QColor(122, 144, 194) if enabled else QColor(90, 92, 98)
+        fill_color = colors["fill"]
         left, right = sorted((cx, vx))
         if right - left > 0.5:
             painter.setBrush(fill_color)
             painter.drawRoundedRect(
                 QRectF(left, cy - groove_h / 2, right - left, groove_h), groove_h / 2, groove_h / 2)
 
-        tick_color = QColor(200, 200, 206, 190) if enabled else QColor(120, 120, 126, 140)
-        painter.setPen(QPen(tick_color, 1.5))
+        painter.setPen(QPen(colors["tick"], 1.5))
         painter.drawLine(QPointF(cx, cy - 4), QPointF(cx, cy + 4))
 
         # Handle last, always fully opaque - a hollow ring at rest, filled
         # solid while actually held (Lightroom's own slider behavior).
-        handle_color = QColor(232, 232, 232) if enabled else QColor(140, 140, 144)
+        handle_color = colors["handle"]
         if self.isSliderDown():
             painter.setPen(Qt.NoPen)
             painter.setBrush(handle_color)
@@ -257,6 +256,7 @@ class ClickToEditValue(QWidget):
         self.setFixedWidth(70)
 
         self._refresh_enabled_style()
+        theme.on_change(self._refresh_enabled_style)
         self.set_value(0.0)
 
     def _start_edit(self) -> None:
@@ -312,7 +312,7 @@ class ClickToEditValue(QWidget):
             self._refresh_enabled_style()
 
     def _refresh_enabled_style(self) -> None:
-        color = "#d8d8dc" if self.isEnabled() else "#6a6a6e"
+        color = theme.value_text_color(self.isEnabled())
         self._label.setStyleSheet(f"QLabel {{ color: {color}; }}")
 
 
@@ -502,6 +502,7 @@ class CollapsibleSection(QFrame):
         self.toggle_button.setChecked(expanded)
         self.toggle_button.setIconSize(QSize(self._CHEVRON_ICON_SIZE, self._CHEVRON_ICON_SIZE))
         self._update_chevron_icon(expanded)
+        theme.on_change(self._on_theme_changed)
         self.toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.toggle_button.setStyleSheet(
             "QToolButton { border: none; text-align: left; }"
@@ -537,6 +538,9 @@ class CollapsibleSection(QFrame):
         pixmap = rotated_tinted_svg_pixmap(
             "Global/chevron-down.svg", self._CHEVRON_ICON_SIZE, color, dpr, rotation)
         self.toggle_button.setIcon(QIcon(pixmap))
+
+    def _on_theme_changed(self) -> None:
+        self._update_chevron_icon(self.toggle_button.isChecked())
 
     def _on_clicked(self, checked: bool) -> None:
         self._update_chevron_icon(checked)

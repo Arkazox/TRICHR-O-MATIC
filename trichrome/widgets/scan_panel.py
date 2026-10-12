@@ -53,7 +53,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QRadioButton, QSpinBox, QWidget,
 )
 
-from .. import i18n, imaging
+from .. import i18n, imaging, theme
 from ..scan_tool import gphoto_backend, manifest, naming
 from ..scan_tool import scan_window
 from ..scan_tool.capture_worker import CaptureWorker
@@ -104,7 +104,7 @@ _SECTION_TOGGLE_STYLE = f"QToolButton {{ border: none; text-align: left; {_SECTI
 def _make_hairline() -> QWidget:
     line = QWidget()
     line.setFixedHeight(1)
-    line.setStyleSheet("background-color: rgba(255, 255, 255, 28);")
+    line.setStyleSheet("background-color: rgba(127, 127, 127, 70);")
     return line
 
 
@@ -129,9 +129,12 @@ QRadioButton {
 QRadioButton::indicator {
     width: 0px;
     height: 0px;
+    image: none;
+    border: none;
+    background: transparent;
 }
 QRadioButton:hover {
-    background: rgba(255, 255, 255, 14);
+    background: rgba(127, 127, 127, 30);
 }
 QRadioButton:checked {
     border: 2px solid #5b9bd5;
@@ -143,9 +146,10 @@ _MODE_BUTTON_ICON_SIZE = 16
 # One icon (Tools/Scan/camera_roll.svg) reused for all 3 Film buttons, tinted a
 # different fixed color per film type instead of the app's usual single
 # palette-driven tint - the color itself is the primary visual cue for which
-# film type is selected: white for B&W, orange for Color, blue for Color
-# Reversal. Order matches MODES exactly (bw, color, color_reversal).
-_FILM_ICON_COLORS = ("#ffffff", "#e67e22", "#5b9bd5")
+# film type is selected: the theme's foreground (white in Dark) for B&W,
+# orange for Color, blue for Color Reversal. Order matches MODES exactly (bw,
+# color, color_reversal); None is the theme's foreground.
+_FILM_ICON_COLORS = (None, "#e67e22", "#5b9bd5")
 
 # Per-mode note text below the Film row, keyed by MODES' own mode key - states
 # exactly what _auto_add_to_session actually applies automatically on import
@@ -167,7 +171,6 @@ _MODE_NOTE_KEYS = {
 _EXTERNAL_LIGHT_ICON = "Tools/Scan/sun-light.svg"
 _WHITE_LIGHT_ICON = "Tools/Scan/light-bulb.svg"
 _RGB_LIGHT_ICON = "Tools/Scan/light-bulb.svg"
-_LIGHT_ICON_COLOR = "#ffffff"
 
 # One full spin over 1 second when the Refresh button is clicked - timer-
 # driven (SvgToolButton.set_rotation() is a plain method, not a Qt
@@ -234,6 +237,8 @@ class ScanPanel(QGroupBox):
             outer, header_row)
 
         self._build_ui()
+        self._apply_theme_icons()
+        theme.on_change(self._apply_theme_icons)
         self._load_settings()
         self._sync_mode_note()
 
@@ -347,8 +352,6 @@ class ScanPanel(QGroupBox):
         dpr = self.devicePixelRatioF() or 1.0
         for idx, _mode in enumerate(MODES):
             btn = QRadioButton()
-            btn.setIcon(tinted_svg_icon(
-                "Tools/Scan/camera_roll.svg", _MODE_BUTTON_ICON_SIZE, QColor(_FILM_ICON_COLORS[idx]), dpr))
             btn.setIconSize(QSize(_MODE_BUTTON_ICON_SIZE, _MODE_BUTTON_ICON_SIZE))
             btn.setStyleSheet(_FRAMED_MODE_BUTTON_STYLE)
             self.mode_group.addButton(btn, idx)
@@ -391,14 +394,9 @@ class ScanPanel(QGroupBox):
         rgb_gradient.setColorAt(0.0, _RGB_CHANNEL_COLORS["R"])
         rgb_gradient.setColorAt(0.5, _RGB_CHANNEL_COLORS["G"])
         rgb_gradient.setColorAt(1.0, _RGB_CHANNEL_COLORS["B"])
-        light_icons = (
-            tinted_svg_icon(_EXTERNAL_LIGHT_ICON, _MODE_BUTTON_ICON_SIZE, QColor(_LIGHT_ICON_COLOR), dpr),
-            tinted_svg_icon(_WHITE_LIGHT_ICON, _MODE_BUTTON_ICON_SIZE, QColor(_LIGHT_ICON_COLOR), dpr),
-            gradient_tinted_svg_icon(_RGB_LIGHT_ICON, _MODE_BUTTON_ICON_SIZE, rgb_gradient, dpr),
-        )
+        self._rgb_light_icon = gradient_tinted_svg_icon(_RGB_LIGHT_ICON, _MODE_BUTTON_ICON_SIZE, rgb_gradient, dpr)
         for idx, _label_key in enumerate(_LIGHT_MODE_KEYS):
             btn = QRadioButton()
-            btn.setIcon(light_icons[idx])
             btn.setIconSize(QSize(_MODE_BUTTON_ICON_SIZE, _MODE_BUTTON_ICON_SIZE))
             btn.setStyleSheet(_FRAMED_MODE_BUTTON_STYLE)
             self.light_mode_group.addButton(btn, idx)
@@ -520,6 +518,22 @@ class ScanPanel(QGroupBox):
         layout.addWidget(self.capture_status_label)
 
         self.retranslate_ui()
+
+    def _apply_theme_icons(self) -> None:
+        """Film and Scan Light icons: the white ones follow the theme's
+        foreground, so they stay visible in Light."""
+        dpr = self.devicePixelRatioF() or 1.0
+        fg = theme.text_color()
+        for idx, btn in enumerate(self._mode_buttons):
+            color = QColor(_FILM_ICON_COLORS[idx]) if _FILM_ICON_COLORS[idx] else fg
+            btn.setIcon(tinted_svg_icon("Tools/Scan/camera_roll.svg", _MODE_BUTTON_ICON_SIZE, color, dpr))
+        light_icons = (
+            tinted_svg_icon(_EXTERNAL_LIGHT_ICON, _MODE_BUTTON_ICON_SIZE, fg, dpr),
+            tinted_svg_icon(_WHITE_LIGHT_ICON, _MODE_BUTTON_ICON_SIZE, fg, dpr),
+            self._rgb_light_icon,
+        )
+        for btn, icon in zip(self._light_mode_buttons, light_icons):
+            btn.setIcon(icon)
 
     def retranslate_ui(self) -> None:
         self.title_label.setText(i18n.tr("menu_tools_scan"))

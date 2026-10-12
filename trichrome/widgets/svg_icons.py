@@ -7,11 +7,16 @@ with CompositionMode_SourceIn.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+import os
+import re
+import tempfile
+
+from PySide6.QtCore import QByteArray, QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPixmap, QTransform
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QLabel, QToolButton
 
+from .. import theme
 from ..paths import icon_path
 
 # Shared size for every block header's action buttons (Reset, Copy, Invert/
@@ -43,7 +48,7 @@ def raw_svg_pixmap(svg_name: str, size: int, dpr: float) -> QPixmap:
     meaning through multiple colors at once (e.g. the Mode selector's
     layers icon, one distinct color per layer) rather than the single-
     color-glyph convention every other icon in resources/icons/ follows."""
-    renderer = QSvgRenderer(icon_path(svg_name))
+    renderer = QSvgRenderer(_themed_svg_bytes(svg_name))
     pixmap = QPixmap(max(1, round(size * dpr)), max(1, round(size * dpr)))
     pixmap.setDevicePixelRatio(dpr)
     pixmap.fill(Qt.transparent)
@@ -52,6 +57,44 @@ def raw_svg_pixmap(svg_name: str, size: int, dpr: float) -> QPixmap:
     renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
     return pixmap
+
+
+_HEX_COLOR = re.compile(r"#([0-9a-fA-F]{6})\b")
+
+
+def _themed_svg_bytes(svg_name: str) -> QByteArray:
+    """The SVG as-is in the dark theme. In the light theme, its light grays
+    (drawn for a dark surface: the mode icons' white/gray layers) become dark
+    grays, keeping their order; colors and darker grays are left alone."""
+    with open(icon_path(svg_name), encoding="utf-8") as f:
+        text = f.read()
+    if not theme.is_dark():
+        def swap(match):
+            value = match.group(1)
+            r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+            if r == g == b and r >= 0x80:
+                v = theme.light_gray_for_icon(r)
+                return f"#{v:02x}{v:02x}{v:02x}"
+            return match.group(0)
+        text = _HEX_COLOR.sub(swap, text)
+    return QByteArray(text.encode("utf-8"))
+
+
+def recolored_svg_file(svg_name: str, color: QColor) -> str:
+    """A copy of a single-color SVG with its stroke/fill set to ``color``,
+    written once to the temp folder - for QSS ``image: url(...)``, which
+    can't tint an icon. Returns its path (forward slashes, as QSS wants)."""
+    hex_color = color.name()
+    folder = os.path.join(tempfile.gettempdir(), "trichr-o-matic-icons")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{svg_name.replace('/', '_')[:-4]}-{hex_color[1:]}.svg")
+    if not os.path.exists(path):
+        with open(icon_path(svg_name), encoding="utf-8") as f:
+            text = f.read()
+        text = re.sub(r'(stroke|fill)="#[0-9a-fA-F]{3,6}"', rf'\1="{hex_color}"', text)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    return path.replace("\\", "/")
 
 
 def raw_svg_icon(svg_name: str, size: int, dpr: float) -> QIcon:
@@ -141,7 +184,7 @@ class SvgToolButton(QToolButton):
             color.setAlpha(70)
             return color
         if self.underMouse():
-            return QColor(Qt.white)
+            return theme.text_color()
         return QColor(self.palette().buttonText().color())
 
     def paintEvent(self, event) -> None:
@@ -243,7 +286,8 @@ class SvgLetterToggleButton(SvgTwoStateToggleButton):
         unchecked_svg = f"Global/circle-dotted-letter-{letter.lower()}.svg"
         super().__init__(checked_svg, unchecked_svg, initial_checked=initial_checked,
                           size=size, icon_size=icon_size, parent=parent)
-        self._color = QColor(color)
+        # A callable is read at paint time (a color that follows the theme).
+        self._color = color if callable(color) else QColor(color)
         self._active_override: bool | None = None
 
     def set_active(self, active: bool | None) -> None:
@@ -258,11 +302,10 @@ class SvgLetterToggleButton(SvgTwoStateToggleButton):
         return self._checked_svg if active else self._unchecked_svg
 
     def _glyph_color(self) -> QColor:
+        color = QColor(self._color() if callable(self._color) else self._color)
         if not self.isEnabled():
-            color = QColor(self._color)
             color.setAlpha(70)
-            return color
-        return QColor(self._color)
+        return color
 
 
 class SvgIconLabel(QLabel):
@@ -276,9 +319,12 @@ class SvgIconLabel(QLabel):
         super().__init__(parent)
         self._icon_size = size
         self.setFixedSize(size, size)
+        self._render_args = None
         self.set_icon(svg_name, color)
+        theme.on_change(self._rerender)
 
     def set_icon(self, svg_name: str, color: QColor | None = None, rotation: float = 0.0) -> None:
+        self._render_args = ("tint", svg_name, color, rotation)
         if color is None:
             color = QColor(self.palette().buttonText().color())
         dpr = self.devicePixelRatioF() or 1.0
@@ -288,5 +334,17 @@ class SvgIconLabel(QLabel):
         """Like set_icon(), but renders the SVG's own embedded colors
         verbatim instead of re-tinting the whole glyph to one color - see
         raw_svg_pixmap()."""
+        self._render_args = ("raw", svg_name)
         dpr = self.devicePixelRatioF() or 1.0
         self.setPixmap(raw_svg_pixmap(svg_name, self._icon_size, dpr))
+
+    def _rerender(self) -> None:
+        """A palette-tinted or raw icon follows the theme; an explicit color
+        is kept as it was."""
+        args = self._render_args
+        if args is None:
+            return
+        if args[0] == "raw":
+            self.set_icon_raw(args[1])
+        elif args[2] is None:
+            self.set_icon(args[1], None, args[3])

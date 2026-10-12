@@ -31,14 +31,15 @@ from PySide6.QtWidgets import (
     QApplication, QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
-from .. import i18n
-from ..paths import icon_path
+from .. import i18n, theme
 from .block_header_bar import finish_block_chrome, start_block_chrome
 from .button_style import style_secondary_button
 from .channel_panel import CHANNEL_COLORS, CHANNEL_KEY
 from .controls import ElidingLabel
 from .info_bubble import InfoButton
-from .svg_icons import HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgToolButton, raw_svg_icon
+from .svg_icons import (
+    HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgToolButton, raw_svg_icon, recolored_svg_file,
+)
 
 # Drag-and-drop channel swap: dragging a channel's own grip handle onto another
 # channel's file block swaps which photo - and its own alignment/tone edits,
@@ -90,7 +91,9 @@ def _translucent_grab(widget: QWidget, opacity: float = 0.55) -> QPixmap:
 # same border width/radius so toggling the highlight never changes the block's
 # own size.
 _FILE_BLOCK_BASE_STYLE = "border: 1px solid transparent; border-radius: 4px; padding: 1px 2px;"
-_FILE_BLOCK_SOURCE_STYLE = "border: 1px dashed rgba(255, 255, 255, 90); border-radius: 4px; padding: 1px 2px;"
+# Built at use time: the dashed outline follows the theme's foreground.
+def _file_block_source_style() -> str:
+    return f"border: 1px dashed {theme.overlay(90)}; border-radius: 4px; padding: 1px 2px;"
 _FILE_BLOCK_TARGET_STYLE = (
     "border: 1px solid #5b9bd5; border-radius: 4px; padding: 1px 2px; "
     "background: rgba(91, 155, 213, 40);"
@@ -234,23 +237,27 @@ _MODE_COMBO_ICON_SIZE = 18
 # this combo, not a blanket app-wide QComboBox rule, since no other combo in
 # the app (crop_panel.py's aspect-ratio/grid pickers) needs this treatment. The
 # dropdown arrow reuses the same Global/chevron-down.svg glyph every block's
-# own collapse chevron already uses (already a plain white stroke, so no
-# re-tinting needed - confirmed by rendering it as a QComboBox::down-arrow
-# image, which Qt's QSS engine renders as a real vector cheveron, not a broken
-# image). selection-background-color reuses #5b9bd5, the one accent blue
+# own collapse chevron already uses, recolored to the theme's foreground
+# (QSS can't tint an ``image: url()``, so a recolored copy is written to the
+# temp folder). selection-background-color reuses #5b9bd5, the one accent blue
 # already established elsewhere in the app (the block drag-reorder insertion
 # line).
-_MODE_COMBO_STYLE = f"""
+def _mode_combo_style() -> str:
+    """Built for the current theme: the box is a subtle overlay on the panel,
+    the arrow and text follow the theme's foreground."""
+    fg = theme.text_color()
+    arrow = recolored_svg_file("Global/chevron-down.svg", fg)
+    return f"""
 QComboBox {{
-    background: rgba(255, 255, 255, 14);
-    border: 1px solid rgba(255, 255, 255, 35);
+    background: {theme.overlay(14)};
+    border: 1px solid {theme.overlay(35)};
     border-radius: 4px;
     padding: 3px 4px 3px 6px;
-    color: #f0f0f0;
+    color: {fg.name()};
 }}
 QComboBox:hover {{
-    background: rgba(255, 255, 255, 24);
-    border: 1px solid rgba(255, 255, 255, 60);
+    background: {theme.overlay(24)};
+    border: 1px solid {theme.overlay(60)};
 }}
 QComboBox::drop-down {{
     subcontrol-origin: padding;
@@ -259,17 +266,17 @@ QComboBox::drop-down {{
     width: 20px;
 }}
 QComboBox::down-arrow {{
-    image: url({icon_path("Global/chevron-down.svg")});
+    image: url({arrow});
     width: 12px;
     height: 12px;
 }}
 QComboBox QAbstractItemView {{
-    background-color: #2b2b2b;
-    color: #f0f0f0;
-    border: 1px solid rgba(255, 255, 255, 40);
+    background-color: {theme.pick("#2b2b2b", theme.LIGHT_POPUP)};
+    color: {fg.name()};
+    border: 1px solid {theme.overlay(40)};
     outline: none;
     selection-background-color: rgba(91, 155, 213, 90);
-    selection-color: #ffffff;
+    selection-color: {fg.name()};
 }}
 """
 
@@ -356,7 +363,8 @@ class ImportPanel(QGroupBox):
         # alone isn't enough.
         mode_row = QHBoxLayout()
         self.mode_combo = QComboBox()
-        self.mode_combo.setStyleSheet(_MODE_COMBO_STYLE)
+        self.mode_combo.setStyleSheet(_mode_combo_style())
+        theme.on_change(self._apply_theme)
         self.mode_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.mode_combo.setIconSize(QSize(_MODE_COMBO_ICON_SIZE, _MODE_COMBO_ICON_SIZE))
         self.mode_combo.currentIndexChanged.connect(lambda _i: self._on_mode_combo_changed())
@@ -459,7 +467,7 @@ class ImportPanel(QGroupBox):
         _ChannelFileBlock (drag enter/leave/drop) - see those for when each
         state applies."""
         style = {
-            "source": _FILE_BLOCK_SOURCE_STYLE,
+            "source": _file_block_source_style(),
             "target": _FILE_BLOCK_TARGET_STYLE,
         }.get(state, _FILE_BLOCK_BASE_STYLE)
         self.channel_file_blocks[index].setStyleSheet(style)
@@ -559,6 +567,15 @@ class ImportPanel(QGroupBox):
             self.mode_combo.blockSignals(True)
             self.mode_combo.setCurrentIndex(self._visible_mode_keys().index(current_key))
             self.mode_combo.blockSignals(False)
+
+    def _apply_theme(self) -> None:
+        # The stylesheet and the items' multi-color icons both depend on it.
+        self.mode_combo.setStyleSheet(_mode_combo_style())
+        index = self.mode_combo.currentIndex()
+        self._rebuild_mode_combo_items()
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.setCurrentIndex(index)
+        self.mode_combo.blockSignals(False)
 
     def _rebuild_mode_combo_items(self) -> None:
         dpr = self.mode_combo.devicePixelRatioF() or 1.0

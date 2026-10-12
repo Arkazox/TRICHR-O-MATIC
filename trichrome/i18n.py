@@ -6,6 +6,8 @@ app restart implement a retranslate_ui() method that main_window calls.
 """
 from __future__ import annotations
 
+from .os_integration import platform_text
+
 DEFAULT_LANGUAGE = "en"
 
 EN = {
@@ -158,10 +160,14 @@ EN = {
     "settings_title": "Preferences",
     "settings_section_general": "General",
     "settings_language": "Language",
+    "settings_appearance": "Appearance",
+    "settings_appearance_dark": "Dark",
+    "settings_appearance_light": "Light",
+    "settings_appearance_system": "Same as System",
     "settings_reopen_last_session": "Reopen the last session at launch",
     "settings_quick_tour_at_startup": "Show the Quick Tour at startup",
     "settings_check_updates_at_startup": "Check for updates at startup",
-    "settings_play_sounds": "Play sounds when saving, deleting and exporting",
+    "settings_play_sounds": "Notification sounds",
     "settings_section_sessions": "Sessions",
     "settings_session_preview_cache": "Store previews in session files",
     "settings_session_preview_cache_help": "Sessions open much faster. Adds about 350 KB per photo to the .trirgb file. Exports and HQ Preview always use your original files.",
@@ -1052,10 +1058,14 @@ FR = {
     "settings_title": "Préférences",
     "settings_section_general": "Général",
     "settings_language": "Langue",
+    "settings_appearance": "Apparence",
+    "settings_appearance_dark": "Sombre",
+    "settings_appearance_light": "Clair",
+    "settings_appearance_system": "Comme le système",
     "settings_reopen_last_session": "Rouvrir la dernière session au lancement",
     "settings_quick_tour_at_startup": "Afficher la présentation au démarrage",
     "settings_check_updates_at_startup": "Rechercher les mises à jour au démarrage",
-    "settings_play_sounds": "Jouer un son à l'enregistrement, à la suppression et à l'export",
+    "settings_play_sounds": "Sons de notification",
     "settings_section_sessions": "Sessions",
     "settings_session_preview_cache": "Enregistrer les aperçus dans les fichiers de session",
     "settings_session_preview_cache_help": "Les sessions s'ouvrent beaucoup plus vite. Ajoute environ 350 Ko par photo au fichier .trirgb. Les exports et l'aperçu HQ utilisent toujours vos fichiers originaux.",
@@ -1819,7 +1829,7 @@ def current_language() -> str:
 
 def tr(key: str, **kwargs) -> str:
     table = STRINGS.get(_current_language, EN)
-    text = table.get(key, EN.get(key, key))
+    text = platform_text(table.get(key, EN.get(key, key)), _current_language)
     return text.format(**kwargs) if kwargs else text
 
 

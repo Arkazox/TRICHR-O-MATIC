@@ -6,17 +6,17 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from .. import i18n, imaging
+from .. import i18n, imaging, theme
 from .channel_panel import CHANNEL_COLORS
 from .svg_icons import SvgCheckableToolButton, SvgLetterToggleButton, SvgToolButton
 
 _CHANNELS = ("Y", "R", "G", "B")
-_CHANNEL_COLORS = {
-    "Y": QColor(220, 220, 220),
-    "R": QColor(CHANNEL_COLORS["R"]),
-    "G": QColor(CHANNEL_COLORS["G"]),
-    "B": QColor(CHANNEL_COLORS["B"]),
-}
+_RGB_COLORS = {ch: QColor(CHANNEL_COLORS[ch]) for ch in "RGB"}
+
+
+def _channel_color(ch: str) -> QColor:
+    """Y has no channel color of its own: a neutral that reads on the plot."""
+    return theme.luminance_channel_color() if ch == "Y" else _RGB_COLORS[ch]
 
 
 class HistogramWidget(QWidget):
@@ -81,8 +81,9 @@ class HistogramWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = self.rect()
-        painter.fillRect(rect, QColor(24, 24, 24))
-        painter.setPen(QPen(QColor(70, 70, 70)))
+        plot = theme.plot_colors()
+        painter.fillRect(rect, plot["bg"])
+        painter.setPen(QPen(plot["border"]))
         painter.drawRect(rect.adjusted(0, 0, -1, -1))
 
         if not self._curves:
@@ -98,7 +99,7 @@ class HistogramWidget(QWidget):
         # always-on reference for "where am I on the tone range", drawn
         # behind the curves themselves so they read as a background cue
         # rather than a foreground line.
-        painter.setPen(QPen(QColor(255, 255, 255, 26), 1))
+        painter.setPen(QPen(plot["grid"], 1))
         for frac in (1 / 3, 2 / 3):
             x = round(w * frac)
             painter.drawLine(x, 1, x, h - 2)
@@ -145,7 +146,7 @@ class HistogramWidget(QWidget):
         painter.setCompositionMode(QPainter.CompositionMode_Plus)
         painter.setPen(Qt.NoPen)
         for ch in shown:
-            fill_color = QColor(_CHANNEL_COLORS[ch])
+            fill_color = QColor(_channel_color(ch))
             fill_color.setAlpha(60)
             painter.setBrush(fill_color)
             painter.drawPath(fill_paths[ch])
@@ -153,7 +154,7 @@ class HistogramWidget(QWidget):
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         painter.setBrush(Qt.NoBrush)
         for ch in shown:
-            line_color = QColor(_CHANNEL_COLORS[ch])
+            line_color = QColor(_channel_color(ch))
             line_color.setAlpha(235)
             painter.setPen(QPen(line_color, 1.3))
             painter.drawPath(curve_paths[ch])
@@ -171,7 +172,7 @@ class HistogramWidget(QWidget):
         threshold = 0.001
         full_scale_at = 0.05
         for ch in shown:
-            color = _CHANNEL_COLORS[ch]
+            color = _channel_color(ch)
             shadow_frac = self._clip_shadow[ch]
             if shadow_frac > threshold:
                 severity = min(1.0, shadow_frac / full_scale_at)
@@ -199,7 +200,7 @@ class HistogramWidget(QWidget):
             for ch in shown:
                 value = self._marker[ch]
                 x = value / 255 * w
-                pen = QPen(_CHANNEL_COLORS[ch], 1.5, Qt.DashLine)
+                pen = QPen(_channel_color(ch), 1.5, Qt.DashLine)
                 painter.setPen(pen)
                 painter.drawLine(int(x), 0, int(x), h)
 
@@ -250,7 +251,7 @@ class HistogramPanel(QWidget):
         toggle_row = QHBoxLayout()
         self._channel_buttons: dict[str, SvgLetterToggleButton] = {}
         for ch in _CHANNELS:
-            btn = SvgLetterToggleButton(ch, _CHANNEL_COLORS[ch], size=(32, 28), icon_size=22)
+            btn = SvgLetterToggleButton(ch, lambda ch=ch: _channel_color(ch), size=(32, 28), icon_size=22)
             btn.setCheckable(False)
             btn.set_active(True)
             btn.clicked.connect(lambda _checked=False, c=ch: self.isolate_channel(c))

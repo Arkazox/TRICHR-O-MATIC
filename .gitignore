@@ -13,6 +13,8 @@ dist/
 dist-applesilicon/
 build-intel/
 dist-intel/
+dist-windows/
+ui-captures/
 
 # macOS
 .DS_Store
@@ -20,3 +22,4 @@ dist-intel/
 # Personal test resources - not linked to the code, kept out of the repo
 resources/TEST_FILES/
 dist-release/
+dist-installer/

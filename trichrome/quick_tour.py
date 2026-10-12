@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QToolTip, QVBoxLayout, QWidget,
 )
 
-from . import i18n
+from . import i18n, os_integration
 from .paths import resource_path
 from .widgets.block_header_bar import BlockDragHandle, set_block_collapsed
 from .widgets.button_style import style_primary_button, style_secondary_button
@@ -1021,7 +1021,8 @@ class TourCallout(QFrame):
 
     def _body_html(self, text: str) -> str:
         text = _KBD_RE.sub(
-            lambda m: f'<span style="background-color:{self._kbd_bg}; font-weight:600;">'
+            lambda m: f'<span style="background-color:{self._kbd_bg}; font-weight:600;'
+                      f'{os_integration.KBD_FONT_CSS}">'
                       f"&nbsp;{m.group(1)}&nbsp;</span>", text)
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
         return "".join(f'<p style="margin:0 0 7px 0;">{p}</p>' for p in paragraphs)

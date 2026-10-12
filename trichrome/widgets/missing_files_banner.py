@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
 
-from .. import i18n
+from .. import i18n, theme
 from .button_style import style_primary_button
 from .svg_icons import tinted_svg_pixmap
 
@@ -40,7 +40,8 @@ class MissingFilesBanner(QFrame):
 
         self.text_label = QLabel()
         self.text_label.setWordWrap(True)
-        self.text_label.setStyleSheet("color: #e8e8ea;")
+        self._apply_theme()
+        theme.on_change(self._apply_theme)
         row.addWidget(self.text_label, stretch=1)
 
         self.locate_button = QPushButton()
@@ -50,6 +51,9 @@ class MissingFilesBanner(QFrame):
 
         self.retranslate_ui()
         self.setVisible(False)
+
+    def _apply_theme(self) -> None:
+        self.text_label.setStyleSheet(f"color: {theme.pick('#e8e8ea', '#2a2a2a')};")
 
     def set_missing(self, entries: list[tuple[str, str]]) -> None:
         """``entries``: list of (channel_label, last_known_path) for the

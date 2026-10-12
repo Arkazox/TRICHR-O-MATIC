@@ -30,13 +30,25 @@ from PySide6.QtCore import QEventLoop, QMimeData, QPointF, Qt, Signal
 from PySide6.QtGui import QDrag, QPixmap
 from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
-from .. import i18n, imaging
+from .. import i18n, imaging, theme
 from .controls import ArrowKeyScrollArea
 
 THUMB_W, THUMB_H = 96, 64
 CURRENT_COLOR = "#5b9bd5"
 SELECTED_COLOR = "#3f6d96"
-DEFAULT_COLOR = "#444"
+
+
+def _default_border_color() -> str:
+    return theme.pick("#444444", "#b8b8b8")
+
+
+def _thumb_style() -> str:
+    # The photo's own backdrop stays dark in both themes; its frame follows.
+    return f"background:#222; border:1px solid {_default_border_color()};"
+
+
+def _caption_style() -> str:
+    return f"color:{theme.pick('#aaaaaa', '#4a4a4a')}; font-size:10px;"
 
 # Grid mode (fullscreen) sizing - cards fill the available width, Zoom
 # In/Out (see MainWindow.on_zoom_in_clicked/on_zoom_out_clicked) only
@@ -83,19 +95,21 @@ class _CarouselCard(QFrame):
         layout.setSpacing(2)
 
         self.thumb_label = QLabel()
-        self.thumb_label.setStyleSheet("background:#222; border:1px solid #444;")
+        self.thumb_label.setStyleSheet(_thumb_style())
         self.thumb_label.setAlignment(Qt.AlignCenter)
         # Explicit horizontal centering: a fixed-size label narrower than the
         # card's content area is otherwise left-aligned by the layout.
         layout.addWidget(self.thumb_label, 0, Qt.AlignHCenter)
 
         self.name_label = QLabel()
-        self.name_label.setStyleSheet("color:#aaa; font-size:10px;")
+        self.name_label.setStyleSheet(_caption_style())
         self.name_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.name_label)
 
         self.set_cell_size(THUMB_W)
         self._update_style()
+        theme.on_change(self._apply_theme_styles)
+        theme.on_change(self._update_style)
 
     def set_cell_size(self, thumb_w: int) -> None:
         """Resizes the card to a given thumbnail width - THUMB_W (the
@@ -114,8 +128,12 @@ class _CarouselCard(QFrame):
         elif self._is_selected:
             color, width = SELECTED_COLOR, 2
         else:
-            color, width = DEFAULT_COLOR, 1
+            color, width = _default_border_color(), 1
         self.setStyleSheet(f"_CarouselCard {{ border: {width}px solid {color}; border-radius: 6px; }}")
+
+    def _apply_theme_styles(self) -> None:
+        self.thumb_label.setStyleSheet(_thumb_style())
+        self.name_label.setStyleSheet(_caption_style())
 
     def set_current(self, current: bool) -> None:
         self._is_current = current
@@ -243,7 +261,7 @@ class CarouselWidget(QWidget):
 
         self.empty_label = QLabel()
         self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet("color:#777; font-style: italic;")
+        self.empty_label.setStyleSheet(f"color:{theme.muted_text_color()}; font-style: italic;")
         outer.addWidget(self.empty_label)
 
         # Strip mode - the filmstrip, a single horizontally-scrolling row.

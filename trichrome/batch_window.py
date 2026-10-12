@@ -37,7 +37,7 @@ _MIN_WINDOW_HEIGHT = 300
 # number to fine-tune further without new evidence it's not enough.
 _FIT_WINDOW_MAX_PASSES = 10
 
-from . import batch, filters as filters_module, i18n, imaging
+from . import batch, filters as filters_module, i18n, imaging, theme
 from .widgets.alert_dialog import show_alert
 from .widgets.button_style import style_primary_button, style_secondary_button
 from .widgets.channel_panel import CHANNEL_COLORS
@@ -69,23 +69,50 @@ SEMI_ORDER_PERMUTATIONS = ("RGB", "RBG", "GRB", "GBR", "BGR", "BRG")
 # icon+text, same accent blue (#5b9bd5) the Files-block Mode combo's own popup
 # highlight already uses, for visual consistency between the two "pick one of
 # these 3 modes" controls in this app.
-_PROCESSING_MODE_RADIO_STYLE = """
-QRadioButton {
+def _processing_mode_radio_style() -> str:
+    # ``image: none`` and ``border: none`` on the indicator as well as a zero
+    # size: Fusion (Windows) still drew the bullet from the size rule alone.
+    return f"""
+QRadioButton {{
     border: 2px solid transparent;
     border-radius: 6px;
     padding: 5px 10px;
     background: transparent;
-}
-QRadioButton::indicator {
+}}
+QRadioButton::indicator {{
     width: 0px;
     height: 0px;
-}
-QRadioButton:hover {
-    background: rgba(255, 255, 255, 14);
-}
-QRadioButton:checked {
+    image: none;
+    border: none;
+    background: transparent;
+}}
+QRadioButton:hover {{
+    background: {theme.overlay(14)};
+}}
+QRadioButton:checked {{
     border: 2px solid #5b9bd5;
     background: rgba(91, 155, 213, 30);
+}}
+"""
+
+
+# Fusion (Windows) draws a QGroupBox's title inset into its frame; this puts
+# it above a framed panel instead, as the macOS style does (and as
+# widgets/dialog_style.py's panels look). Only this window's top-level
+# sections carry the object name; the borderless nested groups keep their own.
+_FUSION_SECTION_STYLE = """
+QGroupBox#batchSection {
+    background: rgba(127, 127, 127, 20);
+    border: 1px solid rgba(127, 127, 127, 70);
+    border-radius: 6px;
+    margin-top: 1.5em;
+    padding-top: 4px;
+}
+QGroupBox#batchSection::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 1px;
+    padding: 0px;
 }
 """
 
@@ -295,10 +322,13 @@ class BatchWindow(QMainWindow):
         self._window_shown_once = False
 
         self._build_ui()
+        if theme.USES_FUSION:
+            self.setStyleSheet(_FUSION_SECTION_STYLE)
         self._restore_folder()
         self._restore_last_settings()
         self.retranslate_ui()
         QShortcut(QKeySequence.Close, self, activated=self.close)
+        theme.on_change(self._apply_theme)
 
     def showEvent(self, event) -> None:
         """sizeHint() for a complex nested widget (Import Rules'
@@ -368,6 +398,7 @@ class BatchWindow(QMainWindow):
         # (mode_select_info)
         # - same 3 modes, same explanation, no need for a second one.
         self.processing_mode_group = QGroupBox()
+        self.processing_mode_group.setObjectName("batchSection")
         self.processing_mode_group.setFont(QApplication.font())  # same title font as Preferences
         processing_mode_row = QHBoxLayout(self.processing_mode_group)
         self.processing_mode_button_group = QButtonGroup(self)
@@ -377,7 +408,7 @@ class BatchWindow(QMainWindow):
             radio = QRadioButton()
             radio.setIcon(raw_svg_icon(MODE_ICONS[key], 20, dpr))
             radio.setIconSize(QSize(20, 20))
-            radio.setStyleSheet(_PROCESSING_MODE_RADIO_STYLE)
+            radio.setStyleSheet(_processing_mode_radio_style())
             radio.toggled.connect(lambda checked: self._on_processing_mode_changed() if checked else None)
             radio.toggled.connect(lambda checked, k=key: self._save_processing_mode_setting(k) if checked else None)
             self.processing_mode_button_group.addButton(radio)
@@ -402,6 +433,7 @@ class BatchWindow(QMainWindow):
         root.addWidget(self.processing_mode_group)
 
         self.input_group = QGroupBox()
+        self.input_group.setObjectName("batchSection")
         self.input_group.setFont(QApplication.font())  # same title font as Preferences
         input_layout = QVBoxLayout(self.input_group)
 
@@ -897,6 +929,7 @@ class BatchWindow(QMainWindow):
         # _DropImageListWidget for the same drag-and-drop-from-Finder
         # convenience the manual per-channel lists already have.
         self.solo_group = QGroupBox()
+        self.solo_group.setObjectName("batchSection")
         self.solo_group.setFont(QApplication.font())  # same title font as Preferences
         solo_layout = QVBoxLayout(self.solo_group)
         solo_header_bar, self.solo_add_button, self.solo_remove_button, self.solo_clear_button = (
@@ -917,6 +950,7 @@ class BatchWindow(QMainWindow):
         self.solo_group.setVisible(False)
 
         self.align_group = QGroupBox()
+        self.align_group.setObjectName("batchSection")
         self.align_group.setFont(QApplication.font())  # same title font as Preferences
         align_layout = QVBoxLayout(self.align_group)
         self.auto_align_checkbox = CheckBox()
@@ -1027,6 +1061,13 @@ class BatchWindow(QMainWindow):
             self.semi_order_radios[semi_order].setChecked(True)
 
     # ------------------------------------------------------------------
+    def _apply_theme(self) -> None:
+        """The mode tiles' hover tint and multi-color icons follow the theme."""
+        dpr = self.devicePixelRatioF() or 1.0
+        for key, radio in self.processing_mode_radios.items():
+            radio.setStyleSheet(_processing_mode_radio_style())
+            radio.setIcon(raw_svg_icon(MODE_ICONS[key], 20, dpr))
+
     def retranslate_ui(self) -> None:
         self.setWindowTitle(i18n.tr("batch_window_title"))
         self.processing_mode_group.setTitle(i18n.tr("batch_processing_mode_group"))

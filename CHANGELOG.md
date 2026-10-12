@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.0 — 2026-10-12
+
+- **Windows version** (Windows 10 and 11, 64-bit), with an installer and
+  built-in updates, like the Mac version.
+- **Appearance** setting in Preferences: Dark (default), Light, or Same as
+  System.
+- Leaving the full-screen preview restores a maximized window.
+- Menu fixes: Compare shows its real key (`:`), Guide shows F1.
+
 ## v1.0.0 — 2026-10-07
 
 First public release.

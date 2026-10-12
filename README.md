@@ -1,6 +1,6 @@
 # Trichr-o-matic
 
-A macOS app that recomposes a color image from three black & white photos shot
+A macOS and Windows app that recomposes a color image from three black & white photos shot
 through Red, Green and Blue (or IR/Aerochrome/custom) filters — and, more
 generally, a photo-editing app built around that trichromy workflow.
 
@@ -8,19 +8,24 @@ generally, a photo-editing app built around that trichromy workflow.
 
 ## Download
 
-**[Download the latest version](https://github.com/Arkazox/Trichr-o-matic/releases/latest)**:
-under *Assets*, pick the `.zip` for your Mac, unzip it, and move
-`Trichr-o-matic.app` to your Applications folder.
+**[Download the latest version](https://github.com/Arkazox/Trichr-o-matic/releases/latest)**,
+then under *Assets* pick the file for your computer:
 
 - `Trichr-o-matic-vX.Y.Z-AppleSilicon.zip` for Macs with an M1 chip or later.
 - `Trichr-o-matic-vX.Y.Z-Intel.zip` for Macs with an Intel processor.
+- `Trichr-o-matic-vX.Y.Z-Windows-Setup.exe` for Windows.
 
 Not sure which Mac you have? Open the Apple menu ▸ **About This Mac**: it shows either
 **Chip** (Apple M1, M2, …) or **Processor** (Intel).
 
-**Requirements:** macOS 12 Monterey or later.
+**Requirements:** macOS 12 Monterey or later, or Windows 10 or 11 (64-bit).
 
-### First launch
+Once installed, the app updates itself: when a new version comes out, it
+offers to download and install it.
+
+### Installing on macOS
+
+Unzip the file and move `Trichr-o-matic.app` to your Applications folder.
 
 The app isn't signed with an Apple Developer certificate yet, so macOS blocks
 it the first time:
@@ -37,6 +42,15 @@ can't be opened", run this in Terminal, then open the app again:
 ```bash
 xattr -cr /Applications/Trichr-o-matic.app
 ```
+
+### Installing on Windows
+
+Run `Trichr-o-matic-vX.Y.Z-Windows-Setup.exe`. It installs for your user
+account only, so no administrator password is needed, and adds a Start menu
+entry. The installer isn't signed with a code-signing certificate yet, so
+Windows SmartScreen may warn about an unrecognized app the first time:
+click **More info**, then **Run anyway**. Uninstall it from Windows'
+**Settings ▸ Apps** like any other app.
 
 ### Privacy
 
@@ -58,7 +72,7 @@ photos is sent.
 
 ### Import
 - Load photos individually (**Trichrome Process** block), or drag image files
-  from Finder straight onto the thumbnail strip (added as Solo photos).
+  from Finder or File Explorer straight onto the thumbnail strip (added as Solo photos).
 - **Import Images…** (batch import window): pick a Processing Mode (Solo /
   Classic Trichrome / Color Trichrome), then match R/G/B triplets **Automatic**ally
   by filename (RGB Trichrome, IR Trichrome, Aerochrome or a fully custom
@@ -130,6 +144,8 @@ photos is sent.
 - Recovery for missing/moved source photos, with a folder-based relink flow.
 - English / French interface, switchable in Preferences (defaults to
   English).
+- Dark or light appearance, or the system's, in Preferences (defaults to
+  Dark).
 - Distraction-free fullscreen preview, trackpad pinch-to-zoom and two-finger
   pan, and an **HQ Preview** toggle for a sharper, full-resolution view once
   you stop editing.
@@ -158,6 +174,19 @@ you want a standalone, double-clickable copy.
 ./build_mac.sh intel    # Intel (under Rosetta) -> dist-intel/Trichr-o-matic.app
 ```
 
+## Building the Windows app
+
+On Windows, with the same `requirements.txt`:
+
+```bash
+pyinstaller --noconfirm --clean trichrome_win.spec   # -> dist\Trichr-o-matic\Trichr-o-matic.exe
+```
+
+then compile `installer/trichrome.iss` with [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+(`ISCC.exe /DAppVersion=X.Y.Z installer\trichrome.iss`) for the installer.
+
+## Versions
+
 Bump the version string in
 `trichrome/version.py` (the single source of truth, read by both the app
 itself and `trichrome.spec`'s `CFBundleShortVersionString`) before a
@@ -178,7 +207,7 @@ release build — see `CHANGELOG.md` for the history of each version.
 
 ## Batch import
 
-Open it from the toolbar's **Import Images…** button (⌘I). It processes many
+Open it from the toolbar's **Import Images…** button (⌘I, Ctrl+I on Windows). It processes many
 photos in one run:
 
 1. Choose a **Processing Mode** for the whole batch — Solo, Classic Trichrome, or
