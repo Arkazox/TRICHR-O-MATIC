@@ -14,6 +14,7 @@ own license. Their source code is available from the links below.
 | OpenCV (opencv-python-headless) | Apache 2.0 | https://github.com/opencv/opencv, https://github.com/opencv/opencv-python |
 | Pillow | MIT-CMU (HPND) | https://github.com/python-pillow/Pillow |
 | rawpy | MIT | https://github.com/letmaik/rawpy |
+| certifi (Windows only, root certificates) | MPL 2.0 | https://github.com/certifi/python-certifi |
 | LibRaw (used by rawpy) | LGPL v2.1 or CDDL v1.0 | https://github.com/LibRaw/LibRaw |
 | PyInstaller bootloader | GPL v2 with a bootloader exception | https://github.com/pyinstaller/pyinstaller |
 

@@ -73,11 +73,20 @@ def ssl_context() -> ssl.SSLContext:
     """The python.org Python the app is built with ships no CA certificates
     of its own (its OpenSSL looks in an empty folder), so HTTPS would fail
     to verify every server. macOS keeps its root certificates as a PEM
-    bundle at /etc/ssl/cert.pem; Windows' Python already loads the system
-    store by itself."""
+    bundle at /etc/ssl/cert.pem. On Windows, Python reads the system store,
+    but Windows installs many roots only when one of its own components first
+    needs them, which Python never triggers: GitHub's API chains to Sectigo's
+    2021 E46 root, absent from many PCs, so the check failed as "can't
+    connect". certifi's bundle (Mozilla's roots) is added to the system store."""
     context = ssl.create_default_context()
     if sys.platform == "darwin" and os.path.isfile(_SYSTEM_CA_FILE):
         context.load_verify_locations(cafile=_SYSTEM_CA_FILE)
+    elif sys.platform == "win32":
+        try:
+            import certifi
+            context.load_verify_locations(cafile=certifi.where())
+        except (ImportError, OSError):
+            pass  # the system store alone, as before
     return context
 
 

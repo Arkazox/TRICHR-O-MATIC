@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.2 — 2026-10-12
+
+- Windows: Check for Updates no longer says it can't connect on PCs that
+  are online. If you have 1.1.0 or 1.1.1 on Windows, install this version by
+  hand once.
+
 ## v1.1.1 — 2026-10-12
 
 - The window now fits smaller screens at launch (opens maximized when the

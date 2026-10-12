@@ -22,4 +22,7 @@ Pillow==12.3.0
 rawpy==0.27.1 ; platform_machine == "arm64"
 rawpy==0.25.1 ; platform_machine == "x86_64"
 rawpy==0.27.1 ; sys_platform == "win32"
+# Mozilla's root certificates for the update check on Windows (see
+# self_update.ssl_context); macOS uses the system's /etc/ssl/cert.pem.
+certifi==2026.7.22 ; sys_platform == "win32"
 pyinstaller==6.22.2
