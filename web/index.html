@@ -8,7 +8,12 @@
   <meta name="theme-color" content="#2a2a2a">
   <title>Trichr-o-matic Web</title>
   <meta name="description" content="Recompose a color photo from three black and white shots taken through red, green and blue filters, in your browser.">
-  <link rel="icon" href="../resources/app_logo.png">
+  <!-- The .ico (16 to 256 px, the Windows app's) first: Safari doesn't
+       pick up a PNG-only icon reliably. The touch icon is also what Safari
+       shows for pinned tabs, favorites and home-screen shortcuts. -->
+  <link rel="icon" href="../resources/icon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="256x256" href="../resources/app_logo.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
