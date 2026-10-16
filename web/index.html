@@ -24,8 +24,13 @@
       <span class="badge">Web</span>
     </div>
     <div class="topbar-actions">
+      <button class="btn secondary square tour-button" id="tour-button" title="Help" aria-label="Help">?</button>
       <button class="btn secondary" id="get-app-button"
         title="Batch import, RAW files, sessions, Light/Color/Curves and more">Download the full app</button>
+      <!-- Phones: the project page instead, the desktop app is no use there. -->
+      <a class="btn secondary square" id="github-button" href="https://github.com/Arkazox/TRICHR-O-MATIC"
+        target="_blank" rel="noopener" title="View the project on GitHub" aria-label="View the project on GitHub">
+        <span class="icon" style="--icon: url(../resources/icons/Global/github.svg)"></span></a>
       <button id="export-button" class="btn primary" disabled>
         <span class="icon" style="--icon: url(../resources/icons/Toolbar/Export.svg)"></span>Export…
       </button>
@@ -33,13 +38,25 @@
   </header>
 
   <main>
-    <aside id="panel">
-      <details class="block" open>
+    <aside id="panel" data-tool="files">
+      <!-- Phones: one tool at a time, picked with these tabs. -->
+      <div class="tabs tool-tabs" id="tool-tabs" role="tablist">
+        <button class="tab tool-tab" data-tool="files" role="tab" title="Files" aria-label="Files">
+          <span class="icon" style="--icon: url(icons/folder-plus.svg)"></span></button>
+        <button class="tab tool-tab" data-tool="process" role="tab" title="Trichrome Process" aria-label="Trichrome Process">
+          <span class="icon" style="--icon: url(../resources/icons/Toolbar/trichrome.svg)"></span></button>
+        <button class="tab tool-tab" data-tool="curves" role="tab" title="Curves" aria-label="Curves">
+          <span class="icon" style="--icon: url(icons/curve.svg)"></span></button>
+        <button class="tab tool-tab" data-tool="crop" role="tab" title="Crop" aria-label="Crop">
+          <span class="icon" style="--icon: url(../resources/icons/Global/crop.svg)"></span></button>
+      </div>
+
+      <details class="block" open data-tool="histogram">
         <summary class="block-title">Histogram</summary>
         <div class="block-body"><canvas id="histogram" height="110"></canvas></div>
       </details>
 
-      <details class="block" open>
+      <details class="block" open data-tool="files">
         <summary class="block-title">
           <span>Files</span>
           <button class="icon-button" id="reset-all" title="Start over with 3 new photos">
@@ -58,7 +75,7 @@
         </div>
       </details>
 
-      <details class="block" open>
+      <details class="block" open data-tool="process">
         <summary class="block-title">
           <span>Trichrome Process</span>
           <span class="summary-tools">
@@ -130,7 +147,7 @@
         </div>
       </details>
 
-      <details class="block" open>
+      <details class="block" open data-tool="curves">
         <summary class="block-title">
           <span>Curves</span>
           <span class="summary-tools">
@@ -142,12 +159,12 @@
           </span>
         </summary>
         <div class="block-body">
-          <canvas id="curve-editor" title="Click the line to add a point, drag to shape it, double-click a point to remove it"></canvas>
+          <canvas id="curve-editor" title="Click the line to add a point, drag to shape it, double-click a point to remove it (an endpoint goes back to its corner)"></canvas>
           <div class="toggle-group curve-channels" id="curve-channels"></div>
         </div>
       </details>
 
-      <details class="block" open>
+      <details class="block" open data-tool="crop">
         <summary class="block-title">
           <span>Crop</span>
           <span class="summary-tools">
@@ -181,6 +198,14 @@
             <input type="number" id="custom-h" min="0.1" max="100" step="0.1" value="1" aria-label="Height">
           </div>
           <div class="sliders" id="sliders-straighten"></div>
+          <!-- Phones: rotation lives here, the preview bar has no room for it. -->
+          <div class="row phone-only-row">
+            <span class="label">Rotate</span>
+            <button class="icon-button" id="crop-rotate-left" title="Rotate left">
+              <span class="icon" style="--icon: url(../resources/icons/Filmstrip/rotate-ccw-square.svg)"></span></button>
+            <button class="icon-button" id="crop-rotate-right" title="Rotate right">
+              <span class="icon" style="--icon: url(../resources/icons/Filmstrip/rotate-cw-square.svg)"></span></button>
+          </div>
           <div class="row">
             <span class="label">Mirror</span>
             <button class="icon-button toggle" id="mirror-h" title="Mirror Left/Right">
@@ -199,19 +224,27 @@
           <canvas id="overlay"></canvas>
         </div>
         <div id="placeholder">
-          <p class="placeholder-title">Drop your 3 photos here</p>
+          <p class="placeholder-title desktop-only">Drop your 3 photos here</p>
+          <!-- Phones can't drag and drop: a button opens the photo picker. -->
+          <button class="btn primary phone-only" id="import-button">
+            <span class="icon" style="--icon: url(../resources/icons/Toolbar/image-plus.svg)"></span>Import 3 photos</button>
           <p>PNG, JPEG, TIFF or BMP</p>
+          <input type="file" id="import-input" hidden multiple accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp,image/png,image/jpeg,image/tiff,image/bmp">
         </div>
       </div>
       <div class="preview-bar">
         <div class="bar-group">
-          <button class="icon-button" id="zoom-out" title="Zoom out">
+          <!-- Phones: zoom is a pinch and a double tap (fit / 1:1); this
+               shows or hides the Histogram under the tool tabs instead. -->
+          <button class="icon-button toggle phone-only" id="histogram-toggle" title="Show the histogram">
+            <span class="icon" style="--icon: url(icons/histogram.svg)"></span></button>
+          <button class="icon-button desktop-only" id="zoom-out" title="Zoom out">
             <span class="icon" style="--icon: url(../resources/icons/Filmstrip/zoom_out.svg)"></span></button>
-          <button class="icon-button" id="zoom-in" title="Zoom in">
+          <button class="icon-button desktop-only" id="zoom-in" title="Zoom in">
             <span class="icon" style="--icon: url(../resources/icons/Filmstrip/zoom_in.svg)"></span></button>
-          <button class="icon-button toggle" id="zoom-fit" title="Fit to window (F)">
+          <button class="icon-button toggle desktop-only" id="zoom-fit" title="Fit to window (F)">
             <span class="icon" style="--icon: url(../resources/icons/Filmstrip/fit_screen.svg)"></span></button>
-          <button class="icon-button toggle" id="zoom-100" title="100% (Z)">
+          <button class="icon-button toggle desktop-only" id="zoom-100" title="100% (Z)">
             <span class="icon" style="--icon: url(../resources/icons/Filmstrip/view_real_size.svg)"></span></button>
         </div>
         <!-- Activity and mode messages (the desktop's status bar), in yellow. -->
@@ -220,9 +253,9 @@
           <span id="indicator"></span>
         </div>
         <div class="bar-group bar-group-end">
-          <button class="icon-button" id="rotate-left" title="Rotate left">
+          <button class="icon-button desktop-only" id="rotate-left" title="Rotate left">
             <span class="icon" style="--icon: url(../resources/icons/Filmstrip/rotate-ccw-square.svg)"></span></button>
-          <button class="icon-button" id="rotate-right" title="Rotate right">
+          <button class="icon-button desktop-only" id="rotate-right" title="Rotate right">
             <span class="icon" style="--icon: url(../resources/icons/Filmstrip/rotate-cw-square.svg)"></span></button>
           <button class="icon-button toggle" id="compare" title="Compare (:)">
             <span class="icon" style="--icon: url(../resources/icons/Filmstrip/a-b.svg)"></span></button>
@@ -235,6 +268,67 @@
   </main>
 
 
+  <!-- Quick Tour: a few cards in the "Download the full app" window's style.
+       Opens by itself on the first visit, then from the "?" button. -->
+  <dialog id="tour-dialog" class="get-app tour" aria-labelledby="tour-title">
+    <div class="get-app-glow" aria-hidden="true"></div>
+    <img class="get-app-logo" src="../resources/app_logo.png" alt="" width="72" height="72">
+    <p class="get-app-version tour-kicker" id="tour-title">Trichr-o-matic Web · Quick Tour</p>
+    <!-- Every step sits in the same grid cell, so the window keeps the
+         height of the tallest one. -->
+    <div class="tour-steps">
+      <section class="tour-step">
+        <h2>Welcome to Trichr-o-matic</h2>
+        <p class="get-app-text">Trichr-o-matic is an app designed for trichrome photography.<br>
+          From three black and white shots to the recomposed color image, its complete set of tools
+          keeps every step simple: import, align, edit and export your photos with ease.<br><br>
+          Start the tour to learn more.</p>
+      </section>
+      <section class="tour-step">
+        <h2>Load 3 photos</h2>
+        <p class="get-app-text"><span class="desktop-only">Drop the files on the preview, or import them
+          in the <b>Files</b> tool. Drag a row's grip onto another to swap two channels.</span><span
+          class="phone-inline">Tap <b>Import 3 photos</b> on the preview, or import them in the
+          <b>Files</b> tool.</span><br><br>
+          <b>Classic Trichrome</b> is for black and white shots, <b>Color Trichrome</b> takes
+          each channel's own color from color shots to create a Harris Shutter effect.</p>
+      </section>
+      <section class="tour-step">
+        <h2>Align the channels</h2>
+        <p class="get-app-text"><b>Auto align</b> lines up the other two channels on the locked one.
+          Each channel's tab then lets you fine-tune its Light, Position and Geometry.<br><br>
+          Drag directly on the preview with <b>Move on Canvas</b> or <b>Stretch on Canvas</b>.</p>
+      </section>
+      <section class="tour-step">
+        <h2>Finish and export</h2>
+        <p class="get-app-text">Color grade the recomposed image with <b>Curves</b>. Working from a
+          negative scan? The <b>Negative</b> button inverts it. Then reframe the photo as you like
+          with <b>Crop</b>.<br><br>
+          <b>Export</b> saves the final image at full resolution.</p>
+      </section>
+      <section class="tour-step">
+        <h2>Want to go further?</h2>
+        <p class="get-app-text">The desktop app, for Mac and Windows, adds batch import, RAW file
+          support, work sessions, HQ Preview and the full set of Light and Color tools.<br><br>
+          This tour stays one <span class="desktop-only">click</span><span class="phone-inline">tap</span>
+          away, under the <b>?</b> button at the top.</p>
+        <ul class="get-app-features">
+          <li>Work Offline</li><li>Save Sessions</li><li>Batch Import</li>
+          <li>Advanced Control</li><li>RAW Support</li><li>HQ Preview</li>
+        </ul>
+        <button type="button" class="btn secondary tour-get-app desktop-only" id="tour-get-app">
+          <span class="icon" style="--icon: url(icons/download.svg)" aria-hidden="true"></span>Download the full app</button>
+      </section>
+    </div>
+    <div class="get-app-footer tour-footer">
+      <div class="tour-dots" id="tour-dots" aria-hidden="true"></div>
+      <div class="tour-buttons">
+        <button type="button" class="btn secondary" id="tour-back">Back</button>
+        <button type="button" class="btn primary" id="tour-next">Next</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- "Download the full app": the desktop's welcome-window look. Download
        links are filled in from the latest GitHub release when it opens. -->
   <dialog id="get-app-dialog" class="get-app" aria-labelledby="get-app-title">
@@ -242,12 +336,12 @@
     <img class="get-app-logo" src="../resources/app_logo.png" alt="" width="96" height="96">
     <h2 id="get-app-title">Trichr-o-matic</h2>
     <p class="get-app-version" id="get-app-version">Latest version</p>
-    <p class="get-app-text">Trichr-o-matic is an app designed for trichrome photography.<br>
-      From three black and white shots to the recomposed color image, its complete set of tools
-      keeps every step simple: import, align, edit and export your photos with ease.</p>
+    <p class="get-app-text"><strong>Enjoying Trichr-o-matic Web?</strong><br>
+      Download the desktop app to go further: work offline, import and edit several photos at once,
+      save your sessions, and take full control with the complete set of tools.</p>
     <ul class="get-app-features">
-      <li>Batch import</li><li>RAW files</li><li>Sessions</li><li>Light, Color &amp; Curves</li>
-      <li>HQ Preview</li><li>Free</li>
+      <li>Work Offline</li><li>Save Sessions</li><li>Batch Import</li>
+      <li>Advanced Control</li><li>RAW Support</li><li>HQ Preview</li>
     </ul>
     <!-- Pick a system, then download it with the button below. -->
     <div class="get-app-downloads" id="get-app-downloads" role="radiogroup" aria-label="System">
@@ -261,6 +355,8 @@
     <a class="btn primary get-app-download" id="get-app-download" href="https://github.com/Arkazox/TRICHR-O-MATIC/releases/latest">
       <span class="icon" style="--icon: url(icons/download.svg)" aria-hidden="true"></span>
       <span id="get-app-download-label">Download</span></a>
+    <!-- Once clicked: which file is coming (the browser shows the progress). -->
+    <p class="get-app-status" id="get-app-status" role="status" hidden></p>
     <p class="get-app-requirements">macOS 12 Monterey or later · Windows 10 or 11 (64-bit)</p>
     <!-- Shown once a download starts: the apps aren't signed yet, so the
          system blocks the first launch (README: Installing on macOS / Windows). -->

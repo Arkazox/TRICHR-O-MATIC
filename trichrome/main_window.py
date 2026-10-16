@@ -242,10 +242,10 @@ _DUPLICATE_SUFFIX_RE = re.compile(r"^(.*) \((\d+)\)$")
 # more conservative 40ms guess. Below this, recompute_preview()'s own real cost
 # (not this timer) becomes the limiting factor regardless.
 _CURVE_RECOMPUTE_THROTTLE_MS = 16
-# A curve tick only re-applies the curves to the cached pre-curve image
-# (_on_curve_recompute_tick) and skips the filmstrip thumbnail; once the curve
-# has been still this long, the thumbnail is refreshed from the shown frame.
-_CURVE_SETTLE_MS = 250
+# The live preview refreshes the current photo's filmstrip thumbnail only once
+# edits have been still this long (see _schedule_thumbnail), not on every
+# slider or curve tick.
+_THUMBNAIL_SETTLE_MS = 250
 
 # HQ Preview: the live preview always composites from the
 # ~MAX_PREVIEW_DIM-capped (1400px, see imaging.py) imaging.make_preview()
@@ -577,15 +577,14 @@ class MainWindow(QMainWindow):
         # histogram (update_curve_reference=False).
         self._curve_recompute_timer = QTimer(self)
         self._curve_recompute_timer.setSingleShot(True)
-        self._curve_recompute_timer.timeout.connect(self._on_curve_recompute_tick)
-        self._curve_settle_timer = QTimer(self)
-        self._curve_settle_timer.setSingleShot(True)
-        self._curve_settle_timer.setInterval(_CURVE_SETTLE_MS)
-        self._curve_settle_timer.timeout.connect(self._on_curve_settled)
-        # (framed pre-curve RGB, coverage mask or None, curves_preview_index
-        # or None until the first curve tick), from the last recompute that
-        # refreshed the curve reference - see _on_curve_recompute_tick.
-        self._curve_preview_base = None
+        self._curve_recompute_timer.timeout.connect(lambda: self.recompute_preview(update_curve_reference=False))
+        self._thumbnail_settle_timer = QTimer(self)
+        self._thumbnail_settle_timer.setSingleShot(True)
+        self._thumbnail_settle_timer.setInterval(_THUMBNAIL_SETTLE_MS)
+        self._thumbnail_settle_timer.timeout.connect(self._flush_pending_thumbnail)
+        self._pending_thumbnail: tuple[int, np.ndarray] | None = None
+        # The live preview's cached geometry: see _table_preview_source.
+        self._preview_source: dict | None = None
         # HQ Preview toggle (see _HQ_PREVIEW_IDLE_MS above) - not persisted
         # across launches, same as Compare/Crop-active, since it's an
         # in-the-moment display choice rather than a saved preference.
@@ -7450,8 +7449,6 @@ class MainWindow(QMainWindow):
         it on a curve-only tick also avoids paying for a second
         straighten/crop/to_uint8 pass that would just get thrown away
         unused."""
-        if update_curve_reference:
-            self._curve_preview_base = None
         self.light_panel.reset_button.setEnabled(self.global_corr.has_light_correction())
         # Never re-enable Color's own Reset while the B&W toggle has it
         # partially disabled - has_color_correction() doesn't know about
@@ -7562,84 +7559,98 @@ class MainWindow(QMainWindow):
 
         images = [l.image_preview if l.has_image() else None for l in self.layers]
         geo_params = [(l.dx, l.dy, l.scale, l.rotation, l.distortion, l.perspective_v, l.perspective_h,
-                       l.anamorphic, l.stretch_pins) for l in self.layers]
-        tone_params = self._current_tone_params()
-        global_params = self._current_global_params()
-        # Split what compose_trichrome would otherwise do as one call, so
-        # the pre-curve intermediate is available for the Curves tool's own
-        # reference histogram without warping the 3 channels a second time.
-        visible = tuple(i in self._visible_channels for i in range(3))
-        rgb0 = imaging.compose_rgb_from_channels(images, geo_params, tone_params, ref.color_index, visible)
-        mask = imaging.compose_coverage_mask(images, geo_params, ref.color_index)
-        (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-         gsat, gtemp, gtint, gcurves, gbw) = global_params
-        pre_curve_rgb = imaging.apply_global_correction_before_curves(
-            rgb0, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-            gsat, gtemp, gtint)
-        rgb = imaging.apply_curves(pre_curve_rgb, gcurves)
-        if gbw:
-            rgb = imaging.apply_black_white(rgb)
-        rgb = np.clip(rgb, 0.0, 1.0)
+                       l.anamorphic, tuple(tuple(pin) for pin in l.stretch_pins)) for l in self.layers]
+        ref_index = ref.color_index
 
-        rgb = self._apply_frame_transform(rgb)
-        mask = self._apply_frame_transform(mask)
-        if not self._showing_full_frame():
-            # See the matching comment in the Solo-mode branch above:
-            # active crop mode always shows the full frame to crop against.
-            rgb = imaging.apply_crop_rect(rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
-            mask = imaging.apply_crop_rect(mask, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
-        rgb_u8 = imaging.to_uint8(rgb)
+        def build_raw():
+            warped = imaging.warp_channels(images, geo_params, ref_index)
+            raw = np.stack([w if w is not None else np.zeros((canvas_h, canvas_w), np.float32)
+                            for w in warped], axis=-1)
+            return raw, imaging.compose_coverage_mask(images, geo_params, ref_index)
+
+        source = self._table_preview_source(
+            images, (geo_params, ref_index), build_raw)
+        tone_params = self._current_tone_params()
+        visible = [i in self._visible_channels for i in range(3)]
+        channel_tone = [tone_params[i] if images[i] is not None and visible[i] else None for i in range(3)]
+        self._show_table_preview(source, channel_tone, 1.0 / ref.preview_scale, update_curve_reference)
+
+    def _table_preview_source(self, arrays, params, build_raw) -> dict:
+        """The live preview's untoned source, framed and cropped, with its
+        preview_tone_index: rebuilt only when the images, their geometry or
+        the framing changed, so every tone, Light, Color or Curves edit
+        re-renders through tables (_show_table_preview) without warping
+        again. ``arrays`` are compared by identity (held here, so a freed
+        array's id can't be reused); ``build_raw`` returns (untoned float
+        RGB, coverage mask or None) before framing."""
+        frame = self._perspective_frame_params()
+        crop_rect = None if self._showing_full_frame() else (
+            self.crop.x, self.crop.y, self.crop.width, self.crop.height)
+        key = (params, frame["rotation"], frame["mirror_h"], frame["mirror_v"],
+               tuple(sorted(frame["geometry"].items())), crop_rect)
+        cached = self._preview_source
+        if (cached is not None and cached["key"] == key and len(cached["arrays"]) == len(arrays)
+                and all(a is b for a, b in zip(cached["arrays"], arrays))):
+            return cached
+
+        def framed(img):
+            img = self._apply_frame_transform(img)
+            return imaging.apply_crop_rect(img, *crop_rect) if crop_rect else img
+
+        raw, mask = build_raw()
+        # Straighten and the Framing Geometry pad the frame with black after
+        # every correction (the exact path frames the finished image), while
+        # the tables would tone that padding: mark it, to blank it after.
+        frame_pad = None
+        if frame["rotation"] or any(frame["geometry"].values()):
+            frame_pad = framed(np.ones(raw.shape[:2], np.float32)) <= 0.5
+        raw = framed(raw)
+        valid = framed(mask) > 0.5 if mask is not None else None
+        self._preview_source = {
+            "key": key, "arrays": list(arrays), "index": imaging.preview_tone_index(raw),
+            "valid": valid, "frame_pad": frame_pad,
+        }
+        return self._preview_source
+
+    def _show_table_preview(self, source: dict, channel_tone: list, display_scale: float,
+                            update_curve_reference: bool) -> None:
+        """Renders and shows the live preview from _table_preview_source
+        through imaging.preview_render, then the histograms. HQ Preview and
+        export keep the exact float pipeline."""
+        rgb_u8, pre_curve_u8 = imaging.preview_render(
+            source["index"], channel_tone, self._current_global_params(),
+            want_pre_curve=update_curve_reference)
+        if source["frame_pad"] is not None:
+            rgb_u8[source["frame_pad"]] = 0
+            if pre_curve_u8 is not None and pre_curve_u8 is not rgb_u8:
+                pre_curve_u8[source["frame_pad"]] = 0
+        valid = source["valid"]
         self.canvas.set_image_rgb(rgb_u8)
         ref_h, ref_w = rgb_u8.shape[:2]
-        self.canvas.set_reference_size(ref_w, ref_h, 1.0 / ref.preview_scale)
-        self.histogram.set_image(rgb_u8, valid_mask=mask > 0.5)
+        self.canvas.set_reference_size(ref_w, ref_h, display_scale)
+        self.histogram.set_image(rgb_u8, valid_mask=valid)
         self._last_preview_rgb_u8 = rgb_u8
-
         if update_curve_reference:
-            pre_curve_rgb = self._apply_frame_transform(pre_curve_rgb)
-            if not self._showing_full_frame():
-                pre_curve_rgb = imaging.apply_crop_rect(
-                    pre_curve_rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
-            self.curves_panel.set_reference_histogram(imaging.to_uint8(pre_curve_rgb), valid_mask=mask > 0.5)
-            self._curve_preview_base = (pre_curve_rgb, mask > 0.5, None)
-
-        if 0 <= self.batch_current_index < len(self.batch_items):
-            self._update_carousel_thumbnail(self.batch_current_index, rgb_u8)
-
+            self.curves_panel.set_reference_histogram(pre_curve_u8, valid_mask=valid)
+        self._schedule_thumbnail(rgb_u8)
         self._arm_hq_preview_if_enabled()
 
-    def _on_curve_recompute_tick(self) -> None:
-        """One live curve-drag update: re-applies only the curves (and Black &
-        White) to the pre-curve image the last full recompute cached, through
-        lookup tables (imaging.curves_preview_luts), instead of re-running the
-        warp/compose/Light/Color pipeline. Falls back to a full recompute when
-        there's no cached image (Solo channel preview, nothing loaded) or in
-        Compare, which shows no curves. The result is within one 8-bit level
-        of the exact apply_curves path, which HQ Preview and export keep."""
-        base = self._curve_preview_base
-        if base is None or self._compare_active:
-            self.recompute_preview(update_curve_reference=False)
+    def _schedule_thumbnail(self, rgb_u8: np.ndarray) -> None:
+        """Refreshes the current photo's filmstrip thumbnail once edits settle
+        (_THUMBNAIL_SETTLE_MS). A pending one for another photo (edited, then
+        switched away within the delay) is written first."""
+        if not 0 <= self.batch_current_index < len(self.batch_items):
             return
-        pre_curve_rgb, mask, index = base
-        if index is None:
-            index = imaging.curves_preview_index(pre_curve_rgb)
-            self._curve_preview_base = (pre_curve_rgb, mask, index)
-        rgb_u8 = imaging.apply_curves_preview(index, imaging.curves_preview_luts(self.global_corr.curves))
-        if self.global_corr.black_white_active:
-            rgb_u8 = imaging.to_uint8(imaging.apply_black_white(rgb_u8.astype(np.float32) / 255.0))
-        self.curves_panel.reset_button.setEnabled(self.global_corr.has_curve_correction())
-        self.canvas.set_image_rgb(rgb_u8)
-        if mask is not None:
-            self.histogram.set_image(rgb_u8, valid_mask=mask)
-        else:
-            self.histogram.set_image(rgb_u8)
-        self._last_preview_rgb_u8 = rgb_u8
-        self._arm_hq_preview_if_enabled()
-        self._curve_settle_timer.start()
+        if self._pending_thumbnail is not None and self._pending_thumbnail[0] != self.batch_current_index:
+            self._flush_pending_thumbnail()
+        self._pending_thumbnail = (self.batch_current_index, rgb_u8)
+        self._thumbnail_settle_timer.start()
 
-    def _on_curve_settled(self) -> None:
-        if self._last_preview_rgb_u8 is not None and 0 <= self.batch_current_index < len(self.batch_items):
-            self._update_carousel_thumbnail(self.batch_current_index, self._last_preview_rgb_u8)
+    def _flush_pending_thumbnail(self) -> None:
+        self._thumbnail_settle_timer.stop()
+        pending, self._pending_thumbnail = self._pending_thumbnail, None
+        if pending is not None and 0 <= pending[0] < len(self.batch_items):
+            self._update_carousel_thumbnail(*pending)
 
     def _recompute_preview_normal(self, update_curve_reference: bool) -> None:
         """Normal-mode counterpart of the main recompute_preview body above -
@@ -7657,40 +7668,12 @@ class MainWindow(QMainWindow):
             self._invalidate_hq_preview()
             return
 
-        image = imaging.apply_invert(layer.image_preview, layer.invert)
-        global_params = self._current_global_params()
-        (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-         gsat, gtemp, gtint, gcurves, gbw) = global_params
-        pre_curve_rgb = imaging.apply_global_correction_before_curves(
-            image, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
-            gsat, gtemp, gtint)
-        rgb = imaging.apply_curves(pre_curve_rgb, gcurves)
-        if gbw:
-            rgb = imaging.apply_black_white(rgb)
-        rgb = np.clip(rgb, 0.0, 1.0)
-
-        rgb = self._apply_frame_transform(rgb)
-        if not self._showing_full_frame():
-            rgb = imaging.apply_crop_rect(rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
-        rgb_u8 = imaging.to_uint8(rgb)
-        self.canvas.set_image_rgb(rgb_u8)
-        ref_h, ref_w = rgb_u8.shape[:2]
-        self.canvas.set_reference_size(ref_w, ref_h, 1.0 / layer.preview_scale)
-        self.histogram.set_image(rgb_u8)
-        self._last_preview_rgb_u8 = rgb_u8
-
-        if update_curve_reference:
-            pre_curve_rgb = self._apply_frame_transform(pre_curve_rgb)
-            if not self._showing_full_frame():
-                pre_curve_rgb = imaging.apply_crop_rect(
-                    pre_curve_rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
-            self.curves_panel.set_reference_histogram(imaging.to_uint8(pre_curve_rgb))
-            self._curve_preview_base = (pre_curve_rgb, None, None)
-
-        if 0 <= self.batch_current_index < len(self.batch_items):
-            self._update_carousel_thumbnail(self.batch_current_index, rgb_u8)
-
-        self._arm_hq_preview_if_enabled()
+        image = layer.image_preview
+        source = self._table_preview_source([image], "normal", lambda: (image, None))
+        # A Solo photo has no per-channel tone: only Negative, then the
+        # global corrections.
+        channel_tone = [(*_NEUTRAL_TONE, layer.invert)] * 3
+        self._show_table_preview(source, channel_tone, 1.0 / layer.preview_scale, update_curve_reference)
 
     def _current_tone_params(self):
         """Per-layer tone tuples for the active edit state - shared by the

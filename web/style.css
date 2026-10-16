@@ -322,17 +322,6 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 dialog h2 { font-size: 15px; margin: 0 0 10px; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
-/* Narrow screens: panel above the preview. */
-@media (max-width: 760px) {
-  body { overflow: auto; }
-  main { flex-direction: column; flex: none; }
-  #panel { width: 100%; border-right: none; border-bottom: 1px solid var(--line); overflow: visible; }
-  .workspace { min-height: 70vh; }
-  .brand-name { display: none; }
-  .preview-bar { grid-template-columns: 1fr 1fr; }
-  .bar-status { grid-column: 1 / -1; grid-row: 2; }
-}
-
 /* "Download the full app" window: centered card in the Quick Tour welcome
    window's style, with a soft accent glow behind the logo. */
 dialog.get-app {
@@ -351,7 +340,13 @@ dialog.get-app[open] { animation: get-app-in .22s ease-out; }
 .get-app-logo { position: relative; display: block; margin: 0 auto 12px; filter: drop-shadow(0 6px 16px rgba(0, 0, 0, .45)); }
 dialog.get-app h2 { position: relative; margin: 0; font-size: 22px; font-weight: 700; }
 .get-app-version { position: relative; margin: 3px 0 16px; color: #999; font-size: 11px; }
-.get-app-text { margin: 0 auto; max-width: 380px; line-height: 1.5; color: #d6d6d6; }
+/* Justified, each paragraph's last line centered (text-align-last also
+   covers the line before a <br>). */
+.get-app-text {
+  margin: 0 auto; max-width: 380px; line-height: 1.5; color: #d6d6d6;
+  text-align: justify; text-align-last: center; hyphens: manual;
+}
+.get-app-text strong { color: #f2f2f2; font-size: 15px; }
 .get-app-features {
   display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; list-style: none;
   margin: 16px 0 20px; padding: 0;
@@ -370,6 +365,17 @@ dialog.get-app h2 { position: relative; margin: 0; font-size: 22px; font-weight:
 .get-app-option.selected { background: var(--accent-dark); border-color: var(--accent); }
 .get-app-download { display: flex; width: 100%; height: 36px; margin-top: 12px; font-weight: 600; }
 .get-app-download.disabled { opacity: .45; pointer-events: none; }
+.get-app-download.busy { opacity: .7; pointer-events: none; }
+/* Download confirmation: an accent-blue frame with a check mark. */
+.get-app-status {
+  display: flex; align-items: center; gap: 12px; margin: 12px 0 0; padding: 10px 14px;
+  text-align: left; font-size: 12px; line-height: 1.45; color: #cfcfcf;
+  border: 1px solid var(--accent); border-radius: 8px; background: rgba(91, 155, 213, .12);
+  animation: get-app-in .2s ease-out;
+}
+.get-app-status-check { flex: none; width: 26px; height: 26px; color: var(--accent); }
+.get-app-status-title { display: block; color: var(--accent); font-weight: 600; font-size: 13px; }
+.get-app-status .file { color: #ececec; word-break: break-all; }
 .get-app-os { font-weight: 600; font-size: 13px; }
 .get-app-variant, .get-app-size { font-size: 11px; opacity: .8; }
 .get-app-size:empty { display: none; }
@@ -402,4 +408,115 @@ dialog.get-app h2 { position: relative; margin: 0; font-size: 22px; font-weight:
 @media (max-width: 520px) {
   .get-app-downloads { grid-template-columns: 1fr; }
   .get-app-footer { flex-direction: column; }
+}
+
+/* Quick Tour: the same card, one step at a time. */
+/* Square like the GitHub button (.btn.square), so the two match on phones. */
+.tour-button { font-size: 15px; font-weight: 600; }
+.tour-kicker { margin-bottom: 10px; }
+.tour-steps { position: relative; display: grid; }
+.tour-step { grid-area: 1 / 1; visibility: hidden; }
+/* Shorter steps: the title stays put and the text is centered in the room
+   left by the tallest step. */
+.tour-step { display: flex; flex-direction: column; }
+.tour-step > h2 + * { margin-top: auto; }
+.tour-step > :last-child { margin-bottom: auto; }
+.tour-step.current { visibility: visible; animation: get-app-in .2s ease-out; }
+dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
+.tour-step .get-app-features { margin-bottom: 0; }
+.tour-step kbd {
+  display: inline-block; min-width: 16px; margin-right: 3px; padding: 0 4px; border-radius: 4px;
+  border: 1px solid #5a5a5f; background: #1b1b1d; color: #e6e6e6; font: inherit; line-height: 16px;
+}
+.tour-get-app { margin-top: 16px; align-self: center; }
+.tour-dots { display: flex; gap: 6px; }
+.tour-dots span { width: 7px; height: 7px; border-radius: 50%; background: #55555a; transition: background .2s; }
+.tour-dots span.current { background: var(--accent); }
+.tour-buttons { display: flex; gap: 8px; }
+.tour-buttons .btn { min-width: 76px; }
+@media (max-width: 520px) {
+  .tour-footer { flex-direction: row; }
+}
+
+/* Last, so these visibility rules win over the dialogs' own display. */
+/* Phone-only controls: the tool tabs, the import button, the GitHub button. */
+.tool-tabs, .phone-only, .phone-only-row, .phone-inline, #github-button { display: none; }
+.btn.square { width: 30px; padding: 0; }
+
+/* Narrow screens: the preview on top, pinned while the tools scroll below it.
+   Fixed height (svh: the browser bars don't resize it while scrolling). */
+@media (max-width: 760px) {
+  body { overflow: auto; }
+  main { flex-direction: column; flex: none; }
+  #panel { order: 1; width: 100%; border-right: none; border-top: 1px solid var(--line); overflow: visible; }
+  .workspace {
+    position: sticky; top: 0; z-index: 5; flex: none;
+    height: 48vh; height: 48svh; background: var(--window);
+  }
+  body.focus .workspace { height: 100vh; height: 100svh; }
+
+  /* One tool at a time, picked with folder tabs as the channel tabs; the
+     Histogram stays under the tabs for Trichrome Process and Curves. */
+  .tool-tabs { display: flex; margin: 0; }
+  .tool-tab {
+    display: flex; justify-content: center; padding: 10px 0; color: var(--text);
+    border-bottom: 1px solid var(--line);
+  }
+  .tool-tab.active {
+    background: var(--block); border: 1px solid var(--line); border-bottom-color: transparent;
+  }
+  .tool-tab .icon { width: 24px; height: 24px; }
+  #panel > .block:not(.tool-current) { display: none; }
+  #panel > .block.tool-first { border-top: none; border-radius: 0 0 8px 8px; }
+  #panel > .block { margin-bottom: 0; border-radius: 0; border-top: none; }
+  #panel > .block.tool-last { border-radius: 0 0 8px 8px; }
+  #panel > .block.tool-first:not(.tool-last) { border-radius: 0; }
+  /* Always open: the tab is the only way to show or hide a tool. */
+  #panel .block-title { cursor: default; }
+  #panel .block-title::before { display: none; }
+
+  .phone-only { display: inline-flex; }
+  .phone-only-row { display: flex; }
+  .phone-inline { display: inline; }
+  /* The browser leaves pinch and double tap to the page (app.js zooms the
+     preview with them) but still scrolls a zoomed-in photo with one finger. */
+  #viewport { touch-action: pan-x pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  /* Mirror's label sets the width of Rotate's, so the buttons line up. */
+  .block[data-tool="crop"] .row .label { min-width: 52px; }
+  .desktop-only, #get-app-button { display: none; }
+  #github-button { display: inline-flex; }
+  #import-button { height: 40px; padding: 0 18px; margin-bottom: 4px; font-size: 15px; }
+  #import-button .icon { width: 18px; height: 18px; }
+
+  /* Larger text and touch targets. */
+  body { font-size: 15px; }
+  .slider-head, .hint, .note, .info .bubble, .bar-status { font-size: 13px; }
+  .lock-label, .channel-file .file-size { font-size: 12px; }
+  .slider { margin: 6px 0 12px; }
+  .slider input[type=range] { height: 30px; }
+  .slider input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; }
+  .slider input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; }
+  .slider input[type=range]::-webkit-slider-thumb { width: 24px; height: 24px; margin-top: -9px; }
+  .slider input[type=range]::-moz-range-thumb { width: 24px; height: 24px; }
+  .btn { height: 36px; }
+  .btn.square { width: 36px; }
+  .icon-button { min-width: 38px; height: 38px; }
+  .icon-button .icon { width: 22px; height: 22px; }
+  /* The Crop tab is crop mode (app.js syncPhoneCrop): no button for it. */
+  #crop-toggle { display: none; }
+  .layer-toggle, .lock-toggle { width: 34px; height: 34px; }
+  .layer-toggle .icon { width: 26px; height: 26px; }
+  .lock-toggle .dot { width: 13px; height: 13px; }
+  .tab { padding: 9px 0; }
+  .dropdown-button { height: 36px; }
+  .dropdown-item { padding: 9px 14px 9px 30px; }
+  .channel-file { min-height: 46px; }
+  .channel-dot { width: 13px; height: 13px; }
+  .check input { width: 18px; height: 18px; }
+  .info { width: 22px; height: 22px; font-size: 13px; }
+  .brand-name { display: none; }
+  .preview-bar { grid-template-columns: 1fr 1fr; }
+  .bar-status { grid-column: 1 / -1; grid-row: 2; }
+  /* No empty second row when there's no message. */
+  .bar-status:not(:has(> span:not(:empty))) { display: none; }
 }

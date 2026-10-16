@@ -163,8 +163,18 @@ class CurveEditor(QWidget):
             return
         pos = QPointF(event.position() if hasattr(event, "position") else event.pos())
         idx = self._nearest_point_index(pos)
-        if idx is not None and 0 < idx < len(self._points) - 1:
-            del self._points[idx]
+        if idx is not None:
+            last = len(self._points) - 1
+            if 0 < idx < last:
+                del self._points[idx]
+            else:
+                # An endpoint can't be removed: it goes back to its corner,
+                # (0, 0) or (1, 1), which always keeps the points in order.
+                corner = (0.0, 0.0) if idx == 0 else (1.0, 1.0)
+                if self._points[idx] == corner:
+                    event.accept()
+                    return
+                self._points[idx] = corner
             self._drag_index = None
             self.update()
             self.changed.emit()

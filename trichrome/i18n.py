@@ -358,7 +358,7 @@ EN = {
     ),
     "quick_tour_curves_title": "Curves",
     "quick_tour_curves_body": (
-        "Fine tonal control on the master curve (Y) or on each R, G and B channel.\n\nClick the line to add a point, drag to shape it, double-click a point to remove it."
+        "Fine tonal control on the master curve (Y) or on each R, G and B channel.\n\nClick the line to add a point, drag to shape it, double-click a point to remove it (an endpoint goes back to its corner)."
     ),
     "quick_tour_scan_title": "Scan",
     "quick_tour_scan_body": (
@@ -722,7 +722,7 @@ EN = {
 <li><b>Geometry</b>: distortion, vertical and horizontal perspective, and aspect correction for the whole composed image. Works in every mode, including Solo. Click <b>Perspective correction</b> and draw up to 2 vertical and 2 horizontal guides along edges that should be straight. Drag an endpoint to adjust a guide, or double-click it to delete it. <b>Enter</b> solves and applies the correction, <b>Esc</b> cancels.</li>
 </ul>
 <h4>Curves</h4>
-<p>A classic tone curve editor with independent Y (master), R, G and B curves. Click the diagonal to add a point and drag to reshape the curve, including its two endpoints for a true black or white point. Double-click a point to remove it.</p>
+<p>A classic tone curve editor with independent Y (master), R, G and B curves. Click the diagonal to add a point and drag to reshape the curve, including its two endpoints for a true black or white point. Double-click a point to remove it, or an endpoint to put it back in its corner.</p>
 <h3>Navigation &amp; Preview</h3>
 <ul>
 <li><b>Filmstrip</b>: imported photos appear under the preview. It shows automatically once there's more than one photo. Click a thumbnail (or use <b>←/→</b>) to edit that photo's own settings. Press <b>G</b> for a grid of every thumbnail (use <b>↑/↓</b> to move a row, <b>Esc</b> to leave).</li>
@@ -1247,7 +1247,7 @@ FR = {
     ),
     "quick_tour_curves_title": "Courbes",
     "quick_tour_curves_body": (
-        "Réglage fin des tons sur la courbe principale (Y) ou sur chaque canal R, V et B.\n\nCliquez sur la ligne pour ajouter un point, glissez pour la modeler, double-cliquez un point pour le supprimer."
+        "Réglage fin des tons sur la courbe principale (Y) ou sur chaque canal R, V et B.\n\nCliquez sur la ligne pour ajouter un point, glissez pour la modeler, double-cliquez un point pour le supprimer (une extrémité revient dans son coin)."
     ),
     "quick_tour_scan_title": "Scan",
     "quick_tour_scan_body": (
@@ -1617,7 +1617,7 @@ FR = {
 <li><b>Géométrie</b> : distorsion, perspective verticale et horizontale, et correction d'aspect pour toute l'image composée, dans tous les modes, y compris Solo. Cliquez sur <b>Correction de perspective</b> et tracez jusqu'à 2 guides verticaux et 2 horizontaux le long de lignes qui devraient être droites. Glissez une extrémité pour ajuster un guide, ou double-cliquez pour le supprimer. <b>Entrée</b> calcule et applique la correction, <b>Échap</b> annule.</li>
 </ul>
 <h4>Courbes</h4>
-<p>Un éditeur de courbes de ton classique, avec les courbes Y (globale), R, V et B indépendantes. Cliquez sur la diagonale pour ajouter un point, et glissez pour redessiner la courbe, y compris ses deux extrémités pour un vrai point noir ou blanc. Double-cliquez sur un point pour le supprimer.</p>
+<p>Un éditeur de courbes de ton classique, avec les courbes Y (globale), R, V et B indépendantes. Cliquez sur la diagonale pour ajouter un point, et glissez pour redessiner la courbe, y compris ses deux extrémités pour un vrai point noir ou blanc. Double-cliquez sur un point pour le supprimer, ou sur une extrémité pour la remettre dans son coin.</p>
 <h3>Navigation &amp; Aperçu</h3>
 <ul>
 <li><b>Bandeau</b> : les photos importées apparaissent sous l'aperçu. Il s'affiche automatiquement dès qu'il y a plus d'une photo. Cliquez sur une vignette (ou utilisez <b>←/→</b>) pour éditer les réglages propres de cette photo. Appuyez sur <b>G</b> pour une grille de toutes les vignettes (<b>↑/↓</b> pour changer de ligne, <b>Échap</b> pour quitter).</li>

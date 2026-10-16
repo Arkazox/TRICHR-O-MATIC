@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.4 — 2026-10-16
+
+- **Trichr-o-matic Web on phones**: preview on top, tools in tabs, an
+  import button, pinch to zoom, double tap for fit / 1:1, press and hold
+  to compare.
+- Curves: double-click an endpoint to put it back in its corner.
+- Faster live preview while editing, in the app and on the web.
+
 ## v1.1.3 — 2026-10-16
 
 - **Trichr-o-matic Web**: a lighter version that runs in your browser,

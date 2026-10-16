@@ -458,6 +458,7 @@ async function loadChannel(index, file) {
   }
   syncAll();
   requestRender();
+  syncPhoneCrop();
   if (pendingLoads === 0 && loadedSinceAlign && app.files.every(Boolean)) {
     loadedSinceAlign = false;
     autoAlign();
@@ -980,6 +981,8 @@ function syncFullscreenButton() {
 function buildViewControls() {
   $("#rotate-left").addEventListener("click", () => rotatePhoto(false));
   $("#rotate-right").addEventListener("click", () => rotatePhoto(true));
+  $("#crop-rotate-left").addEventListener("click", () => rotatePhoto(false));
+  $("#crop-rotate-right").addEventListener("click", () => rotatePhoto(true));
   $("#compare").addEventListener("click", () => setCompare(!app.compare));
   $("#fullscreen").addEventListener("click", toggleFullscreen);
   // Leaving the browser's full screen (Esc) also leaves the panel-less view.
@@ -1028,10 +1031,13 @@ function buildPinchZoom() {
     zoomAt(displayScale() * Math.exp(-delta * 0.01), event.clientX, event.clientY);
   }, { passive: false });
 
-  // Safari reports a pinch as gesture events instead.
+  // Safari reports a pinch as gesture events instead. On a touch screen the
+  // touch handlers below zoom (every browser sends those); the gesture events
+  // are only cancelled there, or iOS would zoom the whole page.
   let gestureStart = null;
   const onGesture = (event) => {
     event.preventDefault();
+    if (touchPinch) return;
     if (event.type === "gesturestart") {
       gestureStart = overViewport(event) && app.image ? displayScale() : null;
     } else if (event.type === "gesturechange" && gestureStart !== null) {
@@ -1043,7 +1049,84 @@ function buildPinchZoom() {
   for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
     window.addEventListener(type, onGesture, { passive: false });
   }
+
+  // Touch: two fingers pinch around their midpoint; a double tap switches
+  // between fit and 1:1 (at the tapped point); a long press shows the
+  // original (Compare) until the finger lifts.
+  const viewport = $("#viewport");
+  const spread = (touches) => Math.hypot(
+    touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+  const midpoint = (touches) => [
+    (touches[0].clientX + touches[1].clientX) / 2, (touches[0].clientY + touches[1].clientY) / 2];
+  let tap = null;
+  let lastTap = null;
+  let holdTimer = null;
+  let holdCompare = false;
+  const cancelHold = () => { clearTimeout(holdTimer); holdTimer = null; };
+  const endHold = () => {
+    cancelHold();
+    if (holdCompare) { holdCompare = false; setCompare(false); }
+  };
+  viewport.addEventListener("touchstart", (event) => {
+    cancelHold();
+    if (event.touches.length === 2 && app.image) {
+      touchPinch = { distance: spread(event.touches), scale: displayScale() };
+      tap = null;
+      endHold();
+    } else if (event.touches.length === 1) {
+      const t = event.touches[0];
+      tap = { x: t.clientX, y: t.clientY, time: event.timeStamp };
+      // Not while cropping (the press may start a frame drag), nor when
+      // Compare is already on from its button.
+      if (app.image && !app.cropActive && !app.compare) {
+        holdTimer = setTimeout(() => {
+          holdTimer = null;
+          holdCompare = true;
+          tap = null; // a hold isn't a tap
+          setCompare(true);
+        }, LONG_PRESS_MS);
+      }
+    } else {
+      tap = null;
+    }
+  }, { passive: true });
+  viewport.addEventListener("touchmove", (event) => {
+    if (tap || holdTimer) {
+      const t = event.touches[0];
+      const start = tap || { x: t.clientX, y: t.clientY };
+      if (Math.hypot(t.clientX - start.x, t.clientY - start.y) > DOUBLE_TAP_DIST / 2) {
+        tap = null;
+        cancelHold();
+      }
+    }
+    if (!touchPinch || event.touches.length !== 2) return;
+    event.preventDefault();
+    const [x, y] = midpoint(event.touches);
+    zoomAt(touchPinch.scale * spread(event.touches) / touchPinch.distance, x, y);
+  }, { passive: false });
+  viewport.addEventListener("touchend", (event) => {
+    if (event.touches.length < 2) touchPinch = null;
+    if (!event.touches.length) endHold();
+    if (!tap || event.touches.length) return;
+    const isDouble = lastTap && tap.time - lastTap.time < DOUBLE_TAP_MS
+      && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) < DOUBLE_TAP_DIST;
+    lastTap = isDouble ? null : tap;
+    if (isDouble && app.image) {
+      event.preventDefault();
+      if (app.zoom === null) zoomAt(1, tap.x, tap.y);
+      else setZoom(null);
+    }
+    tap = null;
+  });
+  viewport.addEventListener("touchcancel", () => { touchPinch = null; tap = null; endHold(); });
+  // No text-selection loupe or image menu on a long press.
+  viewport.addEventListener("contextmenu", (event) => {
+    if (holdCompare || holdTimer) event.preventDefault();
+  });
 }
+
+let touchPinch = null;
+const LONG_PRESS_MS = 450;
 
 function buildZoomControls() {
   $("#zoom-in").addEventListener("click", () => zoomAtCenter(displayScale() * 1.25));
@@ -1367,13 +1450,19 @@ function buildMoveOnCanvas() {
 // Curves: Y (master) then R, G, B, as imaging.apply_curves. The editor is a
 // port of the desktop's CurveEditor: click to add a point, drag it (between
 // its neighbors), double-click an inner point to remove it; the endpoints
-// move on both axes (a black or white point).
+// move on both axes (a black or white point), and double-clicking one puts
+// it back in its corner.
 // ---------------------------------------------------------------------------
 
 const CURVE_COLORS = { Y: "#dcdcdc", R: CHANNELS[0].color, G: CHANNELS[1].color, B: CHANNELS[2].color };
 const CURVE_MARGIN = 10;
 const CURVE_HANDLE_RADIUS = 5.5;
 const CURVE_HIT_RADIUS = 11;
+// A fingertip covers more than a cursor tip.
+const CURVE_TOUCH_HIT_RADIUS = 22;
+// Two taps this close in time and space make a double tap.
+const DOUBLE_TAP_MS = 350;
+const DOUBLE_TAP_DIST = 24;
 const CURVE_MIN_X_GAP = 0.015;
 
 const curveUI = { channel: "Y", drag: null, histograms: null };
@@ -1467,7 +1556,8 @@ function canvasToCurve(event) {
 function nearestCurvePoint(event) {
   const bounds = $("#curve-editor").getBoundingClientRect();
   const px = event.clientX - bounds.left, py = event.clientY - bounds.top;
-  let best = null, bestDist = CURVE_HIT_RADIUS;
+  let best = null;
+  let bestDist = event.pointerType && event.pointerType !== "mouse" ? CURVE_TOUCH_HIT_RADIUS : CURVE_HIT_RADIUS;
   app.doc.curves[curveUI.channel].forEach(([x, y], i) => {
     const [cx, cy] = curveToCanvas(x, y);
     const dist = Math.abs(cx - px) + Math.abs(cy - py);
@@ -1576,10 +1666,40 @@ function buildCurves() {
     row.append(button);
   }
 
+  // Double-click (or double tap) on a point: an interior point is removed, an
+  // endpoint goes back to its corner, (0, 0) or (1, 1), which always keeps the
+  // points in order.
+  const removeCurvePoint = (index) => {
+    const points = app.doc.curves[curveUI.channel];
+    const last = points.length - 1;
+    if (index > 0 && index < last) {
+      edit(() => setCurvePoints(points.filter((_, k) => k !== index)));
+      return;
+    }
+    const corner = index === 0 ? [0, 0] : [1, 1];
+    if (points[index][0] === corner[0] && points[index][1] === corner[1]) return;
+    edit(() => setCurvePoints(points.map((p, k) => (k === index ? corner : p))));
+  };
+  // touch-action: none (needed to drag points) stops the browser from making
+  // a dblclick out of two taps, so touch detects its own double tap.
+  let lastTap = null;
+  let lastPointerType = "mouse";
+
   canvas.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
-    beginEdit();
+    lastPointerType = event.pointerType;
     let index = nearestCurvePoint(event);
+    if (event.pointerType !== "mouse") {
+      const now = event.timeStamp;
+      const isDouble = lastTap && now - lastTap.time < DOUBLE_TAP_MS
+        && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) < DOUBLE_TAP_DIST;
+      lastTap = isDouble ? null : { time: now, x: event.clientX, y: event.clientY };
+      if (isDouble && index !== null) {
+        removeCurvePoint(index);
+        return;
+      }
+    }
+    beginEdit();
     if (index === null) {
       const points = app.doc.curves[curveUI.channel];
       let [x, y] = canvasToCurve(event);
@@ -1625,11 +1745,10 @@ function buildCurves() {
   canvas.addEventListener("pointerup", end);
   canvas.addEventListener("pointercancel", end);
   canvas.addEventListener("dblclick", (event) => {
+    // Touch handles its own double tap in pointerdown.
+    if (lastPointerType !== "mouse") return;
     const index = nearestCurvePoint(event);
-    const points = app.doc.curves[curveUI.channel];
-    if (index !== null && index > 0 && index < points.length - 1) {
-      edit(() => setCurvePoints(points.filter((_, k) => k !== index)));
-    }
+    if (index !== null) removeCurvePoint(index);
   });
 
   $("#negative").addEventListener("click", (event) => {
@@ -1734,6 +1853,7 @@ function buildExport() {
     dialog.showModal();
   });
   dialog.addEventListener("close", () => {
+    syncPhoneCrop(); // opening the dialog committed the crop
     if (dialog.returnValue === "export") exportImage(format.value, $("#export-name").value.trim() || "trichrome");
   });
 }
@@ -1827,6 +1947,56 @@ function syncGetAppDownload() {
   }
 }
 
+// A page can't follow a download's progress (the browser owns it), so
+// this only says which file is on its way and where it lands. The button
+// reads "Downloading…" for a few seconds, which also stops a double click
+// from starting a second copy.
+let getAppBusyTimer = null;
+
+function showGetAppProgress() {
+  const button = $("#get-app-download");
+  const status = $("#get-app-status");
+  const asset = latestRelease?.assets.find((a) => a.name.endsWith(selectedAsset));
+  const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  check.setAttribute("class", "get-app-status-check");
+  check.setAttribute("viewBox", "0 0 24 24");
+  check.setAttribute("aria-hidden", "true");
+  check.innerHTML = '<circle cx="12" cy="12" r="11" fill="currentColor" opacity=".18"/>'
+    + '<circle cx="12" cy="12" r="10.25" fill="none" stroke="currentColor" stroke-width="1.5"/>'
+    + '<path d="M7 12.4l3.2 3.2L17 8.8" fill="none" stroke="currentColor" stroke-width="2"'
+    + ' stroke-linecap="round" stroke-linejoin="round"/>';
+  const text = document.createElement("div");
+  const title = document.createElement("span");
+  title.className = "get-app-status-title";
+  if (asset) {
+    title.textContent = "Download started";
+    const file = document.createElement("span");
+    file.className = "file";
+    file.textContent = asset.name;
+    text.append(title, file, ` (${formatSize(asset.size)}). You'll find it in your browser's downloads.`);
+  } else {
+    title.textContent = "Opening the download page";
+    text.append(title, "The files are on the GitHub release page, in a new tab.");
+  }
+  status.replaceChildren(check, text);
+  status.hidden = false;
+  if (!asset) return;
+  clearTimeout(getAppBusyTimer);
+  button.classList.add("busy");
+  $("#get-app-download-label").textContent = "Downloading…";
+  getAppBusyTimer = setTimeout(() => {
+    button.classList.remove("busy");
+    syncGetAppDownload();
+  }, 4000);
+}
+
+function hideGetAppProgress() {
+  clearTimeout(getAppBusyTimer);
+  $("#get-app-download").classList.remove("busy");
+  $("#get-app-status").hidden = true;
+  for (const note of $("#get-app-dialog").querySelectorAll(".get-app-note")) note.hidden = true;
+}
+
 async function openGetAppDialog() {
   const dialog = $("#get-app-dialog");
   const platform = visitorPlatform();
@@ -1835,7 +2005,7 @@ async function openGetAppDialog() {
   const intelMac = platform === "mac" && (await macIsAppleSilicon()) === false;
   selectedAsset = platform === "windows" ? "Windows-Setup.exe"
     : platform === "mac" ? (intelMac ? "Intel.zip" : "AppleSilicon.zip") : null;
-  for (const note of dialog.querySelectorAll(".get-app-note")) note.hidden = true;
+  hideGetAppProgress();
   syncGetAppDownload();
   dialog.showModal();
   try {
@@ -1856,13 +2026,14 @@ function buildGetApp() {
   $("#get-app-dialog").querySelectorAll(".get-app-option").forEach((option) => {
     option.addEventListener("click", () => {
       selectedAsset = option.dataset.asset;
-      for (const note of $("#get-app-dialog").querySelectorAll(".get-app-note")) note.hidden = true;
+      hideGetAppProgress();
       syncGetAppDownload();
     });
   });
   // Once a download starts, how to get past the first-launch warning.
   $("#get-app-download").addEventListener("click", () => {
     if (!selectedAsset) return;
+    showGetAppProgress();
     const windows = selectedAsset.startsWith("Windows");
     $("#get-app-note-mac").hidden = windows;
     $("#get-app-note-windows").hidden = !windows;
@@ -1878,15 +2049,82 @@ function buildGetApp() {
     }
     setTimeout(() => { button.textContent = "Copy"; }, 1500);
   });
-  // A click on the backdrop (outside the card, not in its padding) closes it.
-  $("#get-app-dialog").addEventListener("click", (event) => {
-    const dialog = event.currentTarget;
-    if (event.target !== dialog) return;
+  closeOnBackdropClick($("#get-app-dialog"));
+}
+
+// A click or tap on the backdrop (outside the card, not in its padding)
+// closes it. Pointer events rather than click: iOS Safari doesn't always
+// send a click for a tap on a dialog's backdrop. Both ends must be outside,
+// so a drag that starts in the card (selecting text) doesn't close it.
+function closeOnBackdropClick(dialog) {
+  const outside = (event) => {
+    if (event.target !== dialog) return false;
     const r = dialog.getBoundingClientRect();
-    const inside = event.clientX >= r.left && event.clientX <= r.right
-      && event.clientY >= r.top && event.clientY <= r.bottom;
-    if (!inside) dialog.close();
+    return event.clientX < r.left || event.clientX > r.right
+      || event.clientY < r.top || event.clientY > r.bottom;
+  };
+  let pressedOutside = false;
+  dialog.addEventListener("pointerdown", (event) => { pressedOutside = outside(event); });
+  dialog.addEventListener("pointerup", (event) => {
+    if (pressedOutside && outside(event)) dialog.close();
+    pressedOutside = false;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Quick Tour
+// ---------------------------------------------------------------------------
+
+// Seen once in this browser: the tour then waits for the "?" button. Storage
+// can be blocked (private windows, strict settings): the tour then stays
+// closed rather than opening on every visit.
+const TOUR_SEEN_KEY = "trichromatic-web-tour-seen";
+let tourStep = 0;
+
+function tourSeen() {
+  try { return localStorage.getItem(TOUR_SEEN_KEY) === "1"; } catch (_) { return true; }
+}
+
+function showTourStep(index) {
+  const steps = $("#tour-dialog").querySelectorAll(".tour-step");
+  tourStep = Math.max(0, Math.min(steps.length - 1, index));
+  steps.forEach((step, i) => step.classList.toggle("current", i === tourStep));
+  $("#tour-dots").querySelectorAll("span").forEach((dot, i) => dot.classList.toggle("current", i === tourStep));
+  const last = tourStep === steps.length - 1;
+  $("#tour-back").hidden = tourStep === 0;
+  $("#tour-next").textContent = last ? "Get started" : "Next";
+}
+
+function openTour() {
+  showTourStep(0);
+  $("#tour-dialog").showModal();
+  $("#tour-next").focus();
+}
+
+function buildTour() {
+  const dialog = $("#tour-dialog");
+  const count = dialog.querySelectorAll(".tour-step").length;
+  $("#tour-dots").replaceChildren(...Array.from({ length: count }, () => document.createElement("span")));
+  $("#tour-button").addEventListener("click", openTour);
+  $("#tour-back").addEventListener("click", () => showTourStep(tourStep - 1));
+  $("#tour-next").addEventListener("click", () => {
+    if (tourStep === count - 1) dialog.close();
+    else showTourStep(tourStep + 1);
+  });
+  $("#tour-get-app").addEventListener("click", () => {
+    dialog.close();
+    openGetAppDialog();
+  });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowRight") showTourStep(tourStep + 1);
+    else if (event.key === "ArrowLeft") showTourStep(tourStep - 1);
+  });
+  // However it closes (Get started, Esc, the backdrop), it counts as seen.
+  dialog.addEventListener("close", () => {
+    try { localStorage.setItem(TOUR_SEEN_KEY, "1"); } catch (_) {}
+  });
+  closeOnBackdropClick(dialog);
+  if (!tourSeen()) openTour();
 }
 
 // ---------------------------------------------------------------------------
@@ -1953,6 +2191,80 @@ function buildKeyboard() {
       const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
       edit(() => moveActiveChannel(d[0], d[1]));
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Phones: one tool at a time behind icon tabs, and an import button in the
+// preview, since a phone can't drag and drop. The CSS shows them only on a
+// narrow screen; on a wide one every block shows, as before.
+// ---------------------------------------------------------------------------
+
+const PHONE_QUERY = matchMedia("(max-width: 760px)");
+// Hidden by default; the preview bar's histogram button shows it under the
+// tabs, whichever tool is shown (remembered per browser).
+const HISTOGRAM_KEY = "phone-histogram-shown";
+let phoneHistogram = false;
+
+function showTool(tool) {
+  const panel = $("#panel");
+  panel.dataset.tool = tool;
+  document.querySelectorAll(".tool-tab").forEach((tab) => {
+    const active = tab.dataset.tool === tool;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", active);
+  });
+  const shown = [...panel.querySelectorAll(":scope > .block")].filter((block) =>
+    block.dataset.tool === tool
+    || (block.dataset.tool === "histogram" && phoneHistogram));
+  $("#histogram-toggle").classList.toggle("on", phoneHistogram);
+  $("#histogram-toggle").title = phoneHistogram ? "Hide the histogram" : "Show the histogram";
+  panel.querySelectorAll(":scope > .block").forEach((block) => {
+    block.classList.toggle("tool-current", shown.includes(block));
+    block.classList.toggle("tool-first", block === shown[0]);
+    block.classList.toggle("tool-last", block === shown[shown.length - 1]);
+  });
+  if (PHONE_QUERY.matches) shown.forEach((block) => { block.open = true; });
+  syncPhoneCrop();
+  // Canvases measure their width when drawn: 0 while their block was hidden.
+  drawHistogram(lastHistogram);
+  drawCurveEditor();
+}
+
+// On a phone the Crop tab is crop mode: showing it starts cropping, leaving
+// it keeps the frame (as the desktop's crop button does).
+function syncPhoneCrop() {
+  if (!PHONE_QUERY.matches) return;
+  const cropTab = $("#panel").dataset.tool === "crop";
+  if (cropTab && !app.cropActive) enterCrop();
+  else if (!cropTab && app.cropActive) commitCrop();
+}
+
+function buildPhoneLayout() {
+  document.querySelectorAll(".tool-tab").forEach((tab) => {
+    tab.addEventListener("click", () => showTool(tab.dataset.tool));
+  });
+  // A block can't be collapsed on a phone: its tab shows or hides it.
+  document.querySelectorAll("#panel > .block > .block-title").forEach((title) => {
+    title.addEventListener("click", (event) => {
+      if (PHONE_QUERY.matches && !event.target.closest("button")) event.preventDefault();
+    });
+  });
+  try { phoneHistogram = localStorage.getItem(HISTOGRAM_KEY) === "1"; } catch (_) { /* private mode */ }
+  $("#histogram-toggle").addEventListener("click", () => {
+    phoneHistogram = !phoneHistogram;
+    try { localStorage.setItem(HISTOGRAM_KEY, phoneHistogram ? "1" : "0"); } catch (_) { /* private mode */ }
+    showTool($("#panel").dataset.tool);
+  });
+  PHONE_QUERY.addEventListener("change", () => showTool($("#panel").dataset.tool));
+  showTool($("#panel").dataset.tool);
+
+  const input = $("#import-input");
+  $("#import-button").addEventListener("click", () => input.click());
+  input.addEventListener("change", () => {
+    const files = [...input.files];
+    input.value = "";
+    if (files.length) loadDroppedFiles(files);
   });
 }
 
@@ -2139,7 +2451,7 @@ function syncAll() {
     toggle.querySelector(".icon").style.setProperty("--icon",
       `url(../resources/icons/Global/${on ? "circle-letter" : "circle-dotted-letter"}-${letter}.svg)`);
   });
-  document.querySelectorAll(".tab").forEach((tab, index) => tab.classList.toggle("active", index === app.tab));
+  document.querySelectorAll("#channel-tabs .tab").forEach((tab, index) => tab.classList.toggle("active", index === app.tab));
   const tabBody = $("#tab-body");
   tabBody.dataset.active = app.tab;
   tabBody.style.setProperty("--channel", CHANNELS[app.tab].color);
@@ -2168,7 +2480,9 @@ function syncAll() {
 
   const crop = app.doc.crop;
   $("#compare").classList.toggle("on", app.compare);
-  for (const id of ["#rotate-left", "#rotate-right", "#compare"]) $(id).disabled = !loaded;
+  for (const id of ["#rotate-left", "#rotate-right", "#crop-rotate-left", "#crop-rotate-right", "#compare"]) {
+    $(id).disabled = !loaded;
+  }
   $("#crop-toggle").classList.toggle("on", app.cropActive);
   $("#crop-toggle").disabled = !loaded;
   $("#mirror-h").classList.toggle("on", crop.mirror_h);
@@ -2222,6 +2536,7 @@ function init() {
   buildDropdowns();
   buildKeyboard();
   buildWindowDrop();
+  buildPhoneLayout();
   $("#mode").addEventListener("change", (event) => changeMode(event.target.value === "color"));
   $("#reset-all").addEventListener("click", (event) => {
     event.preventDefault();
@@ -2230,6 +2545,7 @@ function init() {
   });
   syncAll();
   drawHistogram(null);
+  buildTour();
 }
 
 init();

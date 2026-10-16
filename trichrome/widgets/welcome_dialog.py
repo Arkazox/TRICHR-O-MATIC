@@ -6,10 +6,10 @@ or the toolbar's "?" menu. Styled like the app's other own dialogs
 (ConfirmDialog, ModeSwitchDialog), not native QMessageBox chrome."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QPointF, QSettings, Qt
+from PySide6.QtGui import QPainter, QPalette, QPixmap, QTextLayout
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QLayout, QPushButton, QVBoxLayout,
+    QDialog, QHBoxLayout, QLabel, QLayout, QPushButton, QVBoxLayout, QWidget,
 )
 
 from .. import i18n
@@ -24,6 +24,76 @@ SHOW_AT_STARTUP_KEY = "quick_tour_show_at_startup"
 
 _LOGO_SIZE = 96
 _TEXT_WIDTH = 380
+
+
+class _JustifiedText(QWidget):
+    """Fixed-width text, paragraphs split on newlines: every line of a
+    paragraph is stretched to the full width, its last line centered.
+    Painted by hand: Qt's own justify (rich text or QTextOption) never
+    stretches a paragraph's last line nor a line ending in a forced break,
+    so it can't justify all lines but the last one."""
+
+    _LINE_HEIGHT = 1.4
+
+    def __init__(self, text: str, width: int, parent=None):
+        super().__init__(parent)
+        self._text = text
+        self._lines = []  # (words, is_last_line) per line; [] for a blank paragraph
+        self.setFixedWidth(width)
+        self._relayout()
+
+    def _relayout(self) -> None:
+        width = self.width()
+        self._lines = []
+        for paragraph in self._text.split("\n"):
+            if not paragraph.strip():
+                self._lines.append(([], True))
+                continue
+            layout = QTextLayout(paragraph, self.font())
+            layout.beginLayout()
+            spans = []
+            while True:
+                line = layout.createLine()
+                if not line.isValid():
+                    break
+                line.setLineWidth(width)
+                spans.append(paragraph[line.textStart():line.textStart() + line.textLength()])
+            layout.endLayout()
+            for i, span in enumerate(spans):
+                self._lines.append((span.split(), i == len(spans) - 1))
+        self.setFixedHeight(len(self._lines) * self._line_pitch())
+        self.update()
+
+    def _line_pitch(self) -> int:
+        return round(self.fontMetrics().height() * self._LINE_HEIGHT)
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == event.Type.FontChange:
+            self._relayout()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(QPalette.WindowText))
+        metrics = self.fontMetrics()
+        pitch = self._line_pitch()
+        # The extra line spacing is split above and below each line.
+        baseline = (pitch - metrics.height()) / 2 + metrics.ascent()
+        space = metrics.horizontalAdvance(" ")
+        for row, (words, last) in enumerate(self._lines):
+            if not words:
+                continue
+            y = row * pitch + baseline
+            widths = [metrics.horizontalAdvance(w) for w in words]
+            if last or len(words) == 1:
+                x = (self.width() - sum(widths) - space * (len(words) - 1)) / 2
+                gap = space
+            else:
+                x = 0
+                gap = (self.width() - sum(widths)) / (len(words) - 1)
+            for word, w in zip(words, widths):
+                painter.drawText(QPointF(x, y), word)
+                x += w + gap
 
 
 def show_at_startup_enabled(org_name: str, app_name: str) -> bool:
@@ -69,12 +139,7 @@ class WelcomeDialog(QDialog):
         root.addWidget(version, alignment=Qt.AlignHCenter)
         root.addSpacing(14)
 
-        text = QLabel(i18n.tr("quick_tour_welcome_text"))
-        text.setWordWrap(True)
-        # Fixed (not maximum) width - see ConfirmDialog's detail_label for
-        # why a word-wrapped QLabel needs this to report its real height.
-        text.setFixedWidth(_TEXT_WIDTH)
-        text.setStyleSheet("line-height: 140%;")
+        text = _JustifiedText(i18n.tr("quick_tour_welcome_text"), _TEXT_WIDTH)
         root.addWidget(text, alignment=Qt.AlignHCenter)
         root.addSpacing(20)
 

@@ -887,6 +887,90 @@ def apply_curves_preview(index: np.ndarray, luts: np.ndarray) -> np.ndarray:
     return luts.reshape(-1).take(index)
 
 
+# Input levels of preview_tone_index: finer than the curve tables, since a
+# strong exposure or gamma stretches the shadows more than a curve does.
+_TONE_PREVIEW_LEVELS = 16384
+
+
+def preview_tone_index(raw_rgb: np.ndarray) -> np.ndarray:
+    """A float RGB image of untoned channel values (the warped channels, or a
+    Solo photo before Negative) as indices into preview_render's flattened
+    tables, each channel offset to its own table. Built once per geometry:
+    every tone, Light, Color and Curves change then re-renders from it."""
+    levels = _TONE_PREVIEW_LEVELS
+    idx = (np.clip(raw_rgb, 0.0, 1.0) * (levels - 1) + 0.5).astype(np.uint16)
+    idx += np.arange(3, dtype=np.uint16) * levels
+    return idx
+
+
+def preview_render(index: np.ndarray, channel_tone: list, global_params: tuple,
+                   want_pre_curve: bool = False) -> tuple[np.ndarray, np.ndarray | None]:
+    """The live preview from preview_tone_index's indices: per-channel tone
+    (``channel_tone[c]`` is that channel's tone tuple including invert, or
+    None for a channel that contributes black: not loaded, or hidden), then
+    the global Light, white balance, saturation, Curves and Black & White of
+    ``global_params`` (MainWindow._current_global_params' layout).
+
+    Everything up to white balance acts on each channel alone, so it folds
+    into one table per channel, built with the exact functions on a column of
+    sample values, and the image is one lookup. Saturation mixes channels, so
+    when it's not 1 the table stops before it and Curves follow through
+    curves_preview_luts. Within about one 8-bit level of the exact float path
+    (compose_rgb_from_channels + apply_global_correction), which HQ Preview
+    and export keep.
+
+    Returns (rgb_u8, pre_curve_u8); pre_curve_u8 (the image right before the
+    curves, for the Curves tool's reference histogram) only with
+    ``want_pre_curve``."""
+    (gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights,
+     gsat, gtemp, gtint, gcurves, gbw) = global_params
+    levels = _TONE_PREVIEW_LEVELS
+    x = np.linspace(0.0, 1.0, levels, dtype=np.float32)
+    columns = []
+    for tone in channel_tone:
+        if tone is None:
+            columns.append(np.zeros(levels, dtype=np.float32))
+            continue
+        black, white, gamma, exposure, brightness, contrast, shadows, highlights, invert = tone
+        columns.append(apply_tone_curve(
+            apply_invert(x, invert), black, white, gamma, exposure, brightness, contrast,
+            shadows, highlights))
+    table = np.stack(columns, axis=-1)[:, None, :]  # (levels, 1, 3): a 1-px-wide image
+    table = apply_tone_curve(
+        table, gblack, gwhite, ggamma, gexposure, gbrightness, gcontrast, gshadows, ghighlights)
+    table = np.clip(apply_white_balance(table, gtemp, gtint), 0.0, 1.0)
+    curves = gcurves or {}
+    has_curves = any(not _is_identity_curve(points) for points in curves.values())
+
+    def lookup(tab: np.ndarray) -> np.ndarray:
+        # (levels, 1, 3) -> channel-major flat table, matching the index offsets.
+        return np.ascontiguousarray(tab[:, 0, :].T).reshape(-1).take(index)
+
+    pre_curve_u8 = None
+    if abs(gsat - 1.0) <= 1e-6:
+        if has_curves:
+            rgb_u8 = lookup(to_uint8(np.clip(apply_curves(table, curves), 0.0, 1.0)))
+            if want_pre_curve:
+                pre_curve_u8 = lookup(to_uint8(table))
+        else:
+            rgb_u8 = lookup(to_uint8(table))
+            pre_curve_u8 = rgb_u8 if want_pre_curve else None
+    else:
+        pre_curve = np.clip(apply_saturation(lookup(table.astype(np.float32)), gsat), 0.0, 1.0)
+        # convertScaleAbs: the same rounding as to_uint8 on [0,1] values,
+        # about ten times faster.
+        if has_curves:
+            rgb_u8 = apply_curves_preview(curves_preview_index(pre_curve), curves_preview_luts(curves))
+        else:
+            rgb_u8 = cv2.convertScaleAbs(pre_curve, alpha=255.0)
+        if want_pre_curve:
+            pre_curve_u8 = cv2.convertScaleAbs(pre_curve, alpha=255.0) if has_curves else rgb_u8
+    if gbw:
+        # OpenCV's fixed-point BT.601 luma, the weights apply_black_white uses.
+        rgb_u8 = cv2.cvtColor(cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2GRAY), cv2.COLOR_GRAY2RGB)
+    return rgb_u8, pre_curve_u8
+
+
 _LUMA_WEIGHTS = (0.299, 0.587, 0.114)
 
 
@@ -919,14 +1003,18 @@ def apply_global_correction_before_curves(
     out = apply_tone_curve(
         rgb, black_point, white_point, gamma, exposure, brightness, contrast, shadows, highlights)
     out = apply_white_balance(out, temperature, tint)
-
-    if abs(saturation - 1.0) > 1e-6:
-        out = np.clip(out, 0.0, 1.0)
-        hsv = cv2.cvtColor(out, cv2.COLOR_RGB2HSV)
-        hsv[..., 1] = np.clip(hsv[..., 1] * saturation, 0.0, 1.0)
-        out = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-
+    out = apply_saturation(out, saturation)
     return np.clip(out, 0.0, 1.0)
+
+
+def apply_saturation(rgb: np.ndarray, saturation: float) -> np.ndarray:
+    """Scales HSV saturation; clips to [0,1] first. A no-op at 1.0."""
+    if abs(saturation - 1.0) <= 1e-6:
+        return rgb
+    out = np.clip(rgb, 0.0, 1.0).astype(np.float32)
+    hsv = cv2.cvtColor(out, cv2.COLOR_RGB2HSV)
+    hsv[..., 1] = np.clip(hsv[..., 1] * saturation, 0.0, 1.0)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
 
 def apply_global_correction(
@@ -975,6 +1063,28 @@ def compute_channel_histograms(rgb_uint8: np.ndarray, valid_mask: np.ndarray | N
     }
 
 
+def warp_channels(images, geo_params, ref_index: int) -> list:
+    """Each loaded channel aligned onto the reference channel's canvas (lens
+    correction, similarity warp, stretch pins), before any tone; None for a
+    channel with no image."""
+    ref_h, ref_w = images[ref_index].shape[:2]
+    canvas_size = (ref_w, ref_h)
+    out = [None, None, None]
+    for i in range(3):
+        img = images[i]
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        (dx, dy, scale, rotation, distortion, perspective_v, perspective_h, anamorphic,
+         stretch_pins) = geo_params[i]
+        img = apply_lens_correction(img, distortion, perspective_v, perspective_h, anamorphic)
+        matrix = build_similarity_matrix(
+            dx, dy, scale, rotation, src_center=(w / 2, h / 2), dst_center=(ref_w / 2, ref_h / 2))
+        warped = warp_to_canvas(img, matrix, canvas_size)
+        out[i] = apply_stretch_warp(warped, stretch_pins)
+    return out
+
+
 def compose_rgb_from_channels(
     images, geo_params, tone_params, ref_index: int, visible: tuple[bool, bool, bool] = (True, True, True),
 ) -> np.ndarray:
@@ -991,22 +1101,14 @@ def compose_rgb_from_channels(
     toned before being zeroed, so canvas_size/ref_index's own shape
     requirement is unaffected regardless of which channel is hidden."""
     ref_h, ref_w = images[ref_index].shape[:2]
-    canvas_size = (ref_w, ref_h)
+    warped_channels = warp_channels(images, geo_params, ref_index)
 
     channel_arrays = [None, None, None]
     for i in range(3):
-        img = images[i]
-        if img is None:
+        warped = warped_channels[i]
+        if warped is None:
             channel_arrays[i] = np.zeros((ref_h, ref_w), dtype=np.float32)
             continue
-        h, w = img.shape[:2]
-        (dx, dy, scale, rotation, distortion, perspective_v, perspective_h, anamorphic,
-         stretch_pins) = geo_params[i]
-        img = apply_lens_correction(img, distortion, perspective_v, perspective_h, anamorphic)
-        matrix = build_similarity_matrix(
-            dx, dy, scale, rotation, src_center=(w / 2, h / 2), dst_center=(ref_w / 2, ref_h / 2))
-        warped = warp_to_canvas(img, matrix, canvas_size)
-        warped = apply_stretch_warp(warped, stretch_pins)
         black, white, gamma, exposure, brightness, contrast, shadows, highlights, invert = tone_params[i]
         warped = apply_invert(warped, invert)
         channel_arrays[i] = apply_tone_curve(
