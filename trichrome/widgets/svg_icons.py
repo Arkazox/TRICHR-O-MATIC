@@ -12,7 +12,7 @@ import re
 import tempfile
 
 from PySide6.QtCore import QByteArray, QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPixmap, QTransform
+from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QLabel, QToolButton
 
@@ -101,8 +101,13 @@ def raw_svg_icon(svg_name: str, size: int, dpr: float) -> QIcon:
     """QIcon wrapper over raw_svg_pixmap - for a QComboBox/QAction/etc. item
     that needs a multi-color icon shown by Qt's own item-view chrome
     (a combo's closed box and its dropdown list both paint from a QIcon,
-    not a raw pixmap) rather than one this app paints itself."""
-    return QIcon(raw_svg_pixmap(svg_name, size, dpr))
+    not a raw pixmap) rather than one this app paints itself. The same
+    pixmap serves the Selected mode, so a highlighted list item keeps the
+    icon's own colors instead of Qt's tinted version."""
+    pixmap = raw_svg_pixmap(svg_name, size, dpr)
+    icon = QIcon(pixmap)
+    icon.addPixmap(pixmap, QIcon.Selected)
+    return icon
 
 
 def gradient_tinted_svg_pixmap(svg_name: str, size: int, gradient: QLinearGradient, dpr: float) -> QPixmap:
@@ -153,7 +158,15 @@ def rotated_tinted_svg_pixmap(svg_name: str, size: int, color: QColor, dpr: floa
 class SvgToolButton(QToolButton):
     """A borderless icon button drawing one SVG glyph, tinted per state to
     match the app's existing icon-button look: palette text color normally,
-    white on hover, faded when disabled."""
+    white on hover, faded when disabled.
+
+    Hovering an enabled button draws a subtle rounded gray frame behind the
+    glyph (``_HOVER_FRAME``). A subclass that sets ``_ACTIVE_FRAME`` draws an
+    accent-blue frame while checked, with a white glyph."""
+
+    _HOVER_FRAME = True
+    _ACTIVE_FRAME = False
+    _FRAME_RADIUS = 5.0
 
     def __init__(self, svg_name: str, size: tuple[int, int] = (30, 26), icon_size: int = 18,
                  parent=None):
@@ -178,11 +191,28 @@ class SvgToolButton(QToolButton):
             self._rotation = degrees
             self.update()
 
+    def _active_frame_shown(self) -> bool:
+        return self._ACTIVE_FRAME and self.isEnabled() and self.isChecked()
+
+    def _paint_frame(self, painter: QPainter) -> None:
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if self._active_frame_shown():
+            painter.setPen(QPen(theme.qcolor("#5b9bd5", "#3f6d96"), 1.0))
+            painter.setBrush(theme.qcolor("#3f6d96", "#5b9bd5"))
+        elif self._HOVER_FRAME and self.isEnabled() and self.underMouse():
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(theme.overlay_color(22 if theme.is_dark() else 20))
+        else:
+            return
+        painter.drawRoundedRect(rect, self._FRAME_RADIUS, self._FRAME_RADIUS)
+
     def _glyph_color(self) -> QColor:
         if not self.isEnabled():
             color = QColor(self.palette().buttonText().color())
             color.setAlpha(70)
             return color
+        if self._active_frame_shown():
+            return QColor("#ffffff")
         if self.underMouse():
             return theme.text_color()
         return QColor(self.palette().buttonText().color())
@@ -191,6 +221,7 @@ class SvgToolButton(QToolButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         dpr = self.devicePixelRatioF() or 1.0
+        self._paint_frame(painter)
         pixmap = tinted_svg_pixmap(self._current_svg_name(), self._icon_size, self._glyph_color(), dpr)
         if self._rotation:
             painter.translate(self.width() / 2.0, self.height() / 2.0)
@@ -229,17 +260,22 @@ class SvgTwoStateToggleButton(SvgToolButton):
 
 
 class SvgCheckableToolButton(SvgToolButton):
-    """A checkable SvgToolButton (single, fixed icon) that dims like a
-    disabled button while unchecked and shows full color while checked - for
-    a mutually-exclusive tool switch (e.g. via QButtonGroup) that must stay
-    clickable even in its unchecked state, unlike setEnabled(False)."""
+    """A checkable SvgToolButton (single, fixed icon) for a tool switch that
+    must stay clickable in its unchecked state, unlike setEnabled(False).
+    Checked shows the accent frame; unchecked is the plain icon at full
+    strength. An instance with ``_ACTIVE_FRAME`` off (the toolbar workspace
+    slots) has no frame, so it dims while unchecked instead."""
+
+    _ACTIVE_FRAME = True
 
     def __init__(self, svg_name: str, size: tuple[int, int] = (30, 26), icon_size: int = 18, parent=None):
         super().__init__(svg_name, size=size, icon_size=icon_size, parent=parent)
         self.setCheckable(True)
+        self.toggled.connect(lambda _checked: self.update())
 
     def _glyph_color(self) -> QColor:
-        if self.isEnabled() and not self.isChecked() and not self.underMouse():
+        if (not self._ACTIVE_FRAME and self.isEnabled() and not self.isChecked()
+                and not self.underMouse()):
             color = QColor(self.palette().buttonText().color())
             color.setAlpha(70)
             return color
@@ -255,6 +291,9 @@ class SvgColorCheckableToolButton(SvgCheckableToolButton):
     unchecked. For a toggle whose "on" state should always read as one
     specific color rather than plain white (e.g. Files' Color Film
     button, meant to always read as orange)."""
+
+    # The glyph's own color already shows the state.
+    _ACTIVE_FRAME = False
 
     def __init__(self, svg_name: str, color, size: tuple[int, int] = (30, 26), icon_size: int = 18, parent=None):
         super().__init__(svg_name, size=size, icon_size=icon_size, parent=parent)

@@ -25,19 +25,22 @@ app quit - closing the dialog the instant it opens is the rare case, and
 the request is normally sub-second."""
 from __future__ import annotations
 
-from PySide6.QtCore import QThread, Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QPixmap
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLayout, QProgressBar, QPushButton, QVBoxLayout
+from PySide6.QtCore import QSize, QThread, Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QPixmap
+from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QLayout, QProgressBar, QPushButton, QVBoxLayout
 
-from .. import i18n, self_update
+from .. import i18n, self_update, theme
 from ..paths import resource_path
-from ..update_checker import UpdateCheckWorker, parse_version
+from ..update_checker import REPO, UpdateCheckWorker, parse_version
 from ..version import __version__
 from .button_style import style_primary_button, style_secondary_button
 from .checkbox import ACCENT, ACCENT_LIGHT
+from .svg_icons import tinted_svg_icon
 
 _LOGO_SIZE = 96
 _TEXT_WIDTH = 320
+_GITHUB_ICON_SIZE = 18
+_REPO_URL = f"https://github.com/{REPO}"
 
 
 class UpdateCheckDialog(QDialog):
@@ -132,6 +135,25 @@ class UpdateCheckDialog(QDialog):
         row.addStretch(1)
         root.addLayout(row)
 
+        # Link to the public repo, below a hairline so it reads as a footer
+        # rather than a third dialog button.
+        root.addSpacing(16)
+        self._footer_line = QFrame()
+        self._footer_line.setFixedHeight(1)
+        root.addWidget(self._footer_line)
+        root.addSpacing(10)
+        # Leading spaces: QPushButton has no icon-to-text spacing property,
+        # and its built-in gap glues the mark to the first letter.
+        self.github_button = QPushButton("  " + i18n.tr("update_check_github_link"))
+        self.github_button.setFlat(True)
+        self.github_button.setCursor(Qt.PointingHandCursor)
+        self.github_button.setFocusPolicy(Qt.NoFocus)
+        self.github_button.setIconSize(QSize(_GITHUB_ICON_SIZE, _GITHUB_ICON_SIZE))
+        self.github_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(_REPO_URL)))
+        root.addWidget(self.github_button, alignment=Qt.AlignHCenter)
+        self._apply_footer_style()
+        theme.on_change(self._apply_footer_style)
+
         root.setSizeConstraint(QLayout.SetFixedSize)
         self.close_button.setFocus()
 
@@ -139,6 +161,16 @@ class UpdateCheckDialog(QDialog):
             self._on_result(*initial_result)
         else:
             self._start_check()
+
+    def _apply_footer_style(self) -> None:
+        self._footer_line.setStyleSheet(f"background: {theme.overlay(28)}; border: none;")
+        color = theme.value_text_color()
+        self.github_button.setStyleSheet(
+            "QPushButton { border: none; background: transparent; padding: 2px 4px;"
+            f" color: {color}; font-size: 13px; }}"
+            " QPushButton:hover { text-decoration: underline; }")
+        self.github_button.setIcon(tinted_svg_icon(
+            "Global/github.svg", _GITHUB_ICON_SIZE, QColor(color), self.devicePixelRatioF() or 1.0))
 
     def _start_check(self) -> None:
         self._thread = QThread()

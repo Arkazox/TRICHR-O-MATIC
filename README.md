@@ -23,6 +23,10 @@ Not sure which Mac you have? Open the Apple menu ▸ **About This Mac**: it show
 Once installed, the app updates itself: when a new version comes out, it
 offers to download and install it.
 
+**No install?** [Try Trichr-o-matic Web](https://arkazox.github.io/TRICHR-O-MATIC/web/),
+a lighter version that runs in your browser (Light mode's tools plus Curves).
+Your photos stay on your computer: nothing is uploaded.
+
 ### Installing on macOS
 
 Unzip the file and move `Trichr-o-matic.app` to your Applications folder.
@@ -110,14 +114,6 @@ photos is sent.
   the correction for you.
 - **Curves** — independent Y (master), R, G and B tone curves with a live,
   channel-matched histogram overlay showing the image *before* your edits.
-- **Scan** *(experimental, off by default — turn it on in Preferences ▸
-  Experimental; requires [gphoto2](http://www.gphoto.org), e.g.
-  `brew install gphoto2`)* — tethered capture from a connected camera: live
-  connect/disconnect status, 3 film types (Black & White / Color / Color
-  Reversal), an optional on-screen RGB backlight (with an automatic
-  red/green/blue 3-shot sequence for scanning straight into a trichrome
-  triplet), film-base color correction for color negatives, and automatic
-  import of finished captures into the current session.
 - **Histogram** — live Y/R/G/B curves with clipping indicators and a pixel
   eyedropper.
 
@@ -125,13 +121,13 @@ photos is sent.
 - Drag any block by its grip to reorder it, move it between the two side
   panels, collapse it to just its header, or close it — bring closed blocks
   back from the **Tools** menu.
-- The toolbar's Trichrome / Color Correction / Crop / Scan buttons (and
-  their T/E/C/S shortcuts) switch to a ready-made layout for each task. Save
+- The toolbar's Trichrome / Color Correction / Crop buttons (and
+  their T/E/C shortcuts) switch to a ready-made layout for each task. Save
   your own arrangements as named **Layout Presets**. **Reset Layout**
   restores the defaults.
 - **Light Mode** (Window menu) — a hot-toggleable, restricted interface that
   recenters the app on single-photo trichrome editing (Files, Trichrome
-  Process, Framing and Histogram only), for a simpler, kiosk-style workflow.
+  Process, Curves, Framing and Histogram only), for a simpler, kiosk-style workflow.
 
 ### Everything else
 - Undo/redo for nearly every action, filmstrip with drag-to-reorder,

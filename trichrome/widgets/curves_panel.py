@@ -18,7 +18,12 @@ channels are *shown* (any subset, several at once, via
 isolate_channel/show_all_channels) with its own Reset button restoring "all 4";
 here exactly one channel is ever being *edited* at a time (there's no "show all
 curves overlaid for editing" concept), so this is a true exclusive selector
-with no Reset button of its own: only one at a time, Y by default."""
+with no Reset button of its own: only one at a time, Y by default.
+
+The header also carries a Negative toggle, shown only in Light mode: the Light
+block (Negative's usual home, LightPanel) isn't part of Light mode, and Curves
+is. MainWindow keeps both buttons in sync and shows this one
+(set_invert_visible) only while light_mode_active."""
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
@@ -27,7 +32,10 @@ from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QWidget
 from .. import i18n, imaging
 from .block_header_bar import finish_block_chrome, start_block_chrome
 from .curve_editor import CurveEditor, curve_channel_color
-from .svg_icons import HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgLetterToggleButton, SvgToolButton
+from .svg_icons import (
+    HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgCheckableToolButton, SvgLetterToggleButton,
+    SvgToolButton,
+)
 
 _CHANNELS = ("Y", "R", "G", "B")
 _IDENTITY_POINTS = [(0.0, 0.0), (1.0, 1.0)]
@@ -36,6 +44,7 @@ _IDENTITY_POINTS = [(0.0, 0.0), (1.0, 1.0)]
 class CurvesPanel(QGroupBox):
     changed = Signal()
     reset_requested = Signal()
+    invert_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -48,6 +57,12 @@ class CurvesPanel(QGroupBox):
 
         outer, header_row, self.title_label = start_block_chrome(self, "curves", "curves_group_title")
         header_row.addStretch(1)
+        # Same icon and behavior as LightPanel.invert_button.
+        self.invert_button = SvgCheckableToolButton(
+            "Global/invert.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+        self.invert_button.toggled.connect(self.invert_toggled.emit)
+        self.invert_button.setVisible(False)
+        header_row.addWidget(self.invert_button)
         self.reset_button = SvgToolButton(
             "Global/Reset.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.reset_button.clicked.connect(self.reset_requested.emit)
@@ -124,6 +139,15 @@ class CurvesPanel(QGroupBox):
         self._reference_histograms = imaging.compute_channel_histograms(rgb_uint8, valid_mask)
         self.curve_editor.set_histogram(self._reference_histograms[self._active_channel])
 
+    def set_invert(self, checked: bool) -> None:
+        self.invert_button.blockSignals(True)
+        self.invert_button.setChecked(checked)
+        self.invert_button.blockSignals(False)
+
+    def set_invert_visible(self, visible: bool) -> None:
+        self.invert_button.setVisible(visible)
+
     def retranslate_ui(self) -> None:
         self.title_label.setText(i18n.tr("curves_group_title"))
+        self.invert_button.setToolTip(i18n.tr("invert_checkbox_tooltip"))
         self.reset_button.setToolTip(i18n.tr("curves_reset_tooltip"))

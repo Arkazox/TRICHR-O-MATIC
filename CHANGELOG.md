@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.3 — 2026-10-16
+
+- **Trichr-o-matic Web**: a lighter version that runs in your browser,
+  at https://arkazox.github.io/TRICHR-O-MATIC/web/.
+- Curves in Light mode, with Negative in its header.
+- Smoother curve editing.
+- Filmstrip and grid: move several photos at once, new selection
+  shortcuts, Edit ▸ Select All.
+- Redesigned channel rows in the Files block.
+- Scan is turned off for now.
+
 ## v1.1.2 — 2026-10-12
 
 - Windows: Check for Updates no longer says it can't connect on PCs that

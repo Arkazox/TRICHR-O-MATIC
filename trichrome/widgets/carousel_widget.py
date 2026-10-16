@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEventLoop, QMimeData, QPointF, Qt, Signal
-from PySide6.QtGui import QDrag, QPixmap
+from PySide6.QtCore import QEvent, QEventLoop, QLineF, QMimeData, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QDrag, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
 from .. import i18n, imaging, theme
@@ -78,6 +78,9 @@ def _local_image_paths(mime_data: QMimeData) -> list[str]:
 class _CarouselCard(QFrame):
     clicked = Signal(int)
     ctrl_clicked = Signal(int)
+    double_clicked = Signal(int)
+    released = Signal(int)  # a left press ended without a drag
+    drag_requested = Signal(int)
     context_menu_requested = Signal(int, object, bool)  # index, global pos, cmd held
 
     def __init__(self, index: int, base: str, parent: QWidget | None = None):
@@ -163,6 +166,13 @@ class _CarouselCard(QFrame):
                 self.clicked.emit(self.index)
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event) -> None:
+        # The press before it already made this card current (clicked).
+        if event.button() == Qt.LeftButton and not (event.modifiers() & Qt.ControlModifier):
+            self.double_clicked.emit(self.index)
+            return
+        super().mouseDoubleClickEvent(event)
+
     def mouseMoveEvent(self, event) -> None:
         if (event.buttons() & Qt.LeftButton) and self._drag_start_pos is not None:
             moved = event.pos() - self._drag_start_pos
@@ -172,18 +182,16 @@ class _CarouselCard(QFrame):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._drag_start_pos is not None:
+            self.released.emit(self.index)
         self._drag_start_pos = None
         super().mouseReleaseEvent(event)
 
     def _start_drag(self) -> None:
+        # The carousel runs the QDrag: it knows whether the whole selection
+        # moves along (ghost with a count badge).
         self._drag_start_pos = None
-        drag = QDrag(self)
-        mime = QMimeData()
-        mime.setData(_REORDER_MIME, str(self.index).encode())
-        drag.setMimeData(mime)
-        drag.setPixmap(self.grab())
-        drag.setHotSpot(self.rect().center())
-        drag.exec(Qt.MoveAction)
+        self.drag_requested.emit(self.index)
 
     def contextMenuEvent(self, event) -> None:
         cmd_held = bool(event.modifiers() & Qt.ControlModifier)
@@ -202,6 +210,15 @@ class _CarouselStrip(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setAcceptDrops(True)
+        # Set by CarouselWidget: drop position -> (insert_before, line), the
+        # line being where the dragged photos will land.
+        self.drop_slot = None
+        self._indicator: QLineF | None = None
+
+    def _set_indicator(self, line: QLineF | None) -> None:
+        if line != self._indicator:
+            self._indicator = line
+            self.update()
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasFormat(_REORDER_MIME) or _local_image_paths(event.mimeData()):
@@ -210,8 +227,29 @@ class _CarouselStrip(QWidget):
     def dragMoveEvent(self, event) -> None:
         if event.mimeData().hasFormat(_REORDER_MIME) or _local_image_paths(event.mimeData()):
             event.acceptProposedAction()
+        if event.mimeData().hasFormat(_REORDER_MIME) and self.drop_slot is not None:
+            pos = event.position() if hasattr(event, "position") else event.pos()
+            self._set_indicator(self.drop_slot(QPointF(pos))[1])
+
+    def dragLeaveEvent(self, event) -> None:
+        self._set_indicator(None)
+        super().dragLeaveEvent(event)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self._indicator is None:
+            return
+        # Drawn in the gap between cards, so the cards never cover it.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor(CURRENT_COLOR), 2)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        painter.drawLine(self._indicator)
+        painter.end()
 
     def dropEvent(self, event) -> None:
+        self._set_indicator(None)
         if event.mimeData().hasFormat(_REORDER_MIME):
             from_index = int(bytes(event.mimeData().data(_REORDER_MIME)).decode())
             pos = event.position() if hasattr(event, "position") else event.pos()
@@ -234,6 +272,7 @@ class CarouselWidget(QWidget):
     reset_requested = Signal(list)
     duplicate_requested = Signal(int)
     convert_to_trichrome_requested = Signal(list)
+    card_double_clicked = Signal(int)
     reordered = Signal(list)  # order[new_position] = old_index
     files_dropped = Signal(list)  # local file paths dragged in from Finder
 
@@ -243,6 +282,9 @@ class CarouselWidget(QWidget):
         self._current_index = -1
         self._selected: set[int] = set()
         self._selection_anchor = -1
+        # A plain press on a photo of a multi-selection, waiting for its
+        # release to collapse the selection (-1: none). See _on_card_pressed.
+        self._pending_click = -1
         # Only true once something's been copied that carries crop settings -
         # gates whether "Paste Crop" shows in the context menu at all.
         self._paste_crop_available = False
@@ -265,7 +307,9 @@ class CarouselWidget(QWidget):
         outer.addWidget(self.empty_label)
 
         # Strip mode - the filmstrip, a single horizontally-scrolling row.
-        self.scroll = ArrowKeyScrollArea()
+        # Up/Down go to MainWindow too (Cmd+Shift+Up/Down extend the
+        # selection); a single row has nothing to scroll vertically anyway.
+        self.scroll = ArrowKeyScrollArea(ignore_keys=(Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down))
         self.scroll.setFixedHeight(THUMB_H + 50)
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -273,6 +317,7 @@ class CarouselWidget(QWidget):
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.strip = _CarouselStrip()
         self.strip.card_dropped.connect(self._on_card_dropped)
+        self.strip.drop_slot = self._drop_slot
         self.strip.files_dropped.connect(self.files_dropped.emit)
         self.strip_layout = QHBoxLayout(self.strip)
         self.strip_layout.setContentsMargins(6, 4, 6, 4)
@@ -296,6 +341,7 @@ class CarouselWidget(QWidget):
         self.grid_scroll.setFrameShape(QFrame.NoFrame)
         self.grid_strip = _CarouselStrip()
         self.grid_strip.card_dropped.connect(self._on_card_dropped)
+        self.grid_strip.drop_slot = self._drop_slot
         self.grid_strip.files_dropped.connect(self.files_dropped.emit)
         self.grid_layout = QGridLayout(self.grid_strip)
         self.grid_layout.setContentsMargins(_GRID_MARGIN, _GRID_MARGIN, _GRID_MARGIN, _GRID_MARGIN)
@@ -359,6 +405,21 @@ class CarouselWidget(QWidget):
             return
         self._grid_columns = columns
         self._reflow_grid(force=True)
+        self._center_current_in_grid()
+
+    def _center_current_in_grid(self) -> None:
+        """After a grid zoom, scroll so the current photo sits at the
+        vertical center of the view (as far as the scroll range allows)."""
+        if not (0 <= self._current_index < len(self._cards)):
+            return
+        # Settle the new layout now (cards' positions and the scroll
+        # range), so the jump happens before the next paint.
+        self.grid_layout.activate()
+        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+        card = self._cards[self._current_index]
+        center = card.y() + card.height() // 2
+        bar = self.grid_scroll.verticalScrollBar()
+        bar.setValue(center - self.grid_scroll.viewport().height() // 2)
 
     def _initial_grid_columns(self) -> int:
         available = self.grid_scroll.viewport().width() - 2 * _GRID_MARGIN
@@ -392,20 +453,29 @@ class CarouselWidget(QWidget):
                 row, col = divmod(i, self._grid_columns)
                 self.grid_layout.addWidget(card, row, col)
 
-    def _insert_index_for_point(self, pos: QPointF) -> int:
-        if not self._cards or self._grid_columns <= 0:
-            return len(self._cards)
-        card0 = self._cards[0]
-        cell_w = card0.width() + _GRID_SPACING
-        cell_h = card0.height() + _GRID_SPACING
-        if cell_w <= 0 or cell_h <= 0:
-            return len(self._cards)
-        col = int((pos.x() - _GRID_MARGIN) // cell_w)
-        row = int((pos.y() - _GRID_MARGIN) // cell_h)
-        col = max(0, min(col, self._grid_columns - 1))
-        row = max(0, row)
-        index = row * self._grid_columns + col
-        return max(0, min(index, len(self._cards)))
+    def _drop_slot(self, pos: QPointF) -> tuple[int, QLineF | None]:
+        """Where a reorder drop at ``pos`` (strip coordinates) lands: the
+        index to insert before, and the insertion line to draw for it. Uses
+        the cards' real geometry (the grid is centered), on the row of cards
+        nearest the cursor, then the nearest gap in that row."""
+        if not self._cards:
+            return 0, None
+        gap = _GRID_SPACING if self._grid_mode else self.strip_layout.spacing()
+        rows: dict[int, list[int]] = {}
+        for i, card in enumerate(self._cards):
+            rows.setdefault(card.y(), []).append(i)
+        row = min(rows.values(),
+                  key=lambda r: abs(self._cards[r[0]].geometry().center().y() - pos.y()))
+        first = self._cards[row[0]]
+        top, bottom = first.y() - 2, first.y() + first.height() + 2
+        for i in row:
+            card = self._cards[i]
+            if pos.x() < card.x() + card.width() / 2.0:
+                x = card.x() - gap / 2.0
+                return i, QLineF(x, top, x, bottom)
+        last = self._cards[row[-1]]
+        x = last.x() + last.width() + gap / 2.0
+        return row[-1] + 1, QLineF(x, top, x, bottom)
 
     def _ensure_current_visible(self) -> None:
         if not (0 <= self._current_index < len(self._cards)):
@@ -426,8 +496,11 @@ class CarouselWidget(QWidget):
 
         for i, base in enumerate(bases):
             card = _CarouselCard(i, base)
-            card.clicked.connect(self._on_card_clicked)
+            card.clicked.connect(self._on_card_pressed)
             card.ctrl_clicked.connect(self._on_card_ctrl_clicked)
+            card.double_clicked.connect(self.card_double_clicked)
+            card.released.connect(self._on_card_released)
+            card.drag_requested.connect(self._start_card_drag)
             card.context_menu_requested.connect(self._on_card_context_menu)
             self._cards.append(card)
 
@@ -441,7 +514,62 @@ class CarouselWidget(QWidget):
 
         self._current_index = -1
         self._selection_anchor = -1
+        self._pending_click = -1
         self._update_empty_state()
+
+    def _on_card_pressed(self, index: int) -> None:
+        """A plain press on one photo of a multi-selection may start a group
+        drag, so collapsing the selection to it waits for the release."""
+        if index in self._selected and len(self._selected) > 1:
+            self._pending_click = index
+            return
+        self._on_card_clicked(index)
+
+    def _on_card_released(self, index: int) -> None:
+        if self._pending_click == index:
+            self._pending_click = -1
+            self._on_card_clicked(index)
+
+    def _start_card_drag(self, index: int) -> None:
+        if not (0 <= index < len(self._cards)):
+            return
+        self._pending_click = -1
+        card = self._cards[index]
+        count = len(self._selected) if index in self._selected else 1
+        drag = QDrag(card)
+        mime = QMimeData()
+        mime.setData(_REORDER_MIME, str(index).encode())
+        drag.setMimeData(mime)
+        drag.setPixmap(self._drag_ghost(card, count))
+        drag.setHotSpot(card.rect().center())
+        drag.exec(Qt.MoveAction)
+        # A cancelled drag (Escape) may end without a dragLeaveEvent.
+        self.strip._set_indicator(None)
+        self.grid_strip._set_indicator(None)
+
+    @staticmethod
+    def _drag_ghost(card: "_CarouselCard", count: int) -> QPixmap:
+        """The dragged card's image, with an accent count badge in its
+        top-right corner when several photos move together."""
+        pixmap = card.grab()
+        if count <= 1:
+            return pixmap
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        font = painter.font()
+        font.setBold(True)
+        font.setPixelSize(12)
+        painter.setFont(font)
+        text = str(count)
+        diameter = max(20, painter.fontMetrics().horizontalAdvance(text) + 10)
+        rect = QRectF(card.width() - diameter - 3, 3, diameter, 20)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(CURRENT_COLOR))
+        painter.drawRoundedRect(rect, 10, 10)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(rect, Qt.AlignCenter, text)
+        painter.end()
+        return pixmap
 
     def _on_card_clicked(self, index: int) -> None:
         self.set_current(index)
@@ -522,42 +650,41 @@ class CarouselWidget(QWidget):
         elif chosen is delete_action:
             self.delete_requested.emit(targets)
 
-    def _insert_index_for_x(self, x: float) -> int:
-        for i, card in enumerate(self._cards):
-            if x < card.x() + card.width() / 2.0:
-                return i
-        return len(self._cards)
-
     def _on_card_dropped(self, from_index: int, pos: QPointF) -> None:
+        """Dragging a selected photo moves the whole selection: the photos
+        land grouped together, in filmstrip order, at the drop point. E.g.
+        1 2 3 4 5 6 with 2 3 6 selected, dropped before 1 -> 2 3 6 1 4 5."""
         if not (0 <= from_index < len(self._cards)):
             return
-        insert_before = self._insert_index_for_point(pos) if self._grid_mode else self._insert_index_for_x(pos.x())
-        target = insert_before - 1 if insert_before > from_index else insert_before
-        target = max(0, min(target, len(self._cards) - 1))
-        if target == from_index:
-            return
-        self._reorder(from_index, target)
+        insert_before = self._drop_slot(pos)[0]
+        moving = sorted(self._selected) if from_index in self._selected else [from_index]
+        moving_set = set(moving)
+        rest = [i for i in range(len(self._cards)) if i not in moving_set]
+        insert_at = sum(1 for i in rest if i < insert_before)
+        order = rest[:insert_at] + moving + rest[insert_at:]
+        if order == list(range(len(self._cards))):
+            return  # dropped back in place
+        self._reorder(order)
 
-    def _reorder(self, from_index: int, target: int) -> None:
-        order = list(range(len(self._cards)))
-        order.insert(target, order.pop(from_index))
+    def _reorder(self, order: list[int]) -> None:
+        """``order[new_pos]`` is the old index now at ``new_pos``."""
         # Keep _item_modes in the same order as _cards - on_carousel_reordered
         # (main_window.py) reorders batch_items to match but never calls
         # set_items() again, so this is the only place that would otherwise
         # go stale after a drag-and-drop reorder.
         if len(self._item_modes) == len(self._cards):
-            self._item_modes.insert(target, self._item_modes.pop(from_index))
+            self._item_modes = [self._item_modes[i] for i in order]
 
         current_card = self._cards[self._current_index] if 0 <= self._current_index < len(self._cards) else None
         selected_cards = {self._cards[i] for i in self._selected}
 
-        card = self._cards.pop(from_index)
-        self._cards.insert(target, card)
+        self._cards = [self._cards[i] for i in order]
         if self._grid_mode:
             self._reflow_grid(force=True)
         else:
-            self.strip_layout.removeWidget(card)
-            self.strip_layout.insertWidget(target, card)
+            for i, card in enumerate(self._cards):
+                self.strip_layout.removeWidget(card)
+                self.strip_layout.insertWidget(i, card)
         for i, c in enumerate(self._cards):
             c.index = i
 
@@ -671,6 +798,24 @@ class CarouselWidget(QWidget):
             self._extend_selection_to(target)
         else:
             self._on_card_clicked(target)
+
+    def extend_selection_to_end(self, forward: bool) -> None:
+        """Adds every photo before (or after) the selection to it, the
+        current photo included. The current photo itself doesn't move."""
+        if not self._cards or self._current_index < 0:
+            return
+        selected = self._selected | {self._current_index}
+        if forward:
+            added = set(range(max(selected), len(self._cards)))
+        else:
+            added = set(range(0, min(selected) + 1))
+        new_selected = selected | added
+        if new_selected == self._selected:
+            return
+        for i in new_selected - self._selected:
+            self._cards[i].set_selected(True)
+        self._selected = new_selected
+        self.selection_changed.emit()
 
     def _extend_selection_to(self, index: int) -> None:
         """Finder-style Shift+arrow range selection: grows/shrinks the

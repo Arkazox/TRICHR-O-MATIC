@@ -1,0 +1,405 @@
+/* Dark appearance, matching the desktop app's dark tones. */
+:root {
+  --window: #323232;
+  --panel: #2a2a2a;
+  --block: #2e2e2e;
+  --line: #444;
+  --field: #1f1f1f;
+  --canvas: #1c1c1c;
+  --pane: #232326;
+  --text: #f0f0f0;
+  --muted: #9a9a9a;
+  --accent: #5b9bd5;
+  --accent-dark: #3f6d96;
+  --warning: #f2c40c;
+  --red: #e0564f;
+  --green: #5cbf6a;
+  --blue: #5b8fe0;
+  color-scheme: only dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--window);
+  color: var(--text);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+body { display: flex; flex-direction: column; overflow: hidden; }
+
+button, select, input { font: inherit; color: inherit; }
+
+/* Top bar */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.brand img { width: 26px; height: 26px; }
+.brand-name { font-weight: 600; font-size: 15px; }
+.badge {
+  font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 4px; background: var(--accent-dark); color: #fff;
+}
+.topbar-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 30px; padding: 0 12px; line-height: 1; border-radius: 6px; cursor: pointer; text-decoration: none;
+  border: 1px solid var(--line); background: transparent; color: var(--text); white-space: nowrap;
+}
+.btn.primary { background: linear-gradient(#6aa8e0, var(--accent)); border-color: var(--accent); color: #fff; }
+.btn.secondary:hover:not(:disabled) { border-color: #666; background: rgba(255,255,255,.04); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.wide { width: 100%; margin-top: 10px; }
+
+/* Icons are the desktop app's SVGs used as masks, so they take the text color. */
+.icon {
+  display: inline-block; width: 16px; height: 16px; flex: none;
+  background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.icon-button {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; height: 24px; padding: 0 4px; border-radius: 5px;
+  border: 1px solid transparent; background: transparent; cursor: pointer; color: var(--text);
+}
+.icon-button:hover:not(:disabled) { background: rgba(255,255,255,.08); }
+.icon-button:disabled { opacity: .35; cursor: default; }
+.icon-button.toggle.on { background: var(--accent-dark); border-color: var(--accent); }
+
+/* Layout */
+main { flex: 1; display: flex; min-height: 0; }
+
+#panel {
+  width: 340px; flex: none; overflow-y: auto; padding: 8px;
+  background: var(--panel); border-right: 1px solid var(--line);
+}
+
+.block { background: var(--block); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; }
+.block-title, .section > summary {
+  display: flex; align-items: center; gap: 6px;
+  cursor: pointer; list-style: none; user-select: none;
+}
+.block-title::-webkit-details-marker, .section > summary::-webkit-details-marker { display: none; }
+.block-title { padding: 7px 10px; font-weight: 600; }
+.block-title::before, .section > summary::before {
+  content: "›"; display: inline-block; width: 10px; color: var(--muted); transition: transform .15s;
+}
+details[open] > .block-title::before, details[open] > summary::before { transform: rotate(90deg); }
+.block-title > span:first-of-type, .section > summary > span:first-of-type { flex: 1; }
+.block-title > button, .section > summary > button { margin-left: auto; }
+.block-body { padding: 0 10px 10px; }
+.summary-tools { display: flex; gap: 2px; }
+
+.section { border-top: 1px solid var(--line); padding: 6px 0 4px; }
+.section > summary { font-weight: 500; padding: 2px 0 4px; }
+.section:first-child { border-top: none; }
+
+.row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.row .label { color: var(--muted); white-space: nowrap; }
+.row select, .row input[type=text] { flex: 1; min-width: 0; }
+.row input[type=number] { width: 64px; }
+[hidden] { display: none !important; }
+.row.muted { opacity: .75; margin-top: 10px; }
+
+select, input[type=text], input[type=number] {
+  background: var(--field); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px;
+}
+select:focus, input[type=text]:focus, input[type=number]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+#histogram { display: block; width: 100%; height: 110px; border-radius: 4px; }
+
+.hint, .note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.note { color: var(--warning); margin: 0 0 4px; }
+
+.check { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; cursor: pointer; }
+.check input { accent-color: var(--accent); margin: 0; }
+
+/* Channel file rows */
+.channel-slot { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.channel-file {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border: 1px dashed var(--line); border-radius: 6px; cursor: pointer; min-height: 34px;
+}
+.channel-file:hover { border-color: #666; }
+.channel-file.loaded { border-style: solid; }
+.channel-file.drag-over { border-color: var(--accent); border-style: solid; background: rgba(91,155,213,.12); }
+.channel-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+/* The 6-dot grip: always shown; dimmed on an empty row, which can't be dragged. */
+.channel-file .grip { width: 16px; height: 16px; color: #b8b8b8; cursor: grab; flex: none; }
+.channel-file:not(.loaded) .grip { opacity: .35; cursor: pointer; }
+.channel-file.dragging { outline: 1px dashed var(--accent); outline-offset: 1px; opacity: .6; }
+.channel-file.swap-target { border-color: var(--accent); border-style: solid; box-shadow: 0 0 0 1px var(--accent); }
+.stretch-row { gap: 6px; margin: 2px 0 6px; }
+.stretch-row .check { margin: 0; }
+.stretch-row #reset-stretch { margin-left: auto; }
+#stage.stretch-active #preview { cursor: crosshair; }
+.channel-file .file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-file .file-name.empty { color: var(--muted); }
+.channel-file .file-size { color: var(--muted); font-size: 11px; }
+
+/* Show Layer: the desktop's circled letters, in the channel color
+   (full circle when shown, dotted when hidden). */
+.toggle-group { display: flex; gap: 10px; }
+.layer-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border: none; border-radius: 50%;
+  background: transparent; cursor: pointer; opacity: .55;
+}
+.layer-toggle.on { opacity: 1; }
+.layer-toggle .icon { width: 20px; height: 20px; }
+
+/* Channel tabs: folder tabs over a darker pane, names in the channel color. */
+.tabs { display: flex; margin-top: 10px; }
+.tab {
+  flex: 1; padding: 6px 0; border: none; background: #3a3a3a; cursor: pointer;
+  font-weight: 600; opacity: .75;
+}
+.tab:first-child { border-radius: 8px 0 0 0; }
+.tab:last-child { border-radius: 0 8px 0 0; }
+.tab:not(.active) + .tab:not(.active) { box-shadow: inset 1px 0 0 #555; }
+.tab.active { background: var(--pane); opacity: 1; border-radius: 8px 8px 0 0; }
+.tab-body { background: var(--pane); border-radius: 0 0 8px 8px; padding: 8px 12px 10px; }
+
+/* Light / Position / Geometry: split by a bar in the channel color. */
+.section.channel-section {
+  border-top: none; border-left: 3px solid var(--channel, var(--line));
+  padding: 2px 0 4px 10px; margin: 8px 0 12px;
+}
+.solo-check { color: var(--muted); margin-top: 4px; }
+/* Arrow over the plot, an open hand over a point, a closed one while dragging. */
+#curve-editor { display: block; width: 100%; aspect-ratio: 1; touch-action: none; cursor: default; }
+#curve-editor.over-point { cursor: grab; }
+#curve-editor.dragging { cursor: grabbing; }
+.curve-channels { margin-top: 6px; }
+.move-check { margin: 2px 0 6px; }
+
+/* Lock layer position: muted and smaller than Show Layer, as on the desktop. */
+.lock-row { margin-top: 12px; gap: 6px; }
+.lock-label { color: #888; font-size: 11px; white-space: nowrap; }
+.lock-group { gap: 4px; flex: 1; }
+/* Solid channel dots (letters don't read at this size), as on the desktop:
+   the locked one at full color with a ring, the others dimmed. */
+.lock-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 22px; padding: 0; border: none; background: transparent; cursor: pointer;
+}
+.lock-toggle .dot {
+  width: 10px; height: 10px; border-radius: 50%; background: currentColor; opacity: .32;
+  transition: opacity .12s;
+}
+.lock-toggle:hover .dot { opacity: .5; }
+.lock-toggle.on .dot { opacity: 1; outline: 1.5px solid currentColor; outline-offset: 2.5px; }
+.info.align-right .bubble { left: auto; right: -4px; }
+
+/* Dropdowns (app.js enhanceSelect): a dark field with the accent arrow box
+   of the desktop's combos, and a dark menu. */
+.dropdown { position: relative; flex: 1; min-width: 0; }
+.dropdown-button {
+  display: flex; align-items: center; width: 100%; height: 28px; padding: 0 0 0 9px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--field);
+  color: var(--text); text-align: left; cursor: pointer; overflow: hidden;
+}
+.dropdown-button:hover:not(:disabled) { border-color: #5a5a5a; }
+.dropdown-button:focus-visible, .dropdown.open .dropdown-button { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.dropdown-button:disabled { opacity: .45; cursor: default; }
+.dropdown-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dropdown-arrow {
+  display: flex; align-items: center; justify-content: center; align-self: stretch; width: 24px; flex: none;
+  margin-left: 6px; background: linear-gradient(#6aa8e0, var(--accent)); color: #fff;
+}
+.dropdown-arrow .icon {
+  width: 15px; height: 15px; --icon: url(../resources/icons/Global/chevron-down.svg);
+  transition: transform .15s;
+}
+.dropdown.open .dropdown-arrow .icon { transform: rotate(180deg); }
+.dropdown-menu {
+  position: fixed; z-index: 100; max-height: 280px; overflow-y: auto; padding: 4px;
+  border: 1px solid #4a4a4e; border-radius: 8px; background: #2b2b2e;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .4);
+}
+.dropdown-item {
+  position: relative; padding: 5px 12px 5px 26px; border-radius: 5px;
+  white-space: nowrap; cursor: default; color: var(--text);
+}
+.dropdown-item.selected::before {
+  content: ""; position: absolute; left: 8px; top: 50%; width: 9px; height: 5px; margin-top: -4px;
+  border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg);
+}
+.dropdown-item.active { background: var(--accent); color: #fff; }
+
+/* "?" info button with its bubble (hover or focus). */
+.info {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; font-size: 11px; font-weight: 600; color: var(--muted); cursor: help;
+}
+.info .bubble {
+  display: none; position: absolute; top: 22px; left: -150px; z-index: 20; width: 280px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #1b1b1b;
+  color: var(--text); font-size: 12px; font-weight: 400; line-height: 1.45; cursor: auto;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+}
+.info .bubble .muted { color: var(--muted); }
+.info:hover .bubble, .info:focus .bubble { display: block; }
+
+/* Sliders: the default sits at the middle of the track, the fill runs from there. */
+.slider { margin: 4px 0 8px; }
+.slider.disabled { opacity: .4; pointer-events: none; }
+.slider-head { display: flex; justify-content: space-between; font-size: 12px; }
+.slider-head .value { color: var(--muted); font-variant-numeric: tabular-nums; }
+.slider input[type=range] {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 16px; margin: 2px 0 0;
+  background: transparent; cursor: pointer;
+}
+.slider input[type=range]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px; background: var(--track, #555);
+}
+.slider input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: var(--track, #555); }
+.slider input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 13px; height: 13px; margin-top: -4.5px; border-radius: 50%;
+  background: #e8e8e8; border: 1px solid #222;
+}
+.slider input[type=range]::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: #e8e8e8; border: 1px solid #222; }
+
+/* Preview */
+.workspace { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* Zoom on the left, messages centered, view buttons on the right. */
+.preview-bar {
+  display: grid; grid-template-columns: 1fr minmax(0, auto) 1fr; align-items: center; gap: 12px;
+  padding: 4px 10px; border-top: 1px solid var(--line);
+}
+.bar-group { display: flex; align-items: center; gap: 4px; }
+.bar-group-end { justify-content: flex-end; }
+.bar-status {
+  display: flex; align-items: center; justify-content: center; gap: 0; min-width: 0;
+  color: var(--warning); font-size: 11px; white-space: nowrap; overflow: hidden;
+}
+.bar-status > span { overflow: hidden; text-overflow: ellipsis; }
+#activity:not(:empty) + #indicator:not(:empty)::before { content: "·"; margin: 0 8px; }
+.bar-separator { width: 1px; height: 16px; margin: 0 4px; background: rgba(128, 128, 128, 0.35); }
+
+/* Full screen: only the preview and its bar. */
+body.focus .topbar, body.focus #panel { display: none; }
+
+/* Flex + margin: auto centers the image and still scrolls to every edge when zoomed in. */
+#viewport { flex: 1; display: flex; position: relative; overflow: auto; background: var(--canvas); }
+#viewport.drag-over { outline: 2px solid var(--accent); outline-offset: -2px; }
+#stage { position: relative; margin: auto; flex: none; }
+#stage[hidden] { display: none; }
+#preview, #overlay { position: absolute; left: 0; top: 0; display: block; }
+#overlay { pointer-events: none; }
+#stage.crop-active #overlay { pointer-events: auto; cursor: move; }
+#stage.move-active #preview { cursor: grab; }
+
+#placeholder {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center; color: var(--muted); padding: 16px;
+}
+#placeholder[hidden] { display: none; }
+.placeholder-title { color: var(--text); font-size: 18px; margin: 0 0 6px; }
+
+/* Status bar */
+.spinner {
+  display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: -1px;
+  border: 1.5px solid currentColor; border-top-color: transparent; border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Export dialog */
+dialog {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 18px; width: min(420px, calc(100vw - 32px));
+}
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog h2 { font-size: 15px; margin: 0 0 10px; }
+.dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* Narrow screens: panel above the preview. */
+@media (max-width: 760px) {
+  body { overflow: auto; }
+  main { flex-direction: column; flex: none; }
+  #panel { width: 100%; border-right: none; border-bottom: 1px solid var(--line); overflow: visible; }
+  .workspace { min-height: 70vh; }
+  .brand-name { display: none; }
+  .preview-bar { grid-template-columns: 1fr 1fr; }
+  .bar-status { grid-column: 1 / -1; grid-row: 2; }
+}
+
+/* "Download the full app" window: centered card in the Quick Tour welcome
+   window's style, with a soft accent glow behind the logo. */
+dialog.get-app {
+  position: relative; overflow: hidden auto; text-align: center;
+  width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 32px);
+  padding: 34px 32px 22px; border-radius: 16px;
+  background: linear-gradient(180deg, #2f2f33 0%, #262629 100%); border-color: #48484d;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+dialog.get-app[open] { animation: get-app-in .22s ease-out; }
+@keyframes get-app-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+.get-app-glow {
+  position: absolute; left: 50%; top: -90px; width: 360px; height: 260px; transform: translateX(-50%);
+  background: radial-gradient(closest-side, rgba(91, 155, 213, .28), transparent); pointer-events: none;
+}
+.get-app-logo { position: relative; display: block; margin: 0 auto 12px; filter: drop-shadow(0 6px 16px rgba(0, 0, 0, .45)); }
+dialog.get-app h2 { position: relative; margin: 0; font-size: 22px; font-weight: 700; }
+.get-app-version { position: relative; margin: 3px 0 16px; color: #999; font-size: 11px; }
+.get-app-text { margin: 0 auto; max-width: 380px; line-height: 1.5; color: #d6d6d6; }
+.get-app-features {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; list-style: none;
+  margin: 16px 0 20px; padding: 0;
+}
+.get-app-features li {
+  padding: 2px 9px; border: 1px solid #48484d; border-radius: 999px; font-size: 11px; color: #bdbdbd;
+}
+.get-app-downloads { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.get-app-option {
+  display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 10px 6px;
+  border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text);
+  line-height: 1.25; cursor: pointer;
+}
+.get-app-option:hover { border-color: #5a5a5a; background: rgba(255, 255, 255, .03); }
+/* Selected: the blue frame used for every active option. */
+.get-app-option.selected { background: var(--accent-dark); border-color: var(--accent); }
+.get-app-download { display: flex; width: 100%; height: 36px; margin-top: 12px; font-weight: 600; }
+.get-app-download.disabled { opacity: .45; pointer-events: none; }
+.get-app-os { font-weight: 600; font-size: 13px; }
+.get-app-variant, .get-app-size { font-size: 11px; opacity: .8; }
+.get-app-size:empty { display: none; }
+.get-app-requirements { margin: 10px 0 0; color: #8a8a8a; font-size: 11px; }
+/* First-launch note: yellow, the app's color for information. */
+.get-app-note {
+  margin-top: 16px; padding: 12px 14px 12px 16px; text-align: left; font-size: 12px; line-height: 1.5;
+  border-left: 3px solid var(--warning); border-radius: 6px; background: rgba(242, 196, 12, .07);
+  color: #d6d6d6; animation: get-app-in .2s ease-out;
+}
+.get-app-note-title { margin: 0 0 6px; color: var(--warning); font-weight: 600; font-size: 12px; }
+.get-app-note ol { margin: 0; padding-left: 18px; }
+.get-app-note li + li { margin-top: 3px; }
+.get-app-note-extra { margin: 8px 0 6px; color: #aaa; }
+.get-app-command { display: flex; align-items: center; gap: 8px; }
+.get-app-command code {
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 5px 8px; border-radius: 5px;
+  background: #1b1b1d; border: 1px solid #3c3c40; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.get-app-command .btn { height: 26px; padding: 0 10px; font-size: 12px; }
+.get-app-note-link { display: inline-block; margin-top: 8px; color: var(--accent); text-decoration: none; }
+.get-app-note-link:hover { text-decoration: underline; }
+.get-app-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 22px; padding-top: 14px; border-top: 1px solid #3c3c40;
+}
+.get-app-footer form { margin: 0; }
+.get-app-github { display: inline-flex; align-items: center; gap: 7px; color: var(--text); text-decoration: none; font-size: 12px; }
+.get-app-github:hover { color: #fff; text-decoration: underline; }
+@media (max-width: 520px) {
+  .get-app-downloads { grid-template-columns: 1fr; }
+  .get-app-footer { flex-direction: column; }
+}

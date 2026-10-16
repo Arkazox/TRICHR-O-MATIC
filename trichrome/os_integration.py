@@ -13,9 +13,13 @@ import sys
 IS_MAC = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
 
-# Scan drives the camera through the gphoto2 CLI, which has no practical
-# Windows build (libgphoto2 needs its USB driver swapped through Zadig).
-SCAN_TOOL_AVAILABLE = not IS_WINDOWS
+# Scan is off on every platform for now: no toolbar slot, S key, menu entries
+# or Quick Tour step, and no Preferences switch. Its code stays in
+# trichrome/scan_tool and widgets/scan_panel.py. Set this back to
+# ``not IS_WINDOWS`` to restore it (gphoto2 has no practical Windows build:
+# libgphoto2 needs its USB driver swapped through Zadig), along with a
+# Preferences switch for SCAN_TOOL_ENABLED_KEY.
+SCAN_TOOL_AVAILABLE = False
 
 
 # --- Sounds -----------------------------------------------------------------

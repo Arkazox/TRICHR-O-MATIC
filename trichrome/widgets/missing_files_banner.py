@@ -5,16 +5,14 @@ path, and offers a Locate button to relink them to a new folder - see
 MainWindow.on_locate_missing_files."""
 from __future__ import annotations
 
-from PySide6.QtGui import QColor
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
 
 from .. import i18n, theme
 from .button_style import style_primary_button
-from .svg_icons import tinted_svg_pixmap
+from .dialog_icon import warning_pixmap
 
 _ICON_SIZE = 20
-_ICON_COLOR = QColor("#f2c40c")
 
 
 class MissingFilesBanner(QFrame):
@@ -33,8 +31,7 @@ class MissingFilesBanner(QFrame):
         row.setSpacing(10)
 
         self.icon_label = QLabel()
-        self.icon_label.setPixmap(tinted_svg_pixmap(
-            "Global/warning.svg", _ICON_SIZE, _ICON_COLOR, self.devicePixelRatioF() or 1.0))
+        self.icon_label.setPixmap(warning_pixmap(_ICON_SIZE, self.devicePixelRatioF() or 1.0))
         self.icon_label.setFixedSize(_ICON_SIZE, _ICON_SIZE)
         row.addWidget(self.icon_label)
 

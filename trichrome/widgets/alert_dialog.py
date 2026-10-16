@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -16,10 +15,9 @@ from PySide6.QtWidgets import (
 
 from .. import i18n
 from .button_style import style_primary_button, style_secondary_button
-from .svg_icons import tinted_svg_pixmap
+from .dialog_icon import warning_pixmap
 
 _ICON_SIZE = 36
-_ICON_COLOR = QColor("#f2c40c")
 # Caps the table's own height so a long list of rows scrolls internally
 # instead of growing the dialog itself - the text above always stays put.
 _TABLE_MAX_HEIGHT = 160
@@ -69,8 +67,7 @@ class AlertDialog(QDialog):
         body_row.setSpacing(14)
 
         icon_label = QLabel()
-        icon_label.setPixmap(tinted_svg_pixmap(
-            "Global/warning.svg", _ICON_SIZE, _ICON_COLOR, self.devicePixelRatioF() or 1.0))
+        icon_label.setPixmap(warning_pixmap(_ICON_SIZE, self.devicePixelRatioF() or 1.0))
         icon_label.setFixedSize(_ICON_SIZE, _ICON_SIZE)
         body_row.addWidget(icon_label, alignment=Qt.AlignTop)
 

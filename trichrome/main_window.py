@@ -51,7 +51,7 @@ from .widgets.channel_panel import CHANNEL_COLORS, CHANNEL_KEY, ChannelPanel, Ch
 from .widgets.compare_button import CompareButton
 from .widgets.confirm_dialog import ConfirmDialog
 from .widgets.crop_panel import CropPanel
-from .widgets.controls import ArrowKeyScrollArea, CollapsibleSection
+from .widgets.controls import ArrowKeyScrollArea, ChannelDotButton, CollapsibleSection
 from .widgets.curves_panel import CurvesPanel
 from .widgets.export_dialog import ExportDialog
 from .widgets.settings_dialog import (
@@ -242,6 +242,10 @@ _DUPLICATE_SUFFIX_RE = re.compile(r"^(.*) \((\d+)\)$")
 # more conservative 40ms guess. Below this, recompute_preview()'s own real cost
 # (not this timer) becomes the limiting factor regardless.
 _CURVE_RECOMPUTE_THROTTLE_MS = 16
+# A curve tick only re-applies the curves to the cached pre-curve image
+# (_on_curve_recompute_tick) and skips the filmstrip thumbnail; once the curve
+# has been still this long, the thumbnail is refreshed from the shown frame.
+_CURVE_SETTLE_MS = 250
 
 # HQ Preview: the live preview always composites from the
 # ~MAX_PREVIEW_DIM-capped (1400px, see imaging.py) imaging.make_preview()
@@ -359,8 +363,10 @@ _DEFAULT_RIGHT_BLOCK_ORDER = ["histogram", "light", "color", "crop", "curves"]
 # block_side/block_visible/order - those are deliberately left untouched while
 # light_mode_active, so switching back to Advanced needs no restore step.
 # Histogram sits first, even though it normally defaults to the *right* panel
-# in Advanced mode. See _apply_light_mode_block_layout().
-_LIGHT_MODE_BLOCK_KEYS = ("histogram", "files", "channels", "crop")
+# in Advanced mode. Curves is the only global correction offered there, and
+# carries Negative in its header since the Light block isn't shown. See
+# _apply_light_mode_block_layout().
+_LIGHT_MODE_BLOCK_KEYS = ("histogram", "files", "channels", "curves", "crop")
 
 # Both side panels share one width range - they used to differ (left 360-420,
 # right 300-360), which is exactly backwards now that any block can be dragged
@@ -565,15 +571,21 @@ class MainWindow(QMainWindow):
         # Whether any guide was edited since the mode was entered - see
         # on_perspective_apply.
         self._perspective_edited = False
-        # Throttles recompute_preview() during a live curve drag - see
-        # _CURVE_RECOMPUTE_THROTTLE_MS and on_curve_changed(). Always calls
-        # with update_curve_reference=False (via the lambda, since
-        # QTimer.timeout carries no args and would otherwise fall back to
-        # recompute_preview's own True default) - a curve-only recompute
-        # must never refresh the Curves tool's "input" reference histogram.
+        # Throttles the preview update during a live curve drag - see
+        # _CURVE_RECOMPUTE_THROTTLE_MS and on_curve_changed(). A curve-only
+        # update never refreshes the Curves tool's "input" reference
+        # histogram (update_curve_reference=False).
         self._curve_recompute_timer = QTimer(self)
         self._curve_recompute_timer.setSingleShot(True)
-        self._curve_recompute_timer.timeout.connect(lambda: self.recompute_preview(update_curve_reference=False))
+        self._curve_recompute_timer.timeout.connect(self._on_curve_recompute_tick)
+        self._curve_settle_timer = QTimer(self)
+        self._curve_settle_timer.setSingleShot(True)
+        self._curve_settle_timer.setInterval(_CURVE_SETTLE_MS)
+        self._curve_settle_timer.timeout.connect(self._on_curve_settled)
+        # (framed pre-curve RGB, coverage mask or None, curves_preview_index
+        # or None until the first curve tick), from the last recompute that
+        # refreshed the curve reference - see _on_curve_recompute_tick.
+        self._curve_preview_base = None
         # HQ Preview toggle (see _HQ_PREVIEW_IDLE_MS above) - not persisted
         # across launches, same as Compare/Crop-active, since it's an
         # in-the-moment display choice rather than a saved preference.
@@ -738,6 +750,7 @@ class MainWindow(QMainWindow):
         self.redo_action.setText(i18n.tr("menu_redo"))
         self.copy_action.setText(i18n.tr("menu_edit_copy"))
         self.paste_action.setText(i18n.tr("menu_edit_paste"))
+        self.select_all_action.setText(i18n.tr("menu_edit_select_all"))
         self.rotate_right_action.setText(i18n.tr("menu_edit_rotate_right"))
         self.rotate_left_action.setText(i18n.tr("menu_edit_rotate_left"))
         self.delete_selection_action.setText(i18n.tr("menu_edit_delete") + os_integration.platform_text("\t⌘⌫"))
@@ -953,6 +966,16 @@ class MainWindow(QMainWindow):
         self.paste_action.triggered.connect(self.paste_settings_to_selected)
         self.paste_action.setEnabled(False)
         self.edit_menu.addAction(self.paste_action)
+        # A real Edit menu item, not a keyPressEvent binding: macOS's native
+        # open panel finds Cmd+A only through the app's Select All menu item
+        # (Qt's Cocoa plugin forwards QKeySequence.SelectAll items to the
+        # panel's first responder as selectAll:). In the main window, a
+        # focused QLineEdit/QAbstractSpinBox claims the shortcut first, so
+        # Cmd+A still selects text there.
+        self.select_all_action = QAction(i18n.tr("menu_edit_select_all"), self)
+        self.select_all_action.setShortcut(QKeySequence.SelectAll)
+        self.select_all_action.triggered.connect(lambda: self.carousel.toggle_select_all())
+        self.edit_menu.addAction(self.select_all_action)
         self.edit_menu.addSeparator()
         self.rotate_right_action = QAction(i18n.tr("menu_edit_rotate_right"), self)
         self.rotate_right_action.setShortcut(QKeySequence("Ctrl+R"))
@@ -969,8 +992,8 @@ class MainWindow(QMainWindow):
         # Backspace/Delete combo) as its own via ShortcutOverride, so a real
         # global shortcut here would fire even while a text field is
         # focused and delete photos out from under the user's typing.
-        # Handled in keyPressEvent instead, with the same focus guard as
-        # Cmd+A; the shortcut text below is display-only.
+        # Handled in keyPressEvent instead, with a focus guard; the
+        # shortcut text below is display-only.
         self.delete_selection_action.triggered.connect(
             lambda: self.delete_batch_items(self.carousel.selected_indices()))
         self.edit_menu.addAction(self.delete_selection_action)
@@ -1148,6 +1171,8 @@ class MainWindow(QMainWindow):
 
         self.import_panel = ImportPanel()
         self.import_panel.load_requested.connect(self.load_image)
+        self.import_panel.file_dropped.connect(self._load_image_from_path)
+        self.import_panel.clear_requested.connect(self.on_channel_clear_requested)
         self.import_panel.mode_change_requested.connect(self.on_import_mode_change_requested)
         self.import_panel.harris_shutter_toggled.connect(self.on_harris_shutter_toggled)
         self.import_panel.channel_swap_requested.connect(self.on_channel_swap_requested)
@@ -1269,20 +1294,21 @@ class MainWindow(QMainWindow):
         # only ever applied to the 3 trichrome channels this block itself
         # controls, not to Files' own load-image concerns) - at the very bottom
         # and styled discreetly: a muted, smaller label (the same "#888 / 11px"
-        # secondary-text convention used elsewhere in this app) and smaller
-        # letter-toggle buttons than before, since which channel is the
-        # geometric anchor is a one-time setup choice, not a
-        # frequently-revisited control like Auto Align or the tabs above it.
+        # secondary-text convention used elsewhere in this app) and solid
+        # channel-color dots rather than letter glyphs, which don't read at
+        # this size - which channel is the geometric anchor is a one-time
+        # setup choice, not a frequently-revisited control like Auto Align or
+        # the tabs above it.
         lock_row = QHBoxLayout()
         self.lock_label = QLabel()
         self.lock_label.setStyleSheet("color: #888; font-size: 11px;")
         lock_row.addWidget(self.lock_label)
-        self.lock_buttons: list[SvgLetterToggleButton] = []
+        self.lock_buttons: list[ChannelDotButton] = []
         self.lock_group = QButtonGroup(self)
         self.lock_group.setExclusive(True)
         for i, label in enumerate(("R", "G", "B")):
             color = CHANNEL_COLORS.get(label, "#888")
-            btn = SvgLetterToggleButton(label, color, size=(24, 22), icon_size=16)
+            btn = ChannelDotButton(color, size=(24, 22))
             btn.toggled.connect(lambda checked, idx=i: self.on_reference_toggled(idx, True) if checked else None)
             self.lock_group.addButton(btn)
             lock_row.addWidget(btn)
@@ -1413,6 +1439,7 @@ class MainWindow(QMainWindow):
         self.carousel.convert_to_trichrome_requested.connect(self.convert_items_to_trichrome)
         self.carousel.reordered.connect(self.on_carousel_reordered)
         self.carousel.files_dropped.connect(self.on_carousel_files_dropped)
+        self.carousel.card_double_clicked.connect(self.on_carousel_card_double_clicked)
         self.canvas.files_dropped.connect(self.on_carousel_files_dropped)
         self.scan_panel.add_to_session_requested.connect(self.on_scan_add_to_session_requested)
         self.scan_panel.pick_film_base_from_photo_toggled.connect(self.on_pick_film_base_from_photo_toggled)
@@ -1859,6 +1886,9 @@ class MainWindow(QMainWindow):
             self.trichrome_toolbar_btn, self.settings_toolbar_btn, self.crop_toolbar_btn, self.scan_toolbar_btn,
         ):
             self.default_layout_group.addButton(btn)
+            # Workspace slots: full-strength icon when active, no blue frame
+            # (the hover frame stays).
+            btn._ACTIVE_FRAME = False
         # Maps each built-in preset name to its toolbar button, so
         # _activate_default_layout() can sync the exclusive checked state
         # regardless of which of the 3 entry points (toolbar click, bare
@@ -1978,10 +2008,10 @@ class MainWindow(QMainWindow):
             container.updateGeometry()
 
     def _apply_light_mode_block_layout(self) -> None:
-        """Light mode's fixed rendering override - forces exactly Files /
-        Trichrome Process / Crop into the left panel, in that order, regardless
-        of their Advanced-mode block_side/block_visible/order (Crop in
-        particular normally defaults to hidden, on the right panel).
+        """Light mode's fixed rendering override - forces exactly the
+        _LIGHT_MODE_BLOCK_KEYS blocks into the left panel, in that order,
+        regardless of their Advanced-mode block_side/block_visible/order (Crop
+        in particular normally defaults to hidden, on the right panel).
         Deliberately does not read or write block_side/
         block_visible/left_block_order/right_block_order at all - those stay
         exactly as Advanced mode left them, so returning to Advanced mode needs
@@ -2360,6 +2390,7 @@ class MainWindow(QMainWindow):
 
         self.curves_panel.changed.connect(self.on_curve_changed)
         self.curves_panel.reset_requested.connect(self.on_curve_reset)
+        self.curves_panel.invert_toggled.connect(self.on_invert_toggled)
 
         self.canvas.drag_delta.connect(self.on_canvas_drag)
         self.canvas.scale_delta.connect(self.on_canvas_scale)
@@ -2680,6 +2711,16 @@ class MainWindow(QMainWindow):
         # otherwise), so no guard is needed here for it.
 
         if self.carousel.count():
+            mods = event.modifiers()
+            if (not text_editing
+                    and event.key() in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
+                    and (mods & Qt.ControlModifier) and (mods & Qt.ShiftModifier)):
+                # Cmd+Shift+Left/Up and Right/Down: add every photo before /
+                # after the selection to it (filmstrip and grid alike).
+                self.carousel.extend_selection_to_end(
+                    forward=event.key() in (Qt.Key_Right, Qt.Key_Down))
+                event.accept()
+                return
             if not text_editing and event.key() in (Qt.Key_Left, Qt.Key_Right):
                 extend = bool(event.modifiers() & Qt.ShiftModifier)
                 if event.key() == Qt.Key_Left:
@@ -2695,12 +2736,6 @@ class MainWindow(QMainWindow):
                     self.carousel.go_up(extend_selection=extend)
                 else:
                     self.carousel.go_down(extend_selection=extend)
-                event.accept()
-                return
-            if (not text_editing and event.key() == Qt.Key_A
-                    and (event.modifiers() & Qt.ControlModifier)
-                    and not self.light_mode_active):
-                self.carousel.toggle_select_all()
                 event.accept()
                 return
             # Light mode always has exactly one BatchItem and it must never
@@ -2750,6 +2785,12 @@ class MainWindow(QMainWindow):
         if os_integration.IS_MAC:
             text = text.replace("Ctrl", "Cmd")
         return text.replace("Shift", i18n.tr("shortcut_key_shift"))
+
+    def on_carousel_card_double_clicked(self, index: int) -> None:
+        """Double-clicking a grid cell opens that photo in the preview, the
+        same as Enter/Escape in grid view. No effect in the filmstrip."""
+        if self.grid_view_toggle_btn.isChecked():
+            self.grid_view_toggle_btn.setChecked(False)
 
     def _general_shortcuts_html(self) -> str:
         """The Shortcuts dialog's "Files & Edit" section is part static text
@@ -3589,7 +3630,7 @@ class MainWindow(QMainWindow):
         # see e.g. activate_batch_item/on_channel_swap_requested), so
         # without this the newly-assigned channel kept showing "No image
         # loaded" the first time a fresh item went Solo -> Trichrome.
-        self.import_panel.set_filename(index, os.path.basename(layer.path))
+        self._sync_channel_file_label(index)
         self._sync_panel_from_layer(index)
         self._sync_import_and_channels_ui()
         self.recompute_preview()
@@ -3822,9 +3863,9 @@ class MainWindow(QMainWindow):
 
         for i in range(3):
             layer = self.layers[i]
-            self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
+            self._sync_channel_file_label(i)
             self._sync_panel_from_layer(i)
-        self.light_panel.set_invert(self._active_invert_state())
+        self._sync_invert_buttons()
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
         self._sync_import_and_channels_ui()
@@ -3918,7 +3959,7 @@ class MainWindow(QMainWindow):
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.light_panel.set_invert(self._active_invert_state())
+            self._sync_invert_buttons()
             self._sync_import_and_channels_ui()
             self._sync_global_panel_from_model()
             self.recompute_preview()
@@ -4009,7 +4050,7 @@ class MainWindow(QMainWindow):
         if self.batch_current_index in indices:
             for i in range(3):
                 self._sync_panel_from_layer(i)
-            self.light_panel.set_invert(self._active_invert_state())
+            self._sync_invert_buttons()
             self._sync_import_and_channels_ui()
             self._sync_global_panel_from_model()
             self._sync_crop_panel_from_item()
@@ -4138,10 +4179,17 @@ class MainWindow(QMainWindow):
                 ) for it in self.batch_items
             ],
             "batch_current_index": self.batch_current_index,
+            # A filmstrip drag switches the sort to custom; undoing it must
+            # bring the previous sort back with the previous order.
+            "sort_mode": self.sort_mode,
+            "sort_reversed": self.sort_reversed,
         }
 
     def _restore_state(self, snapshot: dict) -> None:
         self.batch_items = snapshot["batch_items"]
+        self.sort_mode = snapshot["sort_mode"]
+        self.sort_reversed = snapshot["sort_reversed"]
+        self._sync_sort_menu_state()
         index = max(0, min(snapshot["batch_current_index"], len(self.batch_items) - 1))
         self.batch_current_index = index
         self.layers = self.batch_items[index].layers
@@ -4173,9 +4221,9 @@ class MainWindow(QMainWindow):
 
         for i in range(3):
             layer = self.layers[i]
-            self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
+            self._sync_channel_file_label(i)
             self._sync_panel_from_layer(i)
-        self.light_panel.set_invert(self._active_invert_state())
+        self._sync_invert_buttons()
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
         self._sync_import_and_channels_ui()
@@ -4258,6 +4306,43 @@ class MainWindow(QMainWindow):
         settings.setValue("last_import_dir", os.path.dirname(path))
         self._load_image_from_path(index, path)
 
+    def _sync_channel_file_label(self, index: int) -> None:
+        """The Files block's row for channel ``index``: file name and
+        resolution, or the empty "choose or drop" slot."""
+        layer = self.layers[index]
+        name = os.path.basename(layer.path) if layer.path else ""
+        size = None
+        if layer.image_full is not None:
+            h, w = layer.image_full.shape[:2]
+            size = (w, h)
+        elif layer.image_preview is not None and layer.preview_scale:
+            h, w = layer.image_preview.shape[:2]
+            size = (round(w / layer.preview_scale), round(h / layer.preview_scale))
+        self.import_panel.set_filename(index, name, size)
+
+    def on_channel_clear_requested(self, index: int) -> None:
+        """A channel row's × button: empties that channel. Clearing the last
+        loaded channel removes the whole photo from the session instead
+        (Light mode keeps its one photo and just empties it), as one undo
+        step either way."""
+        if not (0 <= index < len(self.layers)) or not self.layers[index].path:
+            return
+        others_loaded = any(l.path for i, l in enumerate(self.layers) if i != index)
+        if not others_loaded and not self.light_mode_active \
+                and 0 <= self.batch_current_index < len(self.batch_items):
+            self.delete_batch_items([self.batch_current_index])
+            return
+        self.push_undo()
+        layer = self.layers[index]
+        self.layers[index] = ChannelLayer(
+            color_index=layer.color_index, label=layer.label,
+            is_reference=layer.is_reference, harris_shutter=layer.harris_shutter,
+            invert=layer.invert)
+        self._sync_channel_file_label(index)
+        self._sync_panel_from_layer(index)
+        self.recompute_preview()
+        self._refresh_carousel_thumbnail_for_item(self.batch_current_index)
+
     def _load_image_from_path(self, index: int, path: str, state: dict | None = None) -> bool:
         """Load ``path`` into channel ``index``.
 
@@ -4313,7 +4398,7 @@ class MainWindow(QMainWindow):
                 if w and h:
                     layer.scale = float(np.mean([ref_w / w, ref_h / h]))
 
-        self.import_panel.set_filename(index, os.path.basename(path))
+        self._sync_channel_file_label(index)
         self._sync_panel_from_layer(index)
 
         self.recompute_preview()
@@ -4364,7 +4449,7 @@ class MainWindow(QMainWindow):
         self._swap_channel_layers(from_index, to_index)
         for i in (from_index, to_index):
             layer = self.layers[i]
-            self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
+            self._sync_channel_file_label(i)
             self._sync_panel_from_layer(i)
         self.recompute_preview()
         self.canvas.zoom_fit()
@@ -4438,7 +4523,7 @@ class MainWindow(QMainWindow):
         if 0 <= self.batch_current_index < len(self.batch_items):
             for i in range(3):
                 layer = self.layers[i]
-                self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
+                self._sync_channel_file_label(i)
                 self._sync_panel_from_layer(i)
         self.recompute_preview()
         self.canvas.zoom_fit()
@@ -4541,7 +4626,7 @@ class MainWindow(QMainWindow):
             return False
 
         if item_index == self.batch_current_index:
-            self.import_panel.set_filename(ci, os.path.basename(self.layers[ci].path) if self.layers[ci].path else "")
+            self._sync_channel_file_label(ci)
             self._sync_panel_from_layer(ci)
             self.recompute_preview()
             self.canvas.zoom_fit()
@@ -4896,9 +4981,9 @@ class MainWindow(QMainWindow):
             panel.solo_checkbox.blockSignals(False)
         for i in range(3):
             layer = self.layers[i]
-            self.import_panel.set_filename(i, os.path.basename(layer.path) if layer.path else "")
+            self._sync_channel_file_label(i)
             self._sync_panel_from_layer(i)
-        self.light_panel.set_invert(self._active_invert_state())
+        self._sync_invert_buttons()
         self._refresh_reference_ui()
         self._sync_global_panel_from_model()
         self._sync_import_and_channels_ui()
@@ -5785,13 +5870,15 @@ class MainWindow(QMainWindow):
                     self.save_session_action, self.save_session_as_action, self.batch_action):
             act.setVisible(not active)
             act.setEnabled(not active)
-        # Edit menu: keep Undo/Redo + Rotate, hide+disable Copy/Paste/Delete.
+        # Edit menu: keep Undo/Redo + Rotate, hide+disable Copy/Paste/Select All/Delete.
         self.copy_action.setVisible(not active)
         self.copy_action.setEnabled(not active)
         self.paste_action.setVisible(not active)
         self.paste_action.setEnabled(not active and self._clipboard_settings is not None)
         self.delete_selection_action.setVisible(not active)
         self.delete_selection_action.setEnabled(not active)
+        self.select_all_action.setVisible(not active)
+        self.select_all_action.setEnabled(not active)
         # Tools menu hidden entirely; Window keeps only the Light mode
         # toggle and Close Window (every layout item is meaningless in
         # Light mode's fixed layout - hidden *and* disabled, so a hidden
@@ -5809,10 +5896,13 @@ class MainWindow(QMainWindow):
         self.view_thumbnails_action.setVisible(not active)
         self.view_grid_action.setVisible(not active)
 
-        # Files/Trichrome Process/Crop can be collapsed but never closed -
-        # only their close button is disabled, collapse stays available.
+        # Light mode's blocks can be collapsed but never closed - only their
+        # close button is disabled, collapse stays available.
         for key in _LIGHT_MODE_BLOCK_KEYS:
             self.block_close_buttons[key].setEnabled(not active)
+
+        # Negative moves to the Curves header in Light mode (no Light block).
+        self.curves_panel.set_invert_visible(active)
 
         self.import_panel.set_light_mode_active(active)
 
@@ -6009,7 +6099,7 @@ class MainWindow(QMainWindow):
         # Re-derive from the active photo's actual (possibly unchanged, if
         # it wasn't among targets) state, rather than trusting `checked`
         # blindly - keeps the button honest in that edge case.
-        self.light_panel.set_invert(self._active_invert_state())
+        self._sync_invert_buttons()
 
     def on_active_toggled(self, index: int, checked: bool) -> None:
         if checked:
@@ -6145,6 +6235,13 @@ class MainWindow(QMainWindow):
             self.channel_panels[index].active_checkbox.setChecked(True)
         elif self.stretch_index is not None and self.stretch_index != index:
             self.channel_panels[index].stretch_checkbox.setChecked(True)
+
+    def _sync_invert_buttons(self) -> None:
+        """Both Negative toggles (Light block, and Curves' Light-mode one)
+        show the active photo's own state."""
+        state = self._active_invert_state()
+        self.light_panel.set_invert(state)
+        self.curves_panel.set_invert(state)
 
     def _active_invert_state(self) -> bool:
         """Which invert/Negative state the Light panel's button should
@@ -6344,7 +6441,7 @@ class MainWindow(QMainWindow):
             self.layers[i] = ChannelLayer(
                 color_index=layer.color_index, label=layer.label,
                 is_reference=layer.is_reference, harris_shutter=harris_shutter)
-            self.import_panel.set_filename(i, "")
+            self._sync_channel_file_label(i)
             self._sync_panel_from_layer(i)
         self.recompute_preview()
 
@@ -7353,6 +7450,8 @@ class MainWindow(QMainWindow):
         it on a curve-only tick also avoids paying for a second
         straighten/crop/to_uint8 pass that would just get thrown away
         unused."""
+        if update_curve_reference:
+            self._curve_preview_base = None
         self.light_panel.reset_button.setEnabled(self.global_corr.has_light_correction())
         # Never re-enable Color's own Reset while the B&W toggle has it
         # partially disabled - has_color_correction() doesn't know about
@@ -7502,11 +7601,45 @@ class MainWindow(QMainWindow):
                 pre_curve_rgb = imaging.apply_crop_rect(
                     pre_curve_rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
             self.curves_panel.set_reference_histogram(imaging.to_uint8(pre_curve_rgb), valid_mask=mask > 0.5)
+            self._curve_preview_base = (pre_curve_rgb, mask > 0.5, None)
 
         if 0 <= self.batch_current_index < len(self.batch_items):
             self._update_carousel_thumbnail(self.batch_current_index, rgb_u8)
 
         self._arm_hq_preview_if_enabled()
+
+    def _on_curve_recompute_tick(self) -> None:
+        """One live curve-drag update: re-applies only the curves (and Black &
+        White) to the pre-curve image the last full recompute cached, through
+        lookup tables (imaging.curves_preview_luts), instead of re-running the
+        warp/compose/Light/Color pipeline. Falls back to a full recompute when
+        there's no cached image (Solo channel preview, nothing loaded) or in
+        Compare, which shows no curves. The result is within one 8-bit level
+        of the exact apply_curves path, which HQ Preview and export keep."""
+        base = self._curve_preview_base
+        if base is None or self._compare_active:
+            self.recompute_preview(update_curve_reference=False)
+            return
+        pre_curve_rgb, mask, index = base
+        if index is None:
+            index = imaging.curves_preview_index(pre_curve_rgb)
+            self._curve_preview_base = (pre_curve_rgb, mask, index)
+        rgb_u8 = imaging.apply_curves_preview(index, imaging.curves_preview_luts(self.global_corr.curves))
+        if self.global_corr.black_white_active:
+            rgb_u8 = imaging.to_uint8(imaging.apply_black_white(rgb_u8.astype(np.float32) / 255.0))
+        self.curves_panel.reset_button.setEnabled(self.global_corr.has_curve_correction())
+        self.canvas.set_image_rgb(rgb_u8)
+        if mask is not None:
+            self.histogram.set_image(rgb_u8, valid_mask=mask)
+        else:
+            self.histogram.set_image(rgb_u8)
+        self._last_preview_rgb_u8 = rgb_u8
+        self._arm_hq_preview_if_enabled()
+        self._curve_settle_timer.start()
+
+    def _on_curve_settled(self) -> None:
+        if self._last_preview_rgb_u8 is not None and 0 <= self.batch_current_index < len(self.batch_items):
+            self._update_carousel_thumbnail(self.batch_current_index, self._last_preview_rgb_u8)
 
     def _recompute_preview_normal(self, update_curve_reference: bool) -> None:
         """Normal-mode counterpart of the main recompute_preview body above -
@@ -7552,6 +7685,7 @@ class MainWindow(QMainWindow):
                 pre_curve_rgb = imaging.apply_crop_rect(
                     pre_curve_rgb, self.crop.x, self.crop.y, self.crop.width, self.crop.height)
             self.curves_panel.set_reference_histogram(imaging.to_uint8(pre_curve_rgb))
+            self._curve_preview_base = (pre_curve_rgb, None, None)
 
         if 0 <= self.batch_current_index < len(self.batch_items):
             self._update_carousel_thumbnail(self.batch_current_index, rgb_u8)

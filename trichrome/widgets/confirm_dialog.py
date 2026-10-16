@@ -10,14 +10,12 @@ prompt)."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLayout, QPushButton, QVBoxLayout
 
 from .button_style import style_primary_button, style_secondary_button
-from .svg_icons import tinted_svg_pixmap
+from .dialog_icon import question_pixmap
 
-_ICON_SIZE = 36
-_ICON_COLOR = QColor("#f2c40c")
+_ICON_SIZE = 52
 
 
 class ConfirmDialog(QDialog):
@@ -42,8 +40,7 @@ class ConfirmDialog(QDialog):
         body_row = QHBoxLayout()
         body_row.setSpacing(14)
         icon_label = QLabel()
-        icon_label.setPixmap(tinted_svg_pixmap(
-            "Global/warning.svg", _ICON_SIZE, _ICON_COLOR, self.devicePixelRatioF() or 1.0))
+        icon_label.setPixmap(question_pixmap(_ICON_SIZE, self.devicePixelRatioF() or 1.0))
         icon_label.setFixedSize(_ICON_SIZE, _ICON_SIZE)
         body_row.addWidget(icon_label, alignment=Qt.AlignTop)
 

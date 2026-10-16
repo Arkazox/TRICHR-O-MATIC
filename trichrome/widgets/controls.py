@@ -4,7 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QScrollArea, QSizePolicy, QSlider,
+    QAbstractButton, QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QScrollArea, QSizePolicy, QSlider,
     QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -587,3 +587,46 @@ class CollapsibleSection(QFrame):
     def setChecked(self, checked: bool) -> None:
         self.toggle_button.setChecked(checked)
         self._on_clicked(checked)
+
+
+class ChannelDotButton(QAbstractButton):
+    """A checkable channel button drawn as a solid dot in the channel's own
+    color, for places too small for a letter glyph to read (Lock Layer
+    Position). Checked: the dot at full color with a thin ring of the same
+    color around it; unchecked: the same dot, dimmed (a little less on
+    hover). Painted directly, so it needs no icon file."""
+
+    DOT_DIAMETER = 10.0
+    RING_GAP = 2.5
+    RING_WIDTH = 1.5
+
+    def __init__(self, color: str, size: tuple[int, int] = (24, 22), parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self._color = QColor(color)
+        self.setFixedSize(*size)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover, True)  # repaint on enter/leave for the hover shade
+
+    def sizeHint(self) -> QSize:
+        return self.size()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = QColor(self._color)
+        if not self.isEnabled():
+            color.setAlpha(70)
+        elif not self.isChecked():
+            color.setAlpha(120 if self.underMouse() else 80)
+        center = QPointF(self.width() / 2, self.height() / 2)
+        radius = self.DOT_DIAMETER / 2
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(center, radius, radius)
+        if self.isChecked():
+            painter.setPen(QPen(color, self.RING_WIDTH))
+            painter.setBrush(Qt.NoBrush)
+            ring = radius + self.RING_GAP
+            painter.drawEllipse(center, ring, ring)
+        painter.end()

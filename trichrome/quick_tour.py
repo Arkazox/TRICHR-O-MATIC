@@ -108,7 +108,7 @@ STEPS = (
     TourStep("crop", _block("crop"), place="left", modes=("advanced", "light")),
     TourStep("light", _block("light"), place="left"),
     TourStep("color", _block("color"), place="left"),
-    TourStep("curves", _block("curves"), place="left"),
+    TourStep("curves", _block("curves"), place="left", modes=("advanced", "light")),
     TourStep("scan", lambda mw: [[mw.block_widgets["scan"]], [mw.scan_toolbar_btn]],
              layout="scan", wip=True),
     TourStep("workspaces", lambda mw: [

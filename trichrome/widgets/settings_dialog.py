@@ -12,10 +12,9 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QStyle, QVBoxLayout, QWidget,
 )
 
-from .. import i18n, os_integration, theme
+from .. import i18n, theme
 from .button_style import style_primary_button
 from .dialog_style import PANEL_PADDING, make_panel, make_section_title
-from .info_bubble import InfoButton
 from .welcome_dialog import SHOW_AT_STARTUP_KEY
 from .checkbox import CheckBox, RadioButton
 from .combo_box import ComboBox
@@ -30,16 +29,14 @@ SESSION_PREVIEW_CACHE_KEY = "session_preview_cache"
 EXPORT_FORMAT_KEY = "export_format_index"   # 0 PNG, 1 JPEG, 2 TIFF
 EXPORT_SUFFIX_KEY = "export_suffix"
 DEFAULT_EXPORT_SUFFIX = "_trichrome"
-# Off by default: Scan is still alpha, hidden from public beta users unless
-# they opt in (toolbar slot, S key, Tools/Window menu entries, Quick Tour step).
+# Read by MainWindow when os_integration.SCAN_TOOL_AVAILABLE allows Scan
+# (toolbar slot, S key, Tools/Window menu entries, Quick Tour step).
 SCAN_TOOL_ENABLED_KEY = "scan_tool_enabled"
 
 _CONTENT_WIDTH = 420
 _BOX_PADDING = PANEL_PADDING
 _INNER_WIDTH = _CONTENT_WIDTH - 2 * _BOX_PADDING
 _HELP_STYLE = "color: {color}; font-size: 11px;"
-# Same yellow as the status bar's "mode is active" indicators.
-_EXPERIMENTAL_RGB = "242, 196, 12"
 _LANGUAGES = (("en", "English"), ("fr", "Français"))
 # theme.APPEARANCES order, with each choice's i18n key.
 _APPEARANCE_KEYS = (("dark", "settings_appearance_dark"), ("light", "settings_appearance_light"),
@@ -156,38 +153,6 @@ class SettingsDialog(QDialog):
         box.addLayout(export_grid)
         self.export_help = self._help_label(box)
 
-        root.addSpacing(14)
-
-        # --- Experimental ---------------------------------------------
-        self.experimental_title, box = self._box(root)
-        # A muted yellow tint on the whole panel, not just the checkbox
-        # text, sets the alpha section apart. Its own object name, so this
-        # one frame overrides the shared PANEL_STYLE instead of adding to it.
-        experimental_panel = box.parentWidget()
-        experimental_panel.setObjectName("experimentalPanel")
-        experimental_panel.setStyleSheet(f"""
-            QFrame#experimentalPanel {{
-                background: rgba({_EXPERIMENTAL_RGB}, 28);
-                border: 1px solid rgba({_EXPERIMENTAL_RGB}, 80);
-                border-radius: 6px;
-            }}
-        """)
-        # The checkbox carries its own text: a separate label beside it
-        # overlapped the box on macOS, since the row had no spacing.
-        scan_row = QHBoxLayout()
-        scan_row.setContentsMargins(0, 0, 0, 0)
-        self.scan_tool_checkbox = CheckBox()
-        self.scan_tool_checkbox.toggled.connect(self._on_scan_tool_toggled)
-        scan_row.addWidget(self.scan_tool_checkbox)
-        scan_row.addStretch(1)
-        scan_row.addWidget(InfoButton("settings_experimental_info"))
-        box.addLayout(scan_row)
-        self.scan_tool_help = self._help_label(box, indent)
-        if not os_integration.SCAN_TOOL_AVAILABLE:
-            # Scan is the section's only entry, so the whole section goes.
-            self.experimental_title.hide()
-            experimental_panel.hide()
-
         # --- Footer --------------------------------------------------
         root.addSpacing(20)
         footer = QHBoxLayout()
@@ -253,9 +218,6 @@ class SettingsDialog(QDialog):
         radio.setChecked(True)
         radio.blockSignals(False)
         self.suffix_edit.setText(settings.value(EXPORT_SUFFIX_KEY, DEFAULT_EXPORT_SUFFIX, type=str))
-        self.scan_tool_checkbox.blockSignals(True)
-        self.scan_tool_checkbox.setChecked(settings.value(SCAN_TOOL_ENABLED_KEY, False, type=bool))
-        self.scan_tool_checkbox.blockSignals(False)
 
     def retranslate_ui(self) -> None:
         self.setWindowTitle(i18n.tr("settings_title"))
@@ -275,9 +237,6 @@ class SettingsDialog(QDialog):
         self.format_label.setText(i18n.tr("settings_export_format"))
         self.suffix_label.setText(i18n.tr("settings_export_suffix"))
         self.export_help.setText(i18n.tr("settings_export_help"))
-        self.experimental_title.setText(i18n.tr("settings_section_experimental"))
-        self.scan_tool_checkbox.setText(i18n.tr("settings_scan_tool_enabled"))
-        self.scan_tool_help.setText(i18n.tr("settings_scan_tool_enabled_help"))
         self.done_button.setText(i18n.tr("settings_done_button"))
         # The two grids (General, Export) share one label-column width, so
         # every dropdown/field starts at the same x.
@@ -307,14 +266,6 @@ class SettingsDialog(QDialog):
     def _apply_theme(self) -> None:
         for label in self._help_labels:
             label.setStyleSheet(_HELP_STYLE.format(color=theme.muted_text_color()))
-
-    def _on_scan_tool_toggled(self, checked: bool) -> None:
-        # The main window may refuse (a capture is running): resync the box.
-        applied = self.main_window.set_scan_tool_enabled(checked)
-        if applied != checked:
-            self.scan_tool_checkbox.blockSignals(True)
-            self.scan_tool_checkbox.setChecked(applied)
-            self.scan_tool_checkbox.blockSignals(False)
 
     def _on_format_changed(self, index: int) -> None:
         if index >= 0:

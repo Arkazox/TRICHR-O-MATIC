@@ -261,6 +261,9 @@ class BlockDragHandle(SvgToolButton):
     also removed a block on drop-outside; that was dropped as redundant with
     the close button/Tools menu)."""
 
+    # A grip, not a button: no hover frame.
+    _HOVER_FRAME = False
+
     def __init__(self, block_key: str, drag_source: QWidget,
                  size: tuple[int, int] = (16, 16), icon_size: int = 12, parent: QWidget | None = None):
         super().__init__("Global/grip-vertical.svg", size=size, icon_size=icon_size, parent=parent)

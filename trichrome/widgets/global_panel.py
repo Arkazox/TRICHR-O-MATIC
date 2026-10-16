@@ -63,7 +63,7 @@ class LightPanel(QGroupBox):
         # Negative/invert, in this block's header (see the module docstring
         # above).
         self.invert_button = SvgCheckableToolButton(
-            "Tools/Color Correction/invert.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
+            "Global/invert.svg", size=HEADER_COMPANION_BTN_SIZE, icon_size=HEADER_COMPANION_ICON_SIZE)
         self.invert_button.toggled.connect(self.invert_toggled.emit)
         header_row.addWidget(self.invert_button)
         self.reset_button = SvgToolButton(

@@ -855,6 +855,38 @@ def apply_curves(rgb: np.ndarray, curves: dict) -> np.ndarray:
     return np.stack(channels, axis=-1) if changed else out
 
 
+# Input levels of the live-preview curve tables: fine enough that a steep
+# curve doesn't posterize the 8-bit result.
+_CURVE_PREVIEW_LEVELS = 4096
+
+
+def curves_preview_luts(curves: dict) -> np.ndarray:
+    """One uint8 table per output channel (shape (3, levels)) folding the
+    "Y" master curve and that channel's own curve together, as apply_curves
+    composes them. With apply_curves_preview, a curve change re-renders the
+    live preview in a couple of milliseconds instead of a float pass per
+    curve; HQ Preview and export keep the exact apply_curves path."""
+    x = np.linspace(0.0, 1.0, _CURVE_PREVIEW_LEVELS, dtype=np.float32)
+    master = apply_curve(x, curves.get("Y", _IDENTITY_CURVE))
+    luts = [apply_curve(master, curves.get(ch, _IDENTITY_CURVE)) for ch in ("R", "G", "B")]
+    return to_uint8(np.stack(luts))
+
+
+def curves_preview_index(rgb: np.ndarray) -> np.ndarray:
+    """A float RGB image (values roughly in [0,1]) as indices into the
+    flattened curves_preview_luts tables (each channel offset to its own
+    table). Computed once per pre-curve image, so each curve change only
+    pays apply_curves_preview's single lookup."""
+    idx = (np.clip(rgb, 0.0, 1.0) * (_CURVE_PREVIEW_LEVELS - 1) + 0.5).astype(np.uint16)
+    idx += np.arange(3, dtype=np.uint16) * _CURVE_PREVIEW_LEVELS
+    return idx
+
+
+def apply_curves_preview(index: np.ndarray, luts: np.ndarray) -> np.ndarray:
+    """curves_preview_index's indices mapped through the tables, as uint8 RGB."""
+    return luts.reshape(-1).take(index)
+
+
 _LUMA_WEIGHTS = (0.299, 0.587, 0.114)
 
 
@@ -926,18 +958,20 @@ def compute_channel_histograms(rgb_uint8: np.ndarray, valid_mask: np.ndarray | N
     convention as warp_coverage_mask/compose_coverage_mask - a pixel a
     misaligned channel or Straighten padded with a constant border fill
     shouldn't read as real clipping."""
-    # round(), not a plain truncating cast: 0.299+0.587+0.114 isn't exactly
-    # 1.0 in floating point, so for R=G=B (e.g. a Solo preview) a plain
-    # astype(uint8) truncates ~25% of gray levels down by one, smearing the
-    # Y curve a bin off from R/G/B where they should exactly coincide.
-    luma = np.round(np.dot(rgb_uint8[..., :3], _LUMA_WEIGHTS)).astype(np.uint8)
-    channel_data = {"Y": luma, "R": rgb_uint8[:, :, 0], "G": rgb_uint8[:, :, 1], "B": rgb_uint8[:, :, 2]}
-    if valid_mask is not None:
-        valid_mask = valid_mask.astype(bool)
-        channel_data = {ch: data[valid_mask] for ch, data in channel_data.items()}
+    # OpenCV's fixed-point BT.601 conversion (the same _LUMA_WEIGHTS): its
+    # weights sum exactly to one, so R=G=B (e.g. a Solo preview) gives Y=R
+    # and the Y curve coincides with R/G/B. calcHist with 256 bins over
+    # [0, 256) is one bin per level; both run in about a millisecond on a
+    # preview, where a float dot product and np.histogram took ~45ms, too
+    # slow for a live curve drag.
+    rgb = np.ascontiguousarray(rgb_uint8[..., :3])
+    planes = {"Y": cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)}
+    for i, ch in enumerate(("R", "G", "B")):
+        planes[ch] = np.ascontiguousarray(rgb[..., i])
+    mask = None if valid_mask is None else valid_mask.astype(np.uint8)
     return {
-        ch: np.histogram(data, bins=256, range=(0, 255))[0].astype(np.float64)
-        for ch, data in channel_data.items()
+        ch: cv2.calcHist([plane], [0], mask, [256], [0, 256]).ravel().astype(np.float64)
+        for ch, plane in planes.items()
     }
 
 

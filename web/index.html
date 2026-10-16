@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en" style="background:#323232">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Always dark, whatever the system appearance (native controls included). -->
+  <meta name="color-scheme" content="only dark">
+  <meta name="theme-color" content="#2a2a2a">
+  <title>Trichr-o-matic Web</title>
+  <meta name="description" content="Recompose a color photo from three black and white shots taken through red, green and blue filters, in your browser.">
+  <link rel="icon" href="../resources/app_logo.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="../resources/app_logo.png" alt="">
+      <span class="brand-name">Trichr-o-matic</span>
+      <span class="badge">Web</span>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn secondary" id="get-app-button"
+        title="Batch import, RAW files, sessions, Light/Color/Curves and more">Download the full app</button>
+      <button id="export-button" class="btn primary" disabled>
+        <span class="icon" style="--icon: url(../resources/icons/Toolbar/Export.svg)"></span>Export…
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="panel">
+      <details class="block" open>
+        <summary class="block-title">Histogram</summary>
+        <div class="block-body"><canvas id="histogram" height="110"></canvas></div>
+      </details>
+
+      <details class="block" open>
+        <summary class="block-title">
+          <span>Files</span>
+          <button class="icon-button" id="reset-all" title="Start over with 3 new photos">
+            <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span>
+          </button>
+        </summary>
+        <div class="block-body">
+          <div class="row">
+            <select id="mode" aria-label="Mode">
+              <option value="classic">Classic Trichrome</option>
+              <option value="color">Color Trichrome</option>
+            </select>
+          </div>
+          <div id="channel-files"></div>
+          <input type="file" id="file-input" hidden accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp">
+        </div>
+      </details>
+
+      <details class="block" open>
+        <summary class="block-title">
+          <span>Trichrome Process</span>
+          <span class="summary-tools">
+            <button class="icon-button reset" data-reset="process"
+              title="Reset the position, geometry and light of all 3 channels">
+              <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button>
+          </span>
+        </summary>
+        <div class="block-body">
+          <div class="row">
+            <span class="label">Show Layer:</span>
+            <div class="toggle-group" id="show-layer"></div>
+          </div>
+          <div class="tabs" id="channel-tabs"></div>
+          <div class="tab-body" id="tab-body">
+            <details class="section channel-section" open data-section="light">
+              <summary><span>Light</span><button class="icon-button reset" data-reset="light" title="Reset">
+                <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button></summary>
+              <div class="sliders" id="sliders-light"></div>
+            </details>
+            <details class="section channel-section" data-section="position">
+              <summary><span>Position</span><button class="icon-button reset" data-reset="position" title="Reset">
+                <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button></summary>
+              <label class="check move-check"><input type="checkbox" id="move-on-canvas"> Move on Canvas</label>
+              <p class="note" id="reference-note">This is the reference channel: its position is locked.</p>
+              <div class="sliders" id="sliders-position"></div>
+            </details>
+            <details class="section channel-section" data-section="transform">
+              <summary><span>Geometry</span><button class="icon-button reset" data-reset="transform" title="Reset">
+                <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button></summary>
+              <div class="row stretch-row">
+                <label class="check"><input type="checkbox" id="stretch-on-canvas"> Stretch on Canvas</label>
+                <span class="info" tabindex="0" aria-label="About Stretch on Canvas">?
+                  <span class="bubble">
+                    <b>Stretch on Canvas</b><br>
+                    <span class="muted">Click and drag directly on the preview to locally stretch the
+                      active channel, starting from the exact point you click. While it's checked, it
+                      follows whichever tab you're viewing. Checking it unchecks Move on Canvas: a
+                      drag on the preview does one or the other.</span><br><br>
+                    <b>Drag</b><br>
+                    <span class="muted">Pulls the image from the clicked point towards the cursor;
+                      a reference grid shows the deformation live. Drag again elsewhere to refine
+                      further, without undoing the previous drag.</span><br><br>
+                    <b>Reset</b><br>
+                    <span class="muted">The button on this row removes the stretch drags. The
+                      Geometry section's Reset clears them along with the 4 sliders.</span>
+                  </span>
+                </span>
+                <button class="icon-button" id="reset-stretch" title="Remove the stretch drags">
+                  <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button>
+              </div>
+              <div class="sliders" id="sliders-transform"></div>
+            </details>
+            <label class="check solo-check"><input type="checkbox" id="solo"> Solo Layer Preview (B&amp;W)</label>
+          </div>
+          <button id="auto-align" class="btn primary wide" disabled>Auto align</button>
+          <!-- As on the desktop: a discreet label and one letter per channel,
+               the locked one drawn as a full circle. -->
+          <div class="row lock-row">
+            <span class="lock-label">Lock layer position:</span>
+            <div class="toggle-group lock-group" id="reference-buttons" role="radiogroup"
+              aria-label="Lock layer position"></div>
+            <span class="info align-right" tabindex="0" aria-label="About Lock layer position">?
+              <span class="bubble"><span class="muted">Auto Align never moves the locked channel: it
+                aligns the other two onto it instead. The locked channel keeps its own position.
+                Exactly one channel is always locked; pick a different one anytime.</span></span>
+            </span>
+          </div>
+        </div>
+      </details>
+
+      <details class="block" open>
+        <summary class="block-title">
+          <span>Curves</span>
+          <span class="summary-tools">
+            <button class="icon-button toggle" id="negative"
+              title="Negative (invert scan): inverts the tones of all 3 channels, for raw, uninverted negative scans">
+              <span class="icon" style="--icon: url(../resources/icons/Global/invert.svg)"></span></button>
+            <button class="icon-button" id="reset-curves" title="Reset the 4 curves">
+              <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button>
+          </span>
+        </summary>
+        <div class="block-body">
+          <canvas id="curve-editor" title="Click the line to add a point, drag to shape it, double-click a point to remove it"></canvas>
+          <div class="toggle-group curve-channels" id="curve-channels"></div>
+        </div>
+      </details>
+
+      <details class="block" open>
+        <summary class="block-title">
+          <span>Crop</span>
+          <span class="summary-tools">
+            <button class="icon-button toggle" id="crop-toggle" title="Crop mode (C)">
+              <span class="icon" style="--icon: url(../resources/icons/Global/crop.svg)"></span></button>
+            <button class="icon-button reset" data-reset="crop" title="Reset">
+              <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button>
+          </span>
+        </summary>
+        <div class="block-body">
+          <div class="row">
+            <span class="label">Aspect ratio</span>
+            <select id="ratio">
+              <option value="original">Original</option>
+              <option value="free">Free</option>
+              <option value="1:1">1:1</option>
+              <option value="5:4">5:4</option>
+              <option value="4:3">4:3</option>
+              <option value="7:5">7:5</option>
+              <option value="3:2">3:2</option>
+              <option value="16:9">16:9</option>
+              <option value="custom">Custom</option>
+            </select>
+            <button class="icon-button toggle" id="orientation" title="Invert orientation">
+              <span class="icon" style="--icon: url(../resources/icons/Tools/Crop/crop_rotate.svg)"></span></button>
+          </div>
+          <div class="row" id="custom-ratio-row" hidden>
+            <span class="label">Custom</span>
+            <input type="number" id="custom-w" min="0.1" max="100" step="0.1" value="1" aria-label="Width">
+            <span>:</span>
+            <input type="number" id="custom-h" min="0.1" max="100" step="0.1" value="1" aria-label="Height">
+          </div>
+          <div class="sliders" id="sliders-straighten"></div>
+          <div class="row">
+            <span class="label">Mirror</span>
+            <button class="icon-button toggle" id="mirror-h" title="Mirror Left/Right">
+              <span class="icon" style="--icon: url(../resources/icons/Tools/Crop/mirror_line.svg)"></span></button>
+            <button class="icon-button toggle" id="mirror-v" title="Mirror Top/Bottom">
+              <span class="icon" style="--icon: url(../resources/icons/Tools/Crop/mirror_line_vertical.svg)"></span></button>
+          </div>
+        </div>
+      </details>
+    </aside>
+
+    <section class="workspace">
+      <div id="viewport">
+        <div id="stage" hidden>
+          <canvas id="preview"></canvas>
+          <canvas id="overlay"></canvas>
+        </div>
+        <div id="placeholder">
+          <p class="placeholder-title">Drop your 3 photos here</p>
+          <p>PNG, JPEG, TIFF or BMP</p>
+        </div>
+      </div>
+      <div class="preview-bar">
+        <div class="bar-group">
+          <button class="icon-button" id="zoom-out" title="Zoom out">
+            <span class="icon" style="--icon: url(../resources/icons/Filmstrip/zoom_out.svg)"></span></button>
+          <button class="icon-button" id="zoom-in" title="Zoom in">
+            <span class="icon" style="--icon: url(../resources/icons/Filmstrip/zoom_in.svg)"></span></button>
+          <button class="icon-button toggle" id="zoom-fit" title="Fit to window (F)">
+            <span class="icon" style="--icon: url(../resources/icons/Filmstrip/fit_screen.svg)"></span></button>
+          <button class="icon-button toggle" id="zoom-100" title="100% (Z)">
+            <span class="icon" style="--icon: url(../resources/icons/Filmstrip/view_real_size.svg)"></span></button>
+        </div>
+        <!-- Activity and mode messages (the desktop's status bar), in yellow. -->
+        <div class="bar-status" aria-live="polite">
+          <span id="activity"></span>
+          <span id="indicator"></span>
+        </div>
+        <div class="bar-group bar-group-end">
+          <button class="icon-button" id="rotate-left" title="Rotate left">
+            <span class="icon" style="--icon: url(../resources/icons/Filmstrip/rotate-ccw-square.svg)"></span></button>
+          <button class="icon-button" id="rotate-right" title="Rotate right">
+            <span class="icon" style="--icon: url(../resources/icons/Filmstrip/rotate-cw-square.svg)"></span></button>
+          <button class="icon-button toggle" id="compare" title="Compare (:)">
+            <span class="icon" style="--icon: url(../resources/icons/Filmstrip/a-b.svg)"></span></button>
+          <span class="bar-separator"></span>
+          <button class="icon-button toggle" id="fullscreen" title="Full screen (⌘F)">
+            <span class="icon" style="--icon: url(../resources/icons/Filmstrip/fullscreen.svg)"></span></button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+
+  <!-- "Download the full app": the desktop's welcome-window look. Download
+       links are filled in from the latest GitHub release when it opens. -->
+  <dialog id="get-app-dialog" class="get-app" aria-labelledby="get-app-title">
+    <div class="get-app-glow" aria-hidden="true"></div>
+    <img class="get-app-logo" src="../resources/app_logo.png" alt="" width="96" height="96">
+    <h2 id="get-app-title">Trichr-o-matic</h2>
+    <p class="get-app-version" id="get-app-version">Latest version</p>
+    <p class="get-app-text">Trichr-o-matic is an app designed for trichrome photography.<br>
+      From three black and white shots to the recomposed color image, its complete set of tools
+      keeps every step simple: import, align, edit and export your photos with ease.</p>
+    <ul class="get-app-features">
+      <li>Batch import</li><li>RAW files</li><li>Sessions</li><li>Light, Color &amp; Curves</li>
+      <li>HQ Preview</li><li>Free</li>
+    </ul>
+    <!-- Pick a system, then download it with the button below. -->
+    <div class="get-app-downloads" id="get-app-downloads" role="radiogroup" aria-label="System">
+      <button type="button" class="get-app-option" role="radio" data-asset="AppleSilicon.zip" data-label="Mac · Apple Silicon">
+        <span class="get-app-os">Mac</span><span class="get-app-variant">Apple Silicon</span><span class="get-app-size"></span></button>
+      <button type="button" class="get-app-option" role="radio" data-asset="Intel.zip" data-label="Mac · Intel">
+        <span class="get-app-os">Mac</span><span class="get-app-variant">Intel</span><span class="get-app-size"></span></button>
+      <button type="button" class="get-app-option" role="radio" data-asset="Windows-Setup.exe" data-label="Windows">
+        <span class="get-app-os">Windows</span><span class="get-app-variant">10 / 11, 64-bit</span><span class="get-app-size"></span></button>
+    </div>
+    <a class="btn primary get-app-download" id="get-app-download" href="https://github.com/Arkazox/TRICHR-O-MATIC/releases/latest">
+      <span class="icon" style="--icon: url(icons/download.svg)" aria-hidden="true"></span>
+      <span id="get-app-download-label">Download</span></a>
+    <p class="get-app-requirements">macOS 12 Monterey or later · Windows 10 or 11 (64-bit)</p>
+    <!-- Shown once a download starts: the apps aren't signed yet, so the
+         system blocks the first launch (README: Installing on macOS / Windows). -->
+    <div class="get-app-note" id="get-app-note-mac" hidden>
+      <p class="get-app-note-title">First launch on Mac</p>
+      <ol>
+        <li>Unzip the file and move <b>Trichr-o-matic</b> to your Applications folder.</li>
+        <li>Open it: macOS blocks it once, since the app isn't signed yet. Click <b>Done</b>.</li>
+        <li>In <b>System Settings ▸ Privacy &amp; Security</b>, click <b>Open Anyway</b>, then <b>Open</b>.</li>
+      </ol>
+      <p class="get-app-note-extra">If macOS says the app “is damaged”, run this in Terminal, then open it again:</p>
+      <div class="get-app-command">
+        <code id="get-app-xattr">xattr -cr /Applications/Trichr-o-matic.app</code>
+        <button type="button" class="btn secondary" id="get-app-copy">Copy</button>
+      </div>
+      <a class="get-app-note-link" href="https://github.com/Arkazox/TRICHR-O-MATIC#installing-on-macos" target="_blank" rel="noopener">Full instructions</a>
+    </div>
+    <div class="get-app-note" id="get-app-note-windows" hidden>
+      <p class="get-app-note-title">First launch on Windows</p>
+      <ol>
+        <li>Run the installer. No administrator password is needed.</li>
+        <li>If Windows shows “Windows protected your PC”, click <b>More info</b>, then <b>Run anyway</b>.
+          The installer isn't signed yet, so Windows doesn't recognize it.</li>
+      </ol>
+      <a class="get-app-note-link" href="https://github.com/Arkazox/TRICHR-O-MATIC#installing-on-windows" target="_blank" rel="noopener">Full instructions</a>
+    </div>
+    <div class="get-app-footer">
+      <a class="get-app-github" href="https://github.com/Arkazox/TRICHR-O-MATIC" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        View the project on GitHub</a>
+      <form method="dialog"><button class="btn secondary">Close</button></form>
+    </div>
+  </dialog>
+
+  <dialog id="export-dialog">
+    <form method="dialog">
+      <h2>Export</h2>
+      <div class="row">
+        <span class="label">Format</span>
+        <select id="export-format">
+          <option value="png">PNG (8-bit)</option>
+          <option value="jpeg">JPEG</option>
+          <option value="tiff16">TIFF (16-bit)</option>
+        </select>
+      </div>
+      <div class="row">
+        <span class="label">File name</span>
+        <input type="text" id="export-name" spellcheck="false">
+        <span id="export-ext">.png</span>
+      </div>
+      <p class="hint">Exported at full resolution.</p>
+      <div class="dialog-buttons">
+        <button value="cancel" class="btn secondary">Cancel</button>
+        <button value="export" class="btn primary" id="export-confirm">Export</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

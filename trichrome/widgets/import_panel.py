@@ -25,21 +25,24 @@ each keeping its own R/G/B channel; see ChannelLayer.harris_shutter for how
 each channel is decoded)."""
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QDrag, QPainter, QPixmap
+import os
+
+from PySide6.QtCore import QMimeData, QPoint, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QDrag, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QGroupBox, QHBoxLayout, QLabel, QStyledItemDelegate, QVBoxLayout, QWidget,
 )
 
-from .. import i18n, theme
+from .. import i18n, imaging, theme
 from .block_header_bar import finish_block_chrome, start_block_chrome
-from .button_style import style_secondary_button
 from .channel_panel import CHANNEL_COLORS, CHANNEL_KEY
 from .controls import ElidingLabel
 from .info_bubble import InfoButton
 from .svg_icons import (
-    HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgToolButton, raw_svg_icon, recolored_svg_file,
+    HEADER_COMPANION_BTN_SIZE, HEADER_COMPANION_ICON_SIZE, SvgToolButton, raw_svg_icon,
+    recolored_svg_file,
 )
+
 
 # Drag-and-drop channel swap: dragging a channel's own grip handle onto another
 # channel's file block swaps which photo - and its own alignment/tone edits,
@@ -58,6 +61,16 @@ def _swap_source_index(mime: QMimeData) -> int | None:
         return int(bytes(mime.data(_CHANNEL_SWAP_MIME)).decode("utf-8"))
     except ValueError:
         return None
+
+
+def _dropped_image_path(mime: QMimeData) -> str | None:
+    """The single importable image file in a Finder drop, or None."""
+    if not mime.hasUrls():
+        return None
+    paths = [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
+    if len(paths) != 1 or os.path.splitext(paths[0])[1].lower() not in imaging.IMPORTABLE_EXTENSIONS:
+        return None
+    return paths[0]
 
 
 def _translucent_grab(widget: QWidget, opacity: float = 0.55) -> QPixmap:
@@ -79,25 +92,36 @@ def _translucent_grab(widget: QWidget, opacity: float = 0.55) -> QPixmap:
     return result
 
 
-# Highlight styles for a channel's _ChannelFileBlock (filename + swap handle,
-# grouped into one visual unit - an earlier pass framed only the filename
-# label, and before that the whole row including the unrelated Load/Change
-# Image button, both reverted) as a live preview of the pending swap while a
-# drag is in progress - "source" (dashed, the block being picked up) on the
-# dragged channel for the whole drag, "target" (solid accent-blue, the same
-# accent used by the block drag-reorder insertion line) on whichever channel's
-# block the cursor is currently over, so both halves of the prospective swap
-# are visible before the drop actually commits to anything. All 3 share the
-# same border width/radius so toggling the highlight never changes the block's
-# own size.
-_FILE_BLOCK_BASE_STYLE = "border: 1px solid transparent; border-radius: 4px; padding: 1px 2px;"
-# Built at use time: the dashed outline follows the theme's foreground.
-def _file_block_source_style() -> str:
-    return f"border: 1px dashed {theme.overlay(90)}; border-radius: 4px; padding: 1px 2px;"
-_FILE_BLOCK_TARGET_STYLE = (
-    "border: 1px solid #5b9bd5; border-radius: 4px; padding: 1px 2px; "
-    "background: rgba(91, 155, 213, 40);"
-)
+# A channel's _ChannelFileBlock frame, painted by the block itself (a QSS
+# border with a radius and a translucent color draws its sides and corners as
+# overlapping pieces, which looked dotted on a Retina screen). Dashed while the
+# channel is empty, solid once a photo is loaded. During a channel-swap drag,
+# "source" (stronger dashed) marks the block being picked up and "target"
+# (accent blue, light fill) the block under the cursor. Same width in every
+# state, so a highlight never changes the block's size.
+_FILE_BLOCK_RADIUS = 5.0
+# Shared by the Mode combo and the channel rows, so the two line up.
+_ROW_HEIGHT = 30
+_ROW_SPACING = 6
+
+
+class _ChannelDot(QWidget):
+    """The channel's color as a plain filled circle, left of its file block."""
+
+    _DIAMETER = 10
+    WIDTH = _DIAMETER + 4
+
+    def __init__(self, color: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._color = QColor(color)
+        self.setFixedSize(self.WIDTH, self.WIDTH)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self._color)
+        painter.drawEllipse(2, 2, self._DIAMETER, self._DIAMETER)
 
 
 class _ChannelSwapHandle(SvgToolButton):
@@ -111,6 +135,9 @@ class _ChannelSwapHandle(SvgToolButton):
     Not a drop target itself - see _ChannelFileBlock, which owns the whole
     block's drag-over/drop handling so the filename and this handle always
     highlight and drag together as one unit."""
+
+    # A grip, not a button: no hover frame.
+    _HOVER_FRAME = False
 
     def __init__(self, channel_index: int, block: "_ChannelFileBlock", panel: "ImportPanel",
                  parent: QWidget | None = None):
@@ -177,36 +204,77 @@ class _ChannelFileBlock(QWidget):
         self.channel_index = channel_index
         self._panel = panel
         self.setAcceptDrops(True)
-        # A plain QWidget doesn't paint its own stylesheet border/background
-        # by default (only specific widget types like QLabel/QPushButton do)
-        # - without this, Qt's style-sheet cascade instead let the border leak
-        # onto whichever child widget happens to render it (here,
-        # filename_label, since it has no competing border of its own),
-        # covering only that child's rect rather than the whole block, while
-        # swap_handle's own explicit "border: none" (SvgToolButton's base
-        # style) opted it out entirely - confirmed empirically by grabbing the
-        # block and inspecting the rendered pixels.
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(_FILE_BLOCK_BASE_STYLE)
+        self.loaded = False
+        self.drag_state = ""
+        # Same height empty or loaded, and the same as the Mode combo above.
+        self.setFixedHeight(_ROW_HEIGHT)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
-        self.filename_label = ElidingLabel()
-        # Explicit "border: none; background: transparent" so the label
-        # doesn't independently pick up the block's own border/background
-        # via the stylesheet cascade now that the block paints them itself
-        # - without this, highlighting the block would draw two nested frames
-        # again (the block's real one plus the label's inherited one), the
-        # exact "frames inside frames" problem from before.
-        self.filename_label.setStyleSheet(
-            "color: #888; font-size: 11px; border: none; background: transparent;")
-        layout.addWidget(self.filename_label, stretch=1)
+        # 1px frame + inner padding. Right, top and bottom match, so the ×'s
+        # hover box sits with the same gap to all three edges of the frame.
+        layout.setContentsMargins(3, 4, 4, 4)
+        layout.setSpacing(4)
         self.swap_handle = _ChannelSwapHandle(channel_index, self, panel)
         layout.addWidget(self.swap_handle)
+        self.filename_label = ElidingLabel()
+        layout.addWidget(self.filename_label, stretch=1)
+        self.size_label = QLabel()
+        self.size_label.setStyleSheet(
+            "color: #888; font-size: 11px; border: none; background: transparent; padding: 0;")
+        layout.addWidget(self.size_label)
+        self.clear_button = SvgToolButton("Global/close.svg", size=(22, 22), icon_size=12)
+        self.clear_button.clicked.connect(
+            lambda _checked=False: panel.clear_requested.emit(self.channel_index))
+        layout.addWidget(self.clear_button, alignment=Qt.AlignVCenter)
+        self.set_loaded(False)
+
+    def set_loaded(self, loaded: bool) -> None:
+        """Solid frame, full-strength name, resolution and × once a photo is
+        loaded; dashed frame and the muted "choose or drop" prompt while the
+        channel is empty (clicking it opens the file picker)."""
+        self.loaded = loaded
+        color = theme.text_color().name() if loaded else "#888"
+        self.filename_label.setStyleSheet(
+            f"color: {color}; font-size: 12px; border: none; background: transparent; padding: 0;")
+        self.size_label.setVisible(loaded and bool(self.size_label.text()))
+        self.clear_button.setVisible(loaded)
+        self.setCursor(Qt.ArrowCursor if loaded else Qt.PointingHandCursor)
+        self.update()
+
+    def set_drag_state(self, state: str) -> None:
+        self.drag_state = state
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if self.drag_state == "target":
+            pen = QPen(QColor("#5b9bd5"), 1.0)
+            painter.setBrush(QColor(91, 155, 213, 40))
+        else:
+            if self.drag_state == "source":
+                pen = QPen(theme.overlay_color(110), 1.0, Qt.DashLine)
+            else:
+                pen = QPen(theme.overlay_color(45), 1.0, Qt.SolidLine if self.loaded else Qt.DashLine)
+            painter.setBrush(Qt.NoBrush)
+        if pen.style() == Qt.DashLine:
+            pen.setDashPattern([3, 3])
+        painter.setPen(pen)
+        painter.drawRoundedRect(rect, _FILE_BLOCK_RADIUS, _FILE_BLOCK_RADIUS)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and not self.loaded and self.rect().contains(
+                event.position().toPoint()):
+            self._panel.load_requested.emit(self.channel_index)
+        super().mouseReleaseEvent(event)
 
     def dragEnterEvent(self, event) -> None:
         source_index = _swap_source_index(event.mimeData())
-        if source_index is not None and source_index != self.channel_index:
+        if source_index is None and not self.loaded and _dropped_image_path(event.mimeData()):
+            # A Finder file onto an empty channel loads it there.
+            event.acceptProposedAction()
+            self._panel._set_filename_drag_state(self.channel_index, "target")
+        elif source_index is not None and source_index != self.channel_index:
             event.acceptProposedAction()
             self._panel._set_filename_drag_state(self.channel_index, "target")
         else:
@@ -218,6 +286,11 @@ class _ChannelFileBlock(QWidget):
     def dropEvent(self, event) -> None:
         source_index = _swap_source_index(event.mimeData())
         self._panel._set_filename_drag_state(self.channel_index, "")
+        file_path = _dropped_image_path(event.mimeData()) if source_index is None else None
+        if file_path and not self.loaded:
+            event.acceptProposedAction()
+            self._panel.file_dropped.emit(self.channel_index, file_path)
+            return
         if source_index is None or source_index == self.channel_index:
             event.ignore()
             return
@@ -249,15 +322,11 @@ def _mode_combo_style() -> str:
     arrow = recolored_svg_file("Global/chevron-down.svg", fg)
     return f"""
 QComboBox {{
-    background: {theme.overlay(14)};
-    border: 1px solid {theme.overlay(35)};
-    border-radius: 4px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 5px;
     padding: 3px 4px 3px 6px;
     color: {fg.name()};
-}}
-QComboBox:hover {{
-    background: {theme.overlay(24)};
-    border: 1px solid {theme.overlay(60)};
 }}
 QComboBox::drop-down {{
     subcontrol-origin: padding;
@@ -277,6 +346,16 @@ QComboBox QAbstractItemView {{
     outline: none;
     selection-background-color: rgba(91, 155, 213, 90);
     selection-color: {fg.name()};
+    padding: 4px;
+}}
+QComboBox QAbstractItemView::item {{
+    padding: 3px 6px;
+    border-radius: 4px;
+}}
+QComboBox QAbstractItemView::item:selected,
+QComboBox QAbstractItemView::item:hover {{
+    background: #5b9bd5;
+    color: #ffffff;
 }}
 """
 
@@ -314,8 +393,38 @@ MODE_LABEL_KEYS = {
 }
 
 
+class _ModeComboBox(QComboBox):
+    """The Mode combo, with its box painted here rather than by QSS (a
+    translucent QSS border with a radius looks dotted on a Retina screen,
+    same as _ChannelFileBlock's frame): a subtle fill and hairline, both a
+    little stronger on hover."""
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        hovered = self.isEnabled() and self.underMouse()
+        painter.setPen(QPen(theme.overlay_color(60 if hovered else 45), 1.0))
+        painter.setBrush(theme.overlay_color(24 if hovered else 14))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+                                _FILE_BLOCK_RADIUS, _FILE_BLOCK_RADIUS)
+        painter.end()
+        super().paintEvent(event)
+
+    def enterEvent(self, event) -> None:
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.update()
+        super().leaveEvent(event)
+
+
 class ImportPanel(QGroupBox):
     load_requested = Signal(int)
+    # A channel row's × button (clear that channel), and a Finder image file
+    # dropped onto an empty channel row (index, path).
+    clear_requested = Signal(int)
+    file_dropped = Signal(int, str)
     # Emitted whenever the Mode selector's target implies a different
     # BatchItem.mode ("normal" for Solo, "trichrome" for either Trichrome
     # variant) - MainWindow decides whether to apply it directly or
@@ -362,7 +471,15 @@ class ImportPanel(QGroupBox):
         # from font metrics - see the comment there for why AdjustToContents
         # alone isn't enough.
         mode_row = QHBoxLayout()
-        self.mode_combo = QComboBox()
+        mode_row.setSpacing(_ROW_SPACING)
+        # Indented past the channel dots, so the combo's left edge lines up
+        # with the channel frames below.
+        mode_row.addSpacing(_ChannelDot.WIDTH + _ROW_SPACING)
+        self.mode_combo = _ModeComboBox()
+        self.mode_combo.setFixedHeight(_ROW_HEIGHT)
+        # The default macOS combo delegate ignores the QSS ::item rules, so
+        # the popup had no hover highlight.
+        self.mode_combo.setItemDelegate(QStyledItemDelegate(self.mode_combo))
         self.mode_combo.setStyleSheet(_mode_combo_style())
         theme.on_change(self._apply_theme)
         self.mode_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
@@ -398,32 +515,25 @@ class ImportPanel(QGroupBox):
         trichrome_layout.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.trichrome_container)
 
-        self.channel_labels: list[QLabel] = []
+        self.channel_labels: list[_ChannelDot] = []
         self.filename_labels: list[ElidingLabel] = []
-        self.load_buttons: list[QPushButton] = []
         self.channel_file_blocks: list[_ChannelFileBlock] = []
 
         for label in ("R", "G", "B"):
             idx = len(self.channel_labels)
             row = QHBoxLayout()
+            row.setSpacing(_ROW_SPACING)
             color = CHANNEL_COLORS.get(label, "#888")
-            channel_label = QLabel()
-            channel_label.setStyleSheet(f"color: {color}; font-weight: bold;")
-            channel_label.setFixedWidth(50)
+            # The channel's color as a dot; its name is the tooltip.
+            channel_label = _ChannelDot(color)
             row.addWidget(channel_label)
 
             file_block = _ChannelFileBlock(idx, self)
             row.addWidget(file_block, stretch=1)
 
-            load_button = QPushButton()
-            style_secondary_button(load_button)
-            load_button.clicked.connect(lambda _checked=False, i=idx: self.load_requested.emit(i))
-            row.addWidget(load_button)
-
             trichrome_layout.addLayout(row)
             self.channel_labels.append(channel_label)
             self.filename_labels.append(file_block.filename_label)
-            self.load_buttons.append(load_button)
             self.channel_file_blocks.append(file_block)
 
         # --- Normal mode: a single photo, no alignment/recompose ---
@@ -466,11 +576,7 @@ class ImportPanel(QGroupBox):
         "" to clear. Called from _ChannelSwapHandle (drag start/end) and
         _ChannelFileBlock (drag enter/leave/drop) - see those for when each
         state applies."""
-        style = {
-            "source": _file_block_source_style(),
-            "target": _FILE_BLOCK_TARGET_STYLE,
-        }.get(state, _FILE_BLOCK_BASE_STYLE)
-        self.channel_file_blocks[index].setStyleSheet(style)
+        self.channel_file_blocks[index].set_drag_state(state)
 
     def _clear_filename_drag_states(self) -> None:
         """Resets every channel's file-block highlight - called once a drag
@@ -478,13 +584,20 @@ class ImportPanel(QGroupBox):
         drop that didn't fire a proper dragLeaveEvent (e.g. the drag was
         cancelled outside any widget) can't get stuck showing."""
         for file_block in self.channel_file_blocks:
-            file_block.setStyleSheet(_FILE_BLOCK_BASE_STYLE)
+            file_block.set_drag_state("")
 
-    def set_filename(self, index: int, text: str) -> None:
+    def set_filename(self, index: int, text: str, size: tuple[int, int] | None = None) -> None:
+        """Channel ``index``'s row: ``text`` is the file name ("" for an empty
+        channel), ``size`` its (width, height) in pixels when known."""
         self._has_image[index] = bool(text)
-        self.filename_labels[index].setText(text or i18n.tr("no_image_loaded"))
-        self.load_buttons[index].setText(
-            i18n.tr("change_image_button") if text else i18n.tr("load_image_button"))
+        block = self.channel_file_blocks[index]
+        block.size_label.setText(f"{size[0]}×{size[1]}" if size else "")
+        block.set_loaded(bool(text))
+        self.filename_labels[index].setText(text or self._empty_slot_text(index))
+
+    @staticmethod
+    def _empty_slot_text(index: int) -> str:
+        return i18n.tr("channel_empty_slot", channel=i18n.channel_name(index))
 
     def set_normal_filename(self, text: str) -> None:
         self._has_normal_image = bool(text)
@@ -571,6 +684,8 @@ class ImportPanel(QGroupBox):
     def _apply_theme(self) -> None:
         # The stylesheet and the items' multi-color icons both depend on it.
         self.mode_combo.setStyleSheet(_mode_combo_style())
+        for file_block in self.channel_file_blocks:
+            file_block.set_loaded(file_block.loaded)
         index = self.mode_combo.currentIndex()
         self._rebuild_mode_combo_items()
         self.mode_combo.blockSignals(True)
@@ -618,12 +733,14 @@ class ImportPanel(QGroupBox):
         # + the QSS drop-down arrow's own 20px width + a small safety margin.
         chrome_width = _MODE_COMBO_ICON_SIZE + 4 + 10 + 20 + 10
         self.mode_combo.setMinimumWidth(widest_text + chrome_width)
+        # The popup list: icon + gap + text, plus its own padding (view and
+        # item, both sides), the frame and a safety margin.
+        self.mode_combo.view().setMinimumWidth(widest_text + _MODE_COMBO_ICON_SIZE + 60)
         for i, label in enumerate(("R", "G", "B")):
-            self.channel_labels[i].setText(i18n.tr(CHANNEL_KEY[label]) + ":")
-            self.load_buttons[i].setText(
-                i18n.tr("change_image_button") if self._has_image[i] else i18n.tr("load_image_button"))
+            self.channel_labels[i].setToolTip(i18n.tr(CHANNEL_KEY[label]))
+            self.channel_file_blocks[i].clear_button.setToolTip(i18n.tr("channel_clear_tooltip"))
             if not self._has_image[i]:
-                self.filename_labels[i].setText(i18n.tr("no_image_loaded"))
+                self.filename_labels[i].setText(self._empty_slot_text(i))
         self.normal_path_label.setText(i18n.tr("normal_file_path_label"))
         if not self._has_normal_image:
             self.normal_filename_label.setText(i18n.tr("no_image_loaded"))

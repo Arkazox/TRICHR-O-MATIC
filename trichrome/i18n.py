@@ -15,8 +15,8 @@ EN = {
     "channel_g": "Green",
     "channel_b": "Blue",
 
-    "load_image_button": "Load an image…",
-    "change_image_button": "Change Image",
+    "channel_empty_slot": "{channel}: choose or drop a file",
+    "channel_clear_tooltip": "Remove this layer's image",
     "no_image_loaded": "No image loaded",
     "channel_swap_handle_tooltip": "Drag onto another channel's filename to swap their images",
     "active_checkbox": "Move on Canvas",
@@ -174,10 +174,6 @@ EN = {
     "settings_section_export": "Export",
     "settings_export_help": "Used by the Export window, which also remembers the last values you chose there.",
     "settings_done_button": "Done",
-    "settings_section_experimental": "Experimental",
-    "settings_experimental_info": "Features still in development. They may be incomplete, change, or not work with every setup. Turn one on only if you want to try it early.",
-    "settings_scan_tool_enabled": "Enable the Scan tool",
-    "settings_scan_tool_enabled_help": "Tethered film scanning with a camera over USB. Adds the Scan button to the toolbar, the S shortcut and its entries in the Tools and Window menus.",
     "settings_scan_tool_busy_title": "Capture in Progress",
     "settings_scan_tool_busy_text": "The Scan tool can't be turned off while a capture is running. Wait for it to finish, then try again.",
     "settings_export_format": "Default Format",
@@ -245,6 +241,7 @@ EN = {
     "menu_edit_rotate_right": "Rotate Right",
     "menu_edit_rotate_left": "Rotate Left",
     "menu_edit_delete": "Delete Selection",
+    "menu_edit_select_all": "Select All",
     "menu_reset_all": "Reset All",
     "menu_duplicate": "Duplicate",
     "menu_convert_to_trichrome": "Convert to Trichrome Image",
@@ -292,6 +289,7 @@ EN = {
     "update_check_restart_button": "Restart Now",
     "update_check_download_failed": "The update couldn't be downloaded. You can download it from its release page instead.",
     "update_check_open_page_button": "Open Release Page",
+    "update_check_github_link": "View the project on GitHub",
     # Quick Tour (trichrome/quick_tour.py, widgets/welcome_dialog.py). Step
     # bodies: "\n\n" separates paragraphs, <kbd>X</kbd> renders as a key.
     "menu_quick_tour_action": "Quick Tour",
@@ -633,7 +631,7 @@ EN = {
 <p>Its tools also work on any single photo. In <b>Solo</b> mode, the same Light, Color, Curves and Framing editing applies to an already-composed photo, film-scanned or digital.</p>
 <h3>Light Mode &amp; Advanced Mode</h3>
 <ul>
-<li><b>Advanced mode</b> is the full app: every tool, multi-photo sessions, Batch Import and Scan.</li>
+<li><b>Advanced mode</b> is the full app: every tool, multi-photo sessions and Batch Import.</li>
 <li><b>Light mode</b> is a simplified, single-photo interface for a fast, distraction-free trichrome workflow. It shows only <b>Histogram</b>, <b>Files</b>, <b>Trichrome Process</b> and <b>Framing</b>, with no filmstrip, no extra panels and no session file to manage.</li>
 </ul>
 <p>Switch with <b>Window ▸ Switch to Light Mode</b> or <b>Switch to Advanced Mode</b>. Each mode keeps its own state: the Light mode photo stays separate from your Advanced session. Going back to Advanced mode offers to start a new session with that photo, or to reopen your last session.</p>
@@ -688,7 +686,7 @@ EN = {
 <ul>
 <li><b>Blocks</b>: every tool lives in its own movable block, in the left or right panel. Drag a block by its grip handle to reorder it, or move it to the other panel. A blue dashed line shows where it will land.</li>
 <li>A block can be <b>collapsed</b> to its header, or <b>closed</b>. Use the <b>Tools</b> menu to bring a closed block back.</li>
-<li>The toolbar buttons <b>Trichrome / Color Correction / Framing / Scan</b> (shortcuts <b>T / E / C / S</b>) jump to a saved layout for that task. Save your own arrangement under one of those names with <b>Window ▸ Layout Preset ▸ Save Layout as Preset…</b>. You can also save any number of named layouts.</li>
+<li>The toolbar buttons <b>Trichrome / Color Correction / Framing</b> (shortcuts <b>T / E / C</b>) jump to a saved layout for that task. Save your own arrangement under one of those names with <b>Window ▸ Layout Preset ▸ Save Layout as Preset…</b>. You can also save any number of named layouts.</li>
 <li><b>Window ▸ Reset Layout</b> restores the default arrangement.</li>
 </ul>
 <h3>Tools</h3>
@@ -725,15 +723,6 @@ EN = {
 </ul>
 <h4>Curves</h4>
 <p>A classic tone curve editor with independent Y (master), R, G and B curves. Click the diagonal to add a point and drag to reshape the curve, including its two endpoints for a true black or white point. Double-click a point to remove it.</p>
-<h4>Scan</h4>
-<p>Tethered capture from a camera connected over USB.</p>
-<ul>
-<li><b>Device</b> shows the live connection status. Once connected, <b>Camera Settings</b> shows whichever of Format, White Balance and Shutter Speed the camera supports.</li>
-<li><b>Film</b> sets how each capture is processed on import: <b>Black &amp; White</b> (invert and a true grayscale conversion), <b>Color</b> (invert only), or <b>Color Reversal</b> (already positive, no change).</li>
-<li><b>Scan Light</b> sets an optional on-screen backlight: <b>External</b>, a plain <b>White</b> light, or <b>RGB</b>, which runs an automatic red, green, blue 3-shot sequence into one trichrome triplet.</li>
-<li><b>Film base</b> (color negatives): sample the film's clear base once, with a calibration sequence or by picking a point on an imported photo. <b>Correct for film base color on import</b> removes it from every later capture.</li>
-</ul>
-<p>Set the save folder, roll name and starting number under <b>Files Settings</b>, then click <b>Capture</b>. Captures are added to the current session automatically.</p>
 <h3>Navigation &amp; Preview</h3>
 <ul>
 <li><b>Filmstrip</b>: imported photos appear under the preview. It shows automatically once there's more than one photo. Click a thumbnail (or use <b>←/→</b>) to edit that photo's own settings. Press <b>G</b> for a grid of every thumbnail (use <b>↑/↓</b> to move a row, <b>Esc</b> to leave).</li>
@@ -770,8 +759,8 @@ EN = {
 </ul>
 <h3>View</h3>
 <ul>
-<li><kbd>T</kbd> / <kbd>E</kbd> / <kbd>C</kbd> / <kbd>S</kbd> — jump to your saved Trichrome /
-Color Correction / Framing / Scan layout (see Window ▸ Layout Preset)</li>
+<li><kbd>T</kbd> / <kbd>E</kbd> / <kbd>C</kbd> — jump to your saved Trichrome /
+Color Correction / Framing layout (see Window ▸ Layout Preset)</li>
 <li><kbd>I</kbd> / <kbd>O</kbd> — show/hide the left/right side panel</li>
 <li><kbd>P</kbd> — show/hide the thumbnail filmstrip</li>
 <li><kbd>G</kbd> — toggle the thumbnail grid view</li>
@@ -791,6 +780,10 @@ photos</li>
 <li><b>Cmd+click</b> a thumbnail — add/remove it from the export selection</li>
 <li><kbd>Cmd+A</kbd> — select all photos, or deselect all if every photo is already
 selected</li>
+<li><kbd>Cmd+Shift+←</kbd> / <kbd>Cmd+Shift+↑</kbd> — add every photo before the selection
+to it</li>
+<li><kbd>Cmd+Shift+→</kbd> / <kbd>Cmd+Shift+↓</kbd> — add every photo after the selection
+to it</li>
 </ul>
 <h3>Preview</h3>
 <ul>
@@ -912,8 +905,8 @@ FR = {
     "channel_g": "Vert",
     "channel_b": "Bleu",
 
-    "load_image_button": "Charger une image…",
-    "change_image_button": "Changer l'image",
+    "channel_empty_slot": "{channel} : choisir ou déposer un fichier",
+    "channel_clear_tooltip": "Retirer l'image de cette couche",
     "no_image_loaded": "Aucune image chargée",
     "channel_swap_handle_tooltip": "Glisser sur le nom de fichier d'un autre canal pour échanger leurs images",
     "active_checkbox": "Déplacer sur le canevas",
@@ -1072,10 +1065,6 @@ FR = {
     "settings_section_export": "Export",
     "settings_export_help": "Utilisés par la fenêtre d'export, qui retient aussi les dernières valeurs que vous y avez choisies.",
     "settings_done_button": "Terminé",
-    "settings_section_experimental": "Expérimental",
-    "settings_experimental_info": "Fonctionnalités encore en développement. Elles peuvent être incomplètes, changer, ou ne pas fonctionner avec toutes les configurations. Activez-en une seulement si vous voulez l'essayer en avance.",
-    "settings_scan_tool_enabled": "Activer l'outil Scan",
-    "settings_scan_tool_enabled_help": "Numérisation de film avec un appareil photo relié en USB. Ajoute le bouton Scan dans la barre d'outils, le raccourci S et ses entrées dans les menus Outils et Fenêtre.",
     "settings_scan_tool_busy_title": "Capture en cours",
     "settings_scan_tool_busy_text": "L'outil Scan ne peut pas être désactivé pendant une capture. Attendez la fin de la capture, puis réessayez.",
     "settings_export_format": "Format par défaut",
@@ -1144,6 +1133,7 @@ FR = {
     "menu_edit_rotate_right": "Rotation à droite",
     "menu_edit_rotate_left": "Rotation à gauche",
     "menu_edit_delete": "Supprimer la sélection",
+    "menu_edit_select_all": "Tout sélectionner",
     "menu_reset_all": "Tout réinitialiser",
     "menu_duplicate": "Dupliquer",
     "menu_convert_to_trichrome": "Convertir en image trichrome",
@@ -1190,6 +1180,7 @@ FR = {
     "update_check_restart_button": "Redémarrer",
     "update_check_download_failed": "La mise à jour n'a pas pu être téléchargée. Vous pouvez la télécharger depuis sa page de publication.",
     "update_check_open_page_button": "Ouvrir la page de publication",
+    "update_check_github_link": "Voir le projet sur GitHub",
     "menu_quick_tour_action": "Présentation",
     "quick_tour_welcome_window_title": "Bienvenue",
     "quick_tour_welcome_title": "Bienvenue dans Trichr-o-matic",
@@ -1535,7 +1526,7 @@ FR = {
 <p>Ses outils fonctionnent aussi sur une photo seule. En mode <b>Solo</b>, les mêmes réglages Lumière, Couleur, Courbes et Recadrage s'appliquent à une photo déjà composée, argentique numérisée ou numérique.</p>
 <h3>Mode Light &amp; Mode Avancé</h3>
 <ul>
-<li><b>Mode Avancé</b> : l'application complète, avec tous les outils, les sessions multi-photos, l'Import par lot et le Scan.</li>
+<li><b>Mode Avancé</b> : l'application complète, avec tous les outils, les sessions multi-photos et l'Import par lot.</li>
 <li><b>Mode Light</b> : une interface simplifiée à une seule photo, pour un flux de travail trichrome rapide et sans distraction. Elle n'affiche que <b>Histogramme</b>, <b>Fichiers</b>, <b>Traitement Trichrome</b> et <b>Recadrage</b>, sans bandeau de vignettes, sans panneaux supplémentaires et sans fichier de session à gérer.</li>
 </ul>
 <p>Basculez depuis <b>Fenêtre ▸ Passer en mode Light</b> ou <b>Passer en mode Avancé</b>. Chaque mode garde son propre état : la photo du mode Light reste séparée de votre session Avancée. Revenir en mode Avancé propose de démarrer une nouvelle session avec cette photo, ou de rouvrir votre dernière session.</p>
@@ -1590,7 +1581,7 @@ FR = {
 <ul>
 <li><b>Blocs</b> : chaque outil vit dans son propre bloc déplaçable, dans le panneau gauche ou droit. Glissez un bloc par sa poignée pour le réordonner ou le déplacer vers l'autre panneau. Un trait bleu en pointillés indique où il atterrira.</li>
 <li>Un bloc peut être <b>réduit</b> à son en-tête, ou <b>fermé</b>. Le menu <b>Outils</b> permet de faire réapparaître un bloc fermé.</li>
-<li>Les boutons <b>Trichrome / Correction Couleur / Recadrage / Scan</b> de la barre d'outils (raccourcis <b>T / E / C / S</b>) rejoignent une disposition enregistrée pour cette tâche. Enregistrez la vôtre sous l'un de ces noms avec <b>Fenêtre ▸ Préréglage de disposition ▸ Enregistrer la disposition comme préréglage…</b>. Vous pouvez aussi enregistrer autant de dispositions nommées que vous voulez.</li>
+<li>Les boutons <b>Trichrome / Correction Couleur / Recadrage</b> de la barre d'outils (raccourcis <b>T / E / C</b>) rejoignent une disposition enregistrée pour cette tâche. Enregistrez la vôtre sous l'un de ces noms avec <b>Fenêtre ▸ Préréglage de disposition ▸ Enregistrer la disposition comme préréglage…</b>. Vous pouvez aussi enregistrer autant de dispositions nommées que vous voulez.</li>
 <li><b>Fenêtre ▸ Réinitialiser la disposition</b> restaure la disposition par défaut.</li>
 </ul>
 <h3>Outils</h3>
@@ -1627,15 +1618,6 @@ FR = {
 </ul>
 <h4>Courbes</h4>
 <p>Un éditeur de courbes de ton classique, avec les courbes Y (globale), R, V et B indépendantes. Cliquez sur la diagonale pour ajouter un point, et glissez pour redessiner la courbe, y compris ses deux extrémités pour un vrai point noir ou blanc. Double-cliquez sur un point pour le supprimer.</p>
-<h4>Scan</h4>
-<p>Capture par câble USB, avec un appareil photo connecté.</p>
-<ul>
-<li><b>Appareil</b> affiche l'état de connexion en direct. Une fois connecté, <b>Réglages caméra</b> affiche ceux du Format, de la Balance des blancs et de la Vitesse d'obturation que l'appareil prend en charge.</li>
-<li><b>Film</b> définit le traitement de chaque capture à l'import : <b>Noir et Blanc</b> (inversion et vraie conversion en niveaux de gris), <b>Couleur</b> (inversion seule) ou <b>Couleur Inversible</b> (déjà positive, aucun changement).</li>
-<li><b>Lumière de scan</b> règle un rétroéclairage optionnel à l'écran : <b>Externe</b>, une lumière <b>Blanche</b> simple, ou <b>RVB</b>, qui enchaîne une séquence automatique de 3 prises rouge, verte et bleue en un triplet trichrome.</li>
-<li><b>Base du film</b> (négatifs couleur) : échantillonnez la base claire du film une fois, par une séquence de calibration ou en cliquant sur un point d'une photo importée. <b>Corriger la couleur de base du film à l'import</b> la retire de toutes les captures suivantes.</li>
-</ul>
-<p>Réglez le dossier d'enregistrement, le nom de la pellicule et le numéro de départ dans <b>Réglages des fichiers</b>, puis cliquez sur <b>Capturer</b>. Les captures sont ajoutées automatiquement à la session en cours.</p>
 <h3>Navigation &amp; Aperçu</h3>
 <ul>
 <li><b>Bandeau</b> : les photos importées apparaissent sous l'aperçu. Il s'affiche automatiquement dès qu'il y a plus d'une photo. Cliquez sur une vignette (ou utilisez <b>←/→</b>) pour éditer les réglages propres de cette photo. Appuyez sur <b>G</b> pour une grille de toutes les vignettes (<b>↑/↓</b> pour changer de ligne, <b>Échap</b> pour quitter).</li>
@@ -1665,8 +1647,8 @@ FR = {
 </ul>
 <h3>Affichage</h3>
 <ul>
-<li><kbd>T</kbd> / <kbd>E</kbd> / <kbd>C</kbd> / <kbd>S</kbd> — bascule vers votre disposition
-enregistrée Trichrome / Correction Couleur / Recadrage / Scan (voir Window ▸ Préréglage de
+<li><kbd>T</kbd> / <kbd>E</kbd> / <kbd>C</kbd> — bascule vers votre disposition
+enregistrée Trichrome / Correction Couleur / Recadrage (voir Window ▸ Préréglage de
 disposition)</li>
 <li><kbd>I</kbd> / <kbd>O</kbd> — affiche/masque le panneau latéral gauche/droit</li>
 <li><kbd>P</kbd> — affiche/masque le bandeau de vignettes</li>
@@ -1689,6 +1671,10 @@ nouvelles photos Solo</li>
 <li><b>Cmd+clic</b> sur une vignette — ajoute/retire de la sélection d'export</li>
 <li><kbd>Cmd+A</kbd> — sélectionne toutes les photos, ou les désélectionne toutes si elles
 le sont déjà</li>
+<li><kbd>Cmd+Maj+←</kbd> / <kbd>Cmd+Maj+↑</kbd> — ajoute à la sélection toutes les photos
+qui la précèdent</li>
+<li><kbd>Cmd+Maj+→</kbd> / <kbd>Cmd+Maj+↓</kbd> — ajoute à la sélection toutes les photos
+qui la suivent</li>
 </ul>
 <h3>Aperçu</h3>
 <ul>

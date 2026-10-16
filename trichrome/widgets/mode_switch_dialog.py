@@ -5,7 +5,7 @@ needs picking which loaded channel to keep editing, since the other 1-2
 would otherwise just become invisible - MainWindow._switch_to_normal_mode),
 or switching a Solo photo to either Trichrome variant (which channel should
 this image become - MainWindow._switch_to_trichrome_mode). Same custom-
-QDialog look as UnsavedChangesDialog (tinted warning.svg, plain QPushButtons,
+QDialog look as UnsavedChangesDialog (dialog_icon.question_pixmap, plain QPushButtons,
 no native chrome) rather than a native QMessageBox; the body text is passed
 in fully pre-translated since the two directions phrase it differently."""
 from __future__ import annotations
@@ -17,10 +17,10 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLayout, QPushButton
 from .. import i18n, theme
 from .button_style import style_primary_button
 from .channel_panel import CHANNEL_COLORS, CHANNEL_KEY
-from .svg_icons import tinted_svg_icon, tinted_svg_pixmap
+from .dialog_icon import question_pixmap
+from .svg_icons import tinted_svg_icon
 
-_ICON_SIZE = 36
-_ICON_COLOR = QColor("#f2c40c")
+_ICON_SIZE = 52
 
 # Icon size and rounded/translucent look matching ImportPanel's own Mode combo
 # (import_panel.py's _MODE_COMBO_ICON_SIZE/_mode_combo_style), so these
@@ -68,8 +68,7 @@ class ModeSwitchDialog(QDialog):
         body_row = QHBoxLayout()
         body_row.setSpacing(14)
         icon_label = QLabel()
-        icon_label.setPixmap(tinted_svg_pixmap(
-            "Global/warning.svg", _ICON_SIZE, _ICON_COLOR, self.devicePixelRatioF() or 1.0))
+        icon_label.setPixmap(question_pixmap(_ICON_SIZE, self.devicePixelRatioF() or 1.0))
         icon_label.setFixedSize(_ICON_SIZE, _ICON_SIZE)
         body_row.addWidget(icon_label, alignment=Qt.AlignTop)
 
