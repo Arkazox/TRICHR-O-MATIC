@@ -18,6 +18,10 @@ const ACCEPTED_FILE = /\.(png|jpe?g|tiff?|bmp)$/i;
 // Light leaves out Brightness and Contrast (an offset and a linear stretch
 // that Exposure, Blacks and Whites cover); they stay at neutral in the state
 // sent to the engine.
+// Phones: Position, Light and Geometry are each a tab of their own, all
+// showing the Trichrome Process block with that one section.
+const PROCESS_TOOLS = { position: "position", light: "light", geometry: "transform" };
+
 const SLIDER_GROUPS = {
   position: [
     ["dx", "Offset X", -500, 500, 0, 1, false, ""],
@@ -84,7 +88,7 @@ function newDoc() {
   return {
     layers: CHANNELS.map(() => ({ ...DEFAULT_LAYER })),
     crop: { ...DEFAULT_CROP },
-    ref: 1, // green is the default reference, as on the desktop
+    ref: 1, // green: Auto align's reference, and the canvas (no Lock layer position)
     curves: newCurves(),
     negative: false, // inverts all 3 channels (raw negative scans)
     quarterTurns: 0, // rotate left/right, in np.rot90 steps (counterclockwise)
@@ -291,10 +295,24 @@ function edit(change) {
   requestRender();
 }
 
-function restoreFrom(from, to) {
-  if (!from.length) return;
+// The history holds app.doc snapshots (strings), plus { swap: [a, b] } for
+// a channel swap: the photos live in the worker, not in app.doc, so undoing
+// one swaps them back (a swap is its own inverse).
+async function restoreFrom(from, to) {
+  if (!from.length || activities.has("swap")) return;
+  const entry = from[from.length - 1];
+  if (typeof entry !== "string") {
+    from.pop();
+    const undoing = from === app.undo;
+    // swapChannels replaces both arrays: push onto the current ones.
+    const swapped = await swapChannels(entry.swap[0], entry.swap[1], false);
+    (swapped === undoing ? app.redo : app.undo).push(entry);
+    syncAll();
+    return;
+  }
+  from.pop();
   to.push(JSON.stringify(app.doc));
-  app.doc = JSON.parse(from.pop());
+  app.doc = JSON.parse(entry);
   if (app.cropActive) app.cropDraft = cropRectOf(app.doc.crop);
   syncAll();
   requestRender();
@@ -334,6 +352,7 @@ function makeSlider(container, spec, group, target) {
 
   function look() {
     const v = target()[field];
+    root.classList.toggle("changed", v !== def); // phones mark it next to the name
     const pos = toPos(v);
     value.textContent = percent
       ? `${Math.round(pos / 10) > 0 ? "+" : ""}${Math.round(pos / 10)}`
@@ -594,14 +613,16 @@ async function loadChannel(index, file) {
   }
 }
 
-async function swapChannels(a, b) {
-  if (a === b || !(app.files[a] || app.files[b])) return;
+// Returns whether the photos were swapped. `record`: false when undo or
+// redo replays it.
+async function swapChannels(a, b, record = true) {
+  if (a === b || !(app.files[a] || app.files[b])) return false;
   setActivity("swap", "Swapping channels…", true);
   try {
     await callWorker("swap", { a, b, color: app.colorTrichrome });
   } catch (err) {
     flashMessage(`The channels couldn't be swapped: ${err.message}`);
-    return;
+    return false;
   } finally {
     setActivity("swap", null);
   }
@@ -611,15 +632,22 @@ async function swapChannels(a, b) {
   // The history follows the photos too, so an undo never puts one photo's
   // settings on the other.
   const swapSnapshot = (snapshot) => {
+    if (typeof snapshot !== "string") return snapshot; // another swap
     const doc = JSON.parse(snapshot);
     swapLayers(doc);
     return JSON.stringify(doc);
   };
   app.undo = app.undo.map(swapSnapshot);
   app.redo = app.redo.map(swapSnapshot);
+  if (record) {
+    app.undo.push({ swap: [a, b] });
+    if (app.undo.length > 200) app.undo.shift();
+    app.redo = [];
+  }
   flashMessage(`${CHANNELS[a].name} and ${CHANNELS[b].name} swapped.`);
   syncAll();
   requestRender();
+  return true;
 }
 
 async function removeChannel(index) {
@@ -727,53 +755,55 @@ function anyLoaded() {
 function buildChannelControls() {
   const toggles = $("#show-layer");
   const tabs = $("#channel-tabs");
-  const lockButtons = $("#reference-buttons");
+  // Show Layer: the eye on each channel tab (the row of letter toggles is
+  // kept only as hidden state for tests and old styles).
+  const toggleLayer = (index) => {
+    const next = [...app.visible];
+    next[index] = !next[index];
+    if (!next.some(Boolean)) return; // at least one layer stays on
+    app.visible = next;
+    syncAll();
+    requestRender();
+  };
   CHANNELS.forEach((channel, index) => {
     const toggle = document.createElement("button");
     toggle.className = "layer-toggle";
     toggle.style.color = channel.color;
     toggle.innerHTML = '<span class="icon"></span>';
     toggle.title = `Show the ${channel.name.toLowerCase()} layer`;
-    toggle.addEventListener("click", () => {
-      const next = [...app.visible];
-      next[index] = !next[index];
-      if (!next.some(Boolean)) return; // at least one layer stays on
-      app.visible = next;
-      syncAll();
-      requestRender();
-    });
+    toggle.addEventListener("click", () => toggleLayer(index));
     toggles.append(toggle);
 
+    // A tab: the channel's color, its letter, and an eye that shows or
+    // hides its layer.
     const tab = document.createElement("button");
-    tab.className = "tab";
-    tab.textContent = channel.name;
-    tab.style.color = channel.color;
+    tab.className = "tab channel-tab";
+    tab.title = `Edit the ${channel.name.toLowerCase()} channel`;
+    // The dot turns black and white while the channel is in Solo.
+    tab.innerHTML = `<span class="channel-pill" style="background:${channel.color}"></span>`
+      + `<span class="channel-letter">${channel.key}</span>`
+      + `<span class="channel-eye" role="button" tabindex="-1" title="Show or hide the ${channel.name.toLowerCase()} layer">`
+      + '<span class="icon"></span></span>';
+    tab.querySelector(".channel-eye").addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleLayer(index);
+    });
     tab.addEventListener("click", () => {
+      // Phones have no Solo checkbox: the active tab tapped again is Solo.
+      if (PHONE_QUERY.matches && index === app.tab) {
+        if (!app.files[index]) return;
+        app.solo = app.solo === index ? null : index;
+        syncAll();
+        requestRender();
+        return;
+      }
       app.tab = index;
       // Solo follows the tab, like Stretch on Canvas.
       if (app.solo !== null) app.solo = app.files[index] ? index : null;
       requestRender();
-      if (app.moveOnCanvas && index === app.doc.ref) app.moveOnCanvas = false;
       syncAll();
     });
     tabs.append(tab);
-
-    const lock = document.createElement("button");
-    lock.className = "lock-toggle";
-    lock.style.color = channel.color;
-    lock.setAttribute("role", "radio");
-    lock.title = `Lock the ${channel.name.toLowerCase()} layer`;
-    lock.innerHTML = '<span class="dot"></span>';
-    lock.addEventListener("click", () => {
-      if (app.doc.ref === index) return;
-      edit(() => {
-        app.doc.ref = index;
-        // The new reference is locked at the identity.
-        for (const field of RESET_FIELDS.position) app.doc.layers[index][field] = DEFAULT_LAYER[field];
-        if (app.tab === index) app.moveOnCanvas = false;
-      });
-    });
-    lockButtons.append(lock);
   });
 
   // Move and Stretch on Canvas are one drag mode at a time.
@@ -813,6 +843,9 @@ async function autoAlign() {
       applyDistortion: false, // position only: the lens search isn't offered here
     });
     edit(() => {
+      // Red and blue are aligned onto green as loaded: green, which can be
+      // moved by hand, goes back to its own place first.
+      Object.assign(app.doc.layers[app.doc.ref], { dx: 0, dy: 0, scale: 1, rotation: 0 });
       for (const [index, values] of Object.entries(result.results)) {
         const layer = app.doc.layers[Number(index)];
         for (const [field, value] of Object.entries(values)) layer[field] = Number(value.toFixed(4));
@@ -852,7 +885,6 @@ function sameValue(a, b) {
 
 function canReset(section) {
   const defaults = resetDefaults(section);
-  if (section === "position" && app.tab === app.doc.ref) return false;
   // Cropping: a frame moved or resized counts as soon as it's drawn, before
   // it's applied.
   if (section === "crop" && app.cropActive && app.cropDraft) {
@@ -890,6 +922,69 @@ function buildResetButtons() {
 function syncResetButtons() {
   document.querySelectorAll("[data-reset]").forEach((button) => {
     button.disabled = !canReset(button.dataset.reset);
+  });
+  syncToolDots();
+  syncPhoneProcessButtons();
+}
+
+// Phones: the Move / Stretch and Reset buttons on the channel line follow
+// the tab (Position, Light or Geometry).
+function syncPhoneProcessButtons() {
+  const tool = $("#panel").dataset.tool;
+  const geometryTab = tool === "geometry";
+  const canvasMode = $("#phone-canvas-mode");
+  const modeOn = geometryTab ? app.stretch : app.moveOnCanvas;
+  canvasMode.disabled = $(geometryTab ? "#stretch-on-canvas" : "#move-on-canvas").disabled;
+  canvasMode.classList.toggle("on", modeOn);
+  canvasMode.setAttribute("aria-pressed", modeOn);
+  canvasMode.title = geometryTab ? "Stretch on Canvas" : "Move on Canvas";
+  canvasMode.setAttribute("aria-label", canvasMode.title);
+  canvasMode.querySelector(".icon").style.setProperty("--icon",
+    `url(icons/${geometryTab ? "stretch" : "hand-move"}.svg)`);
+  const section = PROCESS_TOOLS[tool];
+  const sectionReset = section && document.querySelector(`[data-reset="${section}"]`);
+  $("#phone-section-reset").disabled = !sectionReset || sectionReset.disabled;
+}
+
+// Phone tool tabs: a dot on the icon of each tool whose settings differ
+// from the defaults.
+function syncToolDots() {
+  const sectionEdited = (section) => app.doc.layers.some((layer) =>
+    RESET_FIELDS[section].some((field) => !sameValue(layer[field], DEFAULT_LAYER[field])));
+  const edited = {
+    position: sectionEdited("position"),
+    light: sectionEdited("light"),
+    geometry: sectionEdited("transform"),
+    curves: !curvesAreIdentity() || !!app.doc.negative,
+    crop: canReset("crop") || !!app.doc.quarterTurns,
+  };
+  document.querySelectorAll(".tool-tab").forEach((tab) => {
+    tab.classList.toggle("edited", !!edited[tab.dataset.tool]);
+  });
+  // The same dot on a tool's icon, after a section's name (for the channel
+  // shown) and in the corner of each channel tab that holds a change.
+  const titleEdited = {
+    process: edited.position || edited.light || edited.geometry,
+    curves: edited.curves,
+    crop: edited.crop,
+  };
+  document.querySelectorAll("#panel > .block").forEach((block) => {
+    block.querySelector(".block-title .title-icon")
+      ?.classList.toggle("edited", !!titleEdited[block.dataset.tool]);
+  });
+  const layer = app.doc.layers[app.tab];
+  document.querySelectorAll(".channel-section").forEach((details) => {
+    const section = details.dataset.section;
+    details.querySelector("summary > span").classList.toggle("edited-dot",
+      RESET_FIELDS[section].some((field) => !sameValue(layer[field], DEFAULT_LAYER[field])));
+  });
+  // A channel tab's corner: any change to that channel on a computer; on a
+  // phone, only in the section its tab shows (Position, Light or Geometry).
+  const phoneSection = PHONE_QUERY.matches && PROCESS_TOOLS[$("#panel").dataset.tool];
+  const tabFields = RESET_FIELDS[phoneSection || "process"];
+  document.querySelectorAll("#channel-tabs .tab").forEach((tab, index) => {
+    tab.classList.toggle("edited", tabFields.some((field) =>
+      !sameValue(app.doc.layers[index][field], DEFAULT_LAYER[field])));
   });
 }
 
@@ -1884,7 +1979,7 @@ function buildMoveOnCanvas() {
       beginEdit();
       layer.stretch_pins = [...layer.stretch_pins, [anchor.u, anchor.v, 0, 0]];
       drag = { mode: "stretch", anchor };
-    } else if (app.moveOnCanvas && app.tab !== app.doc.ref) {
+    } else if (app.moveOnCanvas) {
       beginEdit();
       drag = { mode: "move", x: event.clientX, y: event.clientY, dx: layer.dx, dy: layer.dy };
       canvas.style.cursor = "grabbing";
@@ -2268,6 +2363,7 @@ function syncCurveControls() {
   $("#negative").classList.toggle("on", !!app.doc.negative);
   $("#negative").disabled = !anyLoaded();
   $("#reset-curves").disabled = curvesAreIdentity();
+  syncToolDots();
 }
 
 // ---------------------------------------------------------------------------
@@ -2644,7 +2740,7 @@ function openTour() {
 
 function buildTour() {
   const dialog = $("#tour-dialog");
-  $("#tour-button").addEventListener("click", openTour);
+  $("#app-logo").addEventListener("click", openTour);
   $("#tour-back").addEventListener("click", () => showTourStep(tourStep - 1));
   $("#tour-next").addEventListener("click", () => {
     if (tourStep === tourSteps().length - 1) dialog.close();
@@ -2749,6 +2845,19 @@ let phoneHistogram = false;
 
 function showTool(tool) {
   const panel = $("#panel");
+  const section = PROCESS_TOOLS[tool];
+  const blockTool = section ? "process" : tool;
+  if (PHONE_QUERY.matches) {
+    // Move belongs to Position and Stretch to Geometry: leaving the tab ends it.
+    let changed = false;
+    if (app.moveOnCanvas && tool !== "position") { app.moveOnCanvas = false; changed = true; }
+    if (app.stretch && tool !== "geometry") { app.stretch = false; changed = true; }
+    document.querySelectorAll(".channel-section").forEach((details) => {
+      details.classList.toggle("phone-current", details.dataset.section === section);
+      if (details.dataset.section === section) details.open = true;
+    });
+    if (changed) syncAll();
+  }
   panel.dataset.tool = tool;
   document.documentElement.dataset.tool = tool;
   document.documentElement.classList.toggle("tools-hidden", tool === "none");
@@ -2758,7 +2867,7 @@ function showTool(tool) {
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", active);
   });
-  const shown = [...panel.querySelectorAll(":scope > .block")].filter((block) => block.dataset.tool === tool);
+  const shown = [...panel.querySelectorAll(":scope > .block")].filter((block) => block.dataset.tool === blockTool);
   $("#histogram-toggle").classList.toggle("on", phoneHistogram);
   $("#histogram-toggle").setAttribute("aria-pressed", phoneHistogram);
   $("#histogram-toggle").title = phoneHistogram ? "Hide the histogram" : "Show the histogram";
@@ -2767,10 +2876,22 @@ function showTool(tool) {
   });
   if (PHONE_QUERY.matches) shown.forEach((block) => { block.open = true; });
   syncPhoneCrop();
+  syncToolDots();
+  syncPhoneProcessButtons();
   fitPreviewToTools();
+  requestAnimationFrame(syncSliderFades);
   // Canvases measure their width when drawn: 0 while their block was hidden.
   drawHistogram(lastHistogram);
   drawCurveEditor();
+}
+
+// Phones: a fade at the bottom of a slider list while more sliders sit
+// below (Light has 6 for 4 lines).
+function syncSliderFades() {
+  for (const id of ["#sliders-light", "#sliders-position", "#sliders-transform"]) {
+    const box = $(id);
+    box.classList.toggle("more", box.scrollTop + box.clientHeight < box.scrollHeight - 2);
+  }
 }
 
 // The preview changes size when the tools hide or show (CSS): refit it.
@@ -2812,11 +2933,10 @@ function placeCropControls() {
     editor.style.width = editor.style.height = "";
   }
   sizeCurveOverlay();
-  // Trichrome Process: no title row on a phone, its Reset joins Show Layer.
-  const process = document.querySelector('.block[data-tool="process"]');
-  const processTools = process.querySelector(".summary-tools");
-  if (PHONE_QUERY.matches) $("#show-layer-row").append(processTools);
-  else process.querySelector(".block-title").append(processTools);
+  // Trichrome Process: on a phone the channel tabs lead the line of
+  // buttons above the sliders; on a computer they sit over their pane.
+  if (PHONE_QUERY.matches) $("#phone-channel-row").prepend($("#channel-tabs"));
+  else $("#tab-body").before($("#channel-tabs"));
 }
 
 // The curve over the photo: the largest square the preview holds.
@@ -2832,11 +2952,6 @@ function sizeCurveOverlay() {
 function buildPhoneLayout() {
   placeCropControls();
   new ResizeObserver(sizeCurveOverlay).observe($(".workspace"));
-  // Trichrome Process opens with its sections closed on a phone (Light is
-  // open on a computer): the channel tabs and Auto align show at once.
-  if (PHONE_QUERY.matches) {
-    document.querySelectorAll('.channel-section[data-section="light"]').forEach((s) => { s.open = false; });
-  }
   PHONE_QUERY.addEventListener("change", placeCropControls);
   document.querySelectorAll(".tool-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -2850,6 +2965,19 @@ function buildPhoneLayout() {
       if (PHONE_QUERY.matches && !event.target.closest("button")) event.preventDefault();
     });
   });
+  $("#phone-auto-align").addEventListener("click", autoAlign);
+  // Move on Canvas in Position, Stretch on Canvas in Geometry.
+  $("#phone-canvas-mode").addEventListener("click", () => {
+    $($("#panel").dataset.tool === "geometry" ? "#stretch-on-canvas" : "#move-on-canvas").click();
+  });
+  // This tab's section Reset, for the selected channel.
+  $("#phone-section-reset").addEventListener("click", () => {
+    const section = PROCESS_TOOLS[$("#panel").dataset.tool];
+    if (section) document.querySelector(`[data-reset="${section}"]`).click();
+  });
+  for (const id of ["#sliders-light", "#sliders-position", "#sliders-transform"]) {
+    $(id).addEventListener("scroll", syncSliderFades, { passive: true });
+  }
   try { phoneHistogram = localStorage.getItem(HISTOGRAM_KEY) === "1"; } catch (_) { /* private mode */ }
   $("#histogram-toggle").addEventListener("click", () => {
     phoneHistogram = !phoneHistogram;
@@ -3043,14 +3171,13 @@ function syncDropdowns() {
 // ---------------------------------------------------------------------------
 
 function syncAll() {
-  const isRef = app.tab === app.doc.ref;
   const loaded = anyLoaded();
   const allLoaded = app.files.every(Boolean);
-  if (isRef && app.moveOnCanvas) app.moveOnCanvas = false;
 
   for (const slider of sliders) {
     slider.sync();
-    slider.setDisabled((slider.group === "position" && isRef) || (slider.group === "light" && app.compare));
+    // Nothing to edit before a photo is loaded.
+    slider.setDisabled(!loaded || (slider.group === "light" && app.compare));
   }
   document.querySelectorAll("#show-layer .layer-toggle").forEach((toggle, index) => {
     const on = app.visible[index];
@@ -3059,7 +3186,13 @@ function syncAll() {
     toggle.querySelector(".icon").style.setProperty("--icon",
       `url(../resources/icons/Global/${on ? "circle-letter" : "circle-dotted-letter"}-${letter}.svg)`);
   });
-  document.querySelectorAll("#channel-tabs .tab").forEach((tab, index) => tab.classList.toggle("active", index === app.tab));
+  document.querySelectorAll("#channel-tabs .tab").forEach((tab, index) => {
+    tab.classList.toggle("active", index === app.tab);
+    tab.classList.toggle("layer-hidden", !app.visible[index]);
+    tab.classList.toggle("solo", app.solo === index);
+    tab.querySelector(".channel-eye .icon").style.setProperty("--icon",
+      `url(icons/${app.visible[index] ? "eye" : "eye-off"}.svg)`);
+  });
   const tabBody = $("#tab-body");
   tabBody.dataset.active = app.tab;
   tabBody.style.setProperty("--channel", CHANNELS[app.tab].color);
@@ -3067,23 +3200,18 @@ function syncAll() {
   const solo = $("#solo");
   solo.checked = app.solo === app.tab;
   solo.disabled = !app.files[app.tab];
-  document.querySelectorAll("#reference-buttons .lock-toggle").forEach((button, index) => {
-    const locked = index === app.doc.ref;
-    button.classList.toggle("on", locked);
-    button.setAttribute("aria-checked", locked);
-  });
-  $("#reference-note").hidden = !isRef;
   $("#mode").value = app.colorTrichrome ? "color" : "classic";
 
   const move = $("#move-on-canvas");
   move.checked = app.moveOnCanvas;
-  move.disabled = isRef;
+  move.disabled = !loaded;
   if (!loaded) app.stretch = false;
   const stretch = $("#stretch-on-canvas");
   stretch.checked = app.stretch;
   stretch.disabled = !loaded;
   $("#reset-stretch").disabled = !app.doc.layers[app.tab].stretch_pins.length;
   $("#auto-align").disabled = !(allLoaded && app.engineReady);
+  $("#phone-auto-align").disabled = $("#auto-align").disabled;
   $("#export-button").disabled = !(loaded && app.engineReady) || activities.has("export");
 
   const crop = app.doc.crop;
@@ -3098,6 +3226,14 @@ function syncAll() {
   $("#mirror-h").classList.toggle("on", crop.mirror_h);
   $("#mirror-v").classList.toggle("on", crop.mirror_v);
   $("#ratio").value = crop.ratio;
+  // The presets read the way the frame is cut: 16:9 becomes 9:16 once the
+  // orientation is inverted (or on a tall photo), as cropRatio applies them.
+  const landscape = !app.frame || app.frame.w >= app.frame.h;
+  const tall = landscape === !!crop.portrait;
+  for (const option of $("#ratio").options) {
+    const match = /^(\d+):(\d+)$/.exec(option.value);
+    if (match) option.textContent = tall ? `${match[2]}:${match[1]}` : `${match[1]}:${match[2]}`;
+  }
   // 1:1 has no orientation; Free turns the rectangle (invertFreeCrop).
   $("#orientation").disabled = crop.ratio === "1:1";
   $("#orientation").classList.toggle("on",
@@ -3153,7 +3289,6 @@ function init() {
   buildWindowDrop();
   buildPhoneLayout();
   $("#mode").addEventListener("change", (event) => changeMode(event.target.value === "color"));
-  $("#new-photo").addEventListener("click", startOver);
   $("#mode-done").addEventListener("click", () => {
     app.moveOnCanvas = false;
     app.stretch = false;

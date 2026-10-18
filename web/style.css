@@ -176,6 +176,40 @@ select:focus, input[type=text]:focus, input[type=number]:focus { outline: 2px so
 .tab:not(.active) + .tab:not(.active) { box-shadow: inset 1px 0 0 #555; }
 .tab.active { background: var(--pane); opacity: 1; border-radius: 8px 8px 0 0; }
 .tab-body { background: var(--pane); border-radius: 0 0 8px 8px; padding: 8px 12px 10px; }
+/* A channel tab: its color, its letter, and an eye that shows or hides the
+   layer (Show Layer, folded into the tabs). */
+.channel-tab { display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--text); }
+.channel-pill { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+.channel-letter { font-weight: 600; }
+.channel-eye {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px;
+  border-radius: 5px; color: var(--muted); cursor: pointer;
+}
+.channel-eye:hover { color: var(--text); background: rgba(255, 255, 255, .08); }
+.channel-eye .icon { width: 16px; height: 16px; }
+.channel-tab.layer-hidden .channel-pill { background: transparent !important; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.channel-tab.layer-hidden .channel-letter { color: var(--muted); }
+/* Solo: the channel alone in black and white. */
+.channel-tab.solo .channel-pill { background: linear-gradient(90deg, #fff 50%, #555 50%) !important; }
+#show-layer-row { display: none; }
+/* Tool titles open with their icon. A change made: the blue dot of the
+   phone's tool tabs on that icon's corner, after a Trichrome section's name
+   and in the corner of a channel tab (app.js syncToolDots). */
+.title-icon { position: relative; display: inline-flex; margin-right: 8px; vertical-align: -3px; }
+.title-icon .icon { width: 17px; height: 17px; }
+.title-icon.edited::after {
+  content: ""; position: absolute; top: -3px; right: -4px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 2px var(--block);
+}
+.edited-dot::after {
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 7px; border-radius: 50%;
+  background: var(--accent); vertical-align: middle; position: relative; top: -1px;
+}
+.channel-tab { position: relative; }
+.channel-tab.edited::after {
+  content: ""; position: absolute; top: 5px; right: 6px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+}
 
 /* Light / Position / Geometry: split by a bar in the channel color. */
 .section.channel-section {
@@ -190,23 +224,6 @@ select:focus, input[type=text]:focus, input[type=number]:focus { outline: 2px so
 .curve-channels { margin-top: 6px; }
 .move-check { margin: 2px 0 6px; }
 
-/* Lock layer position: muted and smaller than Show Layer, as on the desktop. */
-.lock-row { margin-top: 12px; gap: 6px; }
-.lock-label { color: #888; font-size: 11px; white-space: nowrap; }
-.lock-group { gap: 4px; flex: 1; }
-/* Solid channel dots (letters don't read at this size), as on the desktop:
-   the locked one at full color with a ring, the others dimmed. */
-.lock-toggle {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 22px; padding: 0; border: none; background: transparent; cursor: pointer;
-}
-.lock-toggle .dot {
-  width: 10px; height: 10px; border-radius: 50%; background: currentColor; opacity: .32;
-  transition: opacity .12s;
-}
-.lock-toggle:hover .dot { opacity: .5; }
-.lock-toggle.on .dot { opacity: 1; outline: 1.5px solid currentColor; outline-offset: 2.5px; }
-.info.align-right .bubble { left: auto; right: -4px; }
 
 /* Dropdowns (app.js enhanceSelect): a dark field with the accent arrow box
    of the desktop's combos, and a dark menu. */
@@ -446,7 +463,6 @@ dialog.get-app h2 { position: relative; margin: 0; font-size: 22px; font-weight:
 
 /* Quick Tour: the same card, one step at a time. */
 /* Square like the GitHub button (.btn.square), so the two match on phones. */
-.tour-button { font-size: 15px; font-weight: 600; }
 .tour-kicker { margin-bottom: 10px; }
 .tour-steps { position: relative; display: grid; }
 .tour-step { grid-area: 1 / 1; visibility: hidden; }
@@ -486,11 +502,15 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
     order: 1; flex: 1; min-height: 0; width: 100%; border-right: none;
     overflow-y: auto; overscroll-behavior: contain;
   }
-  .workspace { position: relative; flex: none; height: 48vh; height: 48svh; background: var(--window); }
+  /* The tools keep one height (Files, Position, Light, Geometry, Crop), so
+     the photo doesn't jump from tab to tab; the preview takes the rest. */
+  :root { --tool-height: 220px; }
+  .workspace { position: relative; flex: 1 1 auto; height: auto; background: var(--window); }
+  #panel { flex: none; height: var(--tool-height); }
   /* Full screen, or every tool hidden (the active tab tapped again): the
      preview takes all the room. */
   body.focus .workspace, .tools-hidden .workspace { flex: 1; height: auto; }
-  .tools-hidden #panel { flex: none; }
+  .tools-hidden #panel { flex: none; height: 0; }
 
   /* The histogram floats over the top-left of the preview. */
   .phone-histogram .histogram-overlay {
@@ -517,13 +537,13 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
     padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     background: var(--panel); border-top: 1px solid var(--line);
   }
+  #histogram-toggle.on { color: var(--accent); border-color: var(--accent); }
   .tool-tab, .tool-bar-toggle {
     position: relative; display: flex; align-items: center; justify-content: center; padding: 0;
     color: var(--muted); background: transparent; border-radius: 0 !important;
     box-shadow: none !important; opacity: 1;
   }
-  /* Five equal slots, so the icons sit evenly (the histogram switch, left
-     of the tools, included). */
+  /* Equal slots, so the icons sit evenly. */
   .tool-tab, .tool-bar-toggle { flex: 1 1 0; min-width: 0; height: 100%; margin: 0; }
   .tool-bar-toggle { border: none; cursor: pointer; font: inherit; }
   .tool-bar-toggle.on { color: var(--accent); }
@@ -533,6 +553,12 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
   }
   .tool-tab.active { color: var(--accent); background: transparent; }
   .tool-tab .icon { width: 22px; height: 22px; }
+  /* The tool holds a change: the same blue dot as a changed setting. */
+  .tool-tab.edited::after {
+    content: ""; position: absolute; top: calc(50% - 15px); left: calc(50% + 9px);
+    width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+    box-shadow: 0 0 0 2px var(--panel);
+  }
   #panel > .block:not(.tool-current) { display: none; }
   #panel > .block { margin: 0; background: none; border: none; border-radius: 0; }
   #panel .block-title { padding: 12px 16px 4px; }
@@ -568,9 +594,65 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
   }
   html:not([data-tool="curves"]) .workspace > #curve-editor { display: none; }
   html[data-tool="curves"] .workspace { flex: 1; height: auto; }
-  html[data-tool="curves"] #panel { flex: none; }
+  html[data-tool="curves"] #panel { flex: none; height: auto; }
+
+  /* Position, Light and Geometry: one section of Trichrome Process each
+     (app.js showTool), under a line with the channel tabs, Auto align,
+     Move or Stretch on Canvas and the section's Reset. No section title,
+     no Show Layer (the eyes), no Solo checkbox (the active tab again), no
+     Lock. */
+  /* The same room above the channel line and below the sliders: 13 + 40
+     (line) + 10 + 144 (4 sliders) + 13 = --tool-height. */
+  #panel .block[data-tool="process"] .block-body { padding: 13px 16px; }
+  .phone-channel-row { align-items: center; gap: 8px; margin-bottom: 10px; }
+  .phone-channel-row .icon-button { flex: none; }
+  .phone-channel-row .icon-button.toggle.on { color: var(--warning); border-color: var(--warning); background: transparent; }
+  /* Auto align sets the position only (no Geometry): it's in Position. */
+  html[data-tool="light"] #phone-auto-align, html[data-tool="geometry"] #phone-auto-align,
+  html[data-tool="light"] #phone-canvas-mode { display: none; }
+  .phone-channel-row .tabs { flex: 1; min-width: 0; gap: 6px; margin: 0; }
+  .phone-channel-row .tab {
+    flex: 1 1 0; min-width: 0; height: 40px; padding: 0 2px 0 10px; justify-content: flex-start; gap: 6px;
+    border: 1px solid var(--line); border-radius: 9px !important; background: var(--block);
+    box-shadow: none !important; opacity: 1;
+  }
+  .phone-channel-row .tab.active { border-color: var(--accent); background: rgba(91, 155, 213, .14); }
+  .phone-channel-row .channel-pill { width: 14px; height: 14px; }
+  .phone-channel-row .channel-letter { flex: 1; text-align: left; }
+  .phone-channel-row .channel-eye { width: 30px; height: 30px; }
+  .phone-channel-row .channel-eye .icon { width: 18px; height: 18px; }
+  .solo-check, #auto-align, .move-check, .stretch-row { display: none; }
+  .tab-body { background: none; padding: 0; border-radius: 0; }
+  .section.channel-section { border: none; padding: 0; margin: 0; }
+  .channel-section > summary { display: none; }
+  .channel-section:not(.phone-current) { display: none; }
+  /* One line a slider (name, track, value), four lines high: Light's six
+     scroll inside, with a fade while more sit below. */
+  .channel-section .sliders { height: 144px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+  .channel-section .sliders::-webkit-scrollbar { display: none; }
+  .channel-section .sliders.more { -webkit-mask-image: linear-gradient(#000 78%, transparent); mask-image: linear-gradient(#000 78%, transparent); }
+  .channel-section .slider {
+    display: grid; grid-template-columns: 84px 1fr 50px; align-items: center; column-gap: 10px;
+    height: 36px; margin: 0;
+  }
+  .channel-section .slider-head { display: contents; }
+  .channel-section .slider-head > span:first-child {
+    grid-column: 1; grid-row: 1; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .channel-section .slider-head .value { grid-column: 3; grid-row: 1; text-align: right; color: var(--text); }
+  .channel-section .slider input[type=range] { grid-column: 2; grid-row: 1; margin: 0; }
+  .channel-section .slider.changed .slider-head > span:first-child { color: var(--text); }
+  .channel-section .slider.changed .slider-head > span:first-child::after { content: " \2022"; color: var(--accent); }
 
   /* Files: the three channels first, the mode (Classic / Color) below. */
+  /* As in Position / Light / Geometry: 13px above the first row and below
+     the mode menu, the rows evenly spaced in between. */
+  #panel .block[data-tool="files"] { height: 100%; }
+  #panel .block[data-tool="files"] .block-body { height: 100%; padding: 13px 16px; }
+  #channel-files { display: flex; flex-direction: column; gap: 6px; }
+  .block[data-tool="files"] .channel-slot { margin: 0; }
+  #panel .block[data-tool="files"] .block-body > .row { margin: auto 0 0; }
+  .block[data-tool="files"] .channel-file { height: 44px; padding: 0 8px; }
   .block[data-tool="files"] .block-body { display: flex; flex-direction: column; }
   .block[data-tool="files"] .block-body > .row { order: 1; margin-top: 10px; }
 
@@ -623,7 +705,7 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
   body { font-size: 15px; }
   input[type=text], input[type=number] { font-size: 16px; }
   .slider-head, .hint, .note, .info .bubble, .bar-status { font-size: 13px; }
-  .lock-label, .channel-file .file-size { font-size: 12px; }
+  .channel-file .file-size { font-size: 12px; }
   .slider { margin: 6px 0 12px; }
   .slider input[type=range] { height: 30px; }
   .slider input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; }
@@ -636,13 +718,12 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
   .icon-button .icon { width: 22px; height: 22px; }
   /* The Crop tab is crop mode (app.js syncPhoneCrop): no button for it. */
   #crop-toggle { display: none; }
-  .layer-toggle, .lock-toggle { width: 34px; height: 34px; }
+  .layer-toggle { width: 34px; height: 34px; }
   .layer-toggle .icon { width: 26px; height: 26px; }
-  .lock-toggle .dot { width: 13px; height: 13px; }
   .tab { padding: 9px 0; }
   .dropdown-button { height: 36px; }
   .dropdown-item { padding: 9px 14px 9px 30px; }
-  .channel-file { min-height: 46px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .channel-file { min-height: 44px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   /* Held for a swap: lifted above the other rows while it follows the finger. */
   .channel-file.touch-dragging { position: relative; z-index: 3; background: var(--block); box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
   .saved-file { word-break: break-all; }

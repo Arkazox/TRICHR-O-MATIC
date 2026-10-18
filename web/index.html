@@ -29,9 +29,9 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <!-- The logo starts over with new photos (after a confirmation). -->
-      <button class="brand-logo" id="new-photo" title="New photo: start over with 3 new photos"
-        aria-label="New photo"><img src="../resources/app_logo.png" alt=""></button>
+      <!-- The logo is the help button: it opens the tour. -->
+      <button class="brand-logo" id="app-logo" title="Help" aria-label="Help"><img
+        src="../resources/app_logo.png" alt=""></button>
       <span class="brand-name">Trichr-o-matic</span>
       <span class="badge">Web</span>
       <!-- Phones have no preview bar: undo and redo live here. -->
@@ -41,9 +41,11 @@
         <span class="icon" style="--icon: url(icons/redo.svg)"></span></button>
     </div>
     <div class="topbar-actions">
-      <button class="btn secondary square tour-button" id="tour-button" title="Help" aria-label="Help">?</button>
       <button class="btn secondary" id="get-app-button"
         title="Batch import, RAW files, sessions, Light/Color/Curves and more">Download the full app</button>
+      <!-- Phones: not a tool, shows or hides the histogram over the photo. -->
+      <button class="icon-button phone-only" id="histogram-toggle" title="Show the histogram"
+        aria-label="Histogram" aria-pressed="false"><span class="icon" style="--icon: url(icons/histogram.svg)"></span></button>
       <button id="export-button" class="btn primary" disabled title="Export" aria-label="Export">
         <span class="icon" style="--icon: url(../resources/icons/Toolbar/Export.svg)"></span><span
           class="btn-label">Export…</span>
@@ -55,27 +57,30 @@
     <aside id="panel" data-tool="files">
       <!-- Phones: one tool at a time, picked with these tabs. -->
       <div class="tabs tool-tabs" id="tool-tabs" role="tablist">
-        <!-- Not a tool: shows or hides the histogram over the photo. -->
-        <button class="tool-bar-toggle" id="histogram-toggle" title="Show the histogram" aria-label="Histogram"
-          aria-pressed="false"><span class="icon" style="--icon: url(icons/histogram.svg)"></span></button>
+        <!-- Position, Light and Geometry are the three sections of the
+             Trichrome Process block, one tab each (app.js PROCESS_TOOLS). -->
         <button class="tab tool-tab" data-tool="files" role="tab" title="Files" aria-label="Files">
           <span class="icon" style="--icon: url(icons/folder-plus.svg)"></span></button>
-        <button class="tab tool-tab" data-tool="process" role="tab" title="Trichrome Process" aria-label="Trichrome Process">
+        <button class="tab tool-tab" data-tool="position" role="tab" title="Position" aria-label="Position">
+          <span class="icon" style="--icon: url(icons/arrows-move.svg)"></span></button>
+        <button class="tab tool-tab" data-tool="light" role="tab" title="Light" aria-label="Light">
           <span class="icon" style="--icon: url(../resources/icons/Toolbar/trichrome.svg)"></span></button>
         <button class="tab tool-tab" data-tool="curves" role="tab" title="Curves" aria-label="Curves">
           <span class="icon" style="--icon: url(icons/curve.svg)"></span></button>
+        <button class="tab tool-tab" data-tool="geometry" role="tab" title="Geometry" aria-label="Geometry">
+          <span class="icon" style="--icon: url(../resources/icons/Tools/Crop/perspective-view.svg)"></span></button>
         <button class="tab tool-tab" data-tool="crop" role="tab" title="Crop" aria-label="Crop">
           <span class="icon" style="--icon: url(../resources/icons/Global/crop.svg)"></span></button>
       </div>
 
       <details class="block" open data-tool="histogram">
-        <summary class="block-title">Histogram</summary>
+        <summary class="block-title"><span><span class="title-icon"><span class="icon" style="--icon: url(icons/histogram.svg)"></span></span>Histogram</span></summary>
         <div class="block-body"><canvas id="histogram" height="110"></canvas></div>
       </details>
 
       <details class="block" open data-tool="files">
         <summary class="block-title">
-          <span>Files</span>
+          <span><span class="title-icon"><span class="icon" style="--icon: url(icons/folder-plus.svg)"></span></span>Files</span>
           <button class="icon-button" id="reset-all" title="Start over with 3 new photos">
             <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span>
           </button>
@@ -94,7 +99,7 @@
 
       <details class="block" open data-tool="process">
         <summary class="block-title">
-          <span>Trichrome Process</span>
+          <span><span class="title-icon"><span class="icon" style="--icon: url(../resources/icons/Toolbar/trichrome.svg)"></span></span>Trichrome</span>
           <span class="summary-tools">
             <button class="icon-button reset" data-reset="process"
               title="Reset the position, geometry and light of all 3 channels">
@@ -102,13 +107,24 @@
           </span>
         </summary>
         <div class="block-body">
+          <!-- Phones: the channel tabs move onto this line (app.js
+               placeCropControls; tapping the active one again is Solo), then
+               Auto align, Move or Stretch on Canvas, and this tab's Reset. -->
+          <div class="phone-only-row phone-channel-row" id="phone-channel-row">
+            <button class="icon-button" id="phone-auto-align" title="Auto align" aria-label="Auto align">
+              <span class="icon" style="--icon: url(icons/wand.svg)"></span></button>
+            <button class="icon-button toggle" id="phone-canvas-mode" aria-pressed="false">
+              <span class="icon"></span></button>
+            <button class="icon-button" id="phone-section-reset" title="Reset this tab for this channel"
+              aria-label="Reset"><span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button>
+          </div>
           <div class="row" id="show-layer-row">
             <span class="label">Show Layer:</span>
             <div class="toggle-group" id="show-layer"></div>
           </div>
           <div class="tabs" id="channel-tabs"></div>
           <div class="tab-body" id="tab-body">
-            <details class="section channel-section" open data-section="light">
+            <details class="section channel-section" data-section="light">
               <summary><span>Light</span><button class="icon-button reset" data-reset="light" title="Reset">
                 <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button></summary>
               <div class="sliders" id="sliders-light"></div>
@@ -117,7 +133,6 @@
               <summary><span>Position</span><button class="icon-button reset" data-reset="position" title="Reset">
                 <span class="icon" style="--icon: url(../resources/icons/Global/Reset.svg)"></span></button></summary>
               <label class="check move-check"><input type="checkbox" id="move-on-canvas"> Move on Canvas</label>
-              <p class="note" id="reference-note">This is the reference channel: its position is locked.</p>
               <div class="sliders" id="sliders-position"></div>
             </details>
             <details class="section channel-section" data-section="transform">
@@ -149,24 +164,12 @@
             <label class="check solo-check"><input type="checkbox" id="solo"> Solo Layer Preview (B&amp;W)</label>
           </div>
           <button id="auto-align" class="btn primary wide" disabled>Auto align</button>
-          <!-- As on the desktop: a discreet label and one letter per channel,
-               the locked one drawn as a full circle. -->
-          <div class="row lock-row">
-            <span class="lock-label">Lock layer position:</span>
-            <div class="toggle-group lock-group" id="reference-buttons" role="radiogroup"
-              aria-label="Lock layer position"></div>
-            <span class="info align-right" tabindex="0" aria-label="About Lock layer position">?
-              <span class="bubble"><span class="muted">Auto Align never moves the locked channel: it
-                aligns the other two onto it instead. The locked channel keeps its own position.
-                Exactly one channel is always locked; pick a different one anytime.</span></span>
-            </span>
-          </div>
         </div>
       </details>
 
       <details class="block" open data-tool="curves">
         <summary class="block-title">
-          <span>Curves</span>
+          <span><span class="title-icon"><span class="icon" style="--icon: url(icons/curve.svg)"></span></span>Curves</span>
           <span class="summary-tools">
             <button class="icon-button toggle" id="negative"
               title="Negative (invert scan): inverts the tones of all 3 channels, for raw, uninverted negative scans">
@@ -183,7 +186,7 @@
 
       <details class="block" open data-tool="crop">
         <summary class="block-title">
-          <span>Crop</span>
+          <span><span class="title-icon"><span class="icon" style="--icon: url(../resources/icons/Global/crop.svg)"></span></span>Crop</span>
           <span class="summary-tools">
             <button class="icon-button toggle" id="crop-toggle" title="Crop mode (C)">
               <span class="icon" style="--icon: url(../resources/icons/Global/crop.svg)"></span></button>
@@ -320,7 +323,8 @@
       </section>
       <section class="tour-step">
         <h2>Align the channels</h2>
-        <p class="get-app-text"><b>Auto align</b> lines up the other two channels on the locked one.
+        <p class="get-app-text"><b>Auto align</b> lines up the red and blue channels on the
+          green one.
           Each channel's tab then lets you fine-tune its Light, Position and Geometry.<br><br>
           Drag directly on the preview with <b>Move on Canvas</b> or <b>Stretch on Canvas</b>.</p>
       </section>
@@ -345,7 +349,7 @@
         <p class="get-app-text">The desktop app, for Mac and Windows, adds batch import, RAW file
           support, work sessions, HQ Preview and the full set of Light and Color tools.<br><br>
           This tour stays one <span class="desktop-only">click</span><span class="phone-inline">tap</span>
-          away, under the <b>?</b> button at the top.</p>
+          away: the app's logo at the top left.</p>
         <ul class="get-app-features">
           <li>Work Offline</li><li>Save Sessions</li><li>Batch Import</li>
           <li>Advanced Control</li><li>RAW Support</li><li>HQ Preview</li>

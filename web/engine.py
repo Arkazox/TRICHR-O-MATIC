@@ -126,11 +126,10 @@ def _canvas_ref(ref: int) -> int | None:
 
 
 def _geo_params(layer: dict, index: int, ref: int, full_res: bool) -> tuple:
-    # The reference channel is locked: its position is always the identity,
-    # as in MainWindow._full_res_params. The 4 lens coefficients are its own.
-    if index == ref:
-        dx, dy, scale, rotation = 0.0, 0.0, 1.0, 0.0
-    elif full_res:
+    # The reference channel (green) sets the canvas. Unlike the desktop app
+    # (MainWindow._full_res_params) it isn't locked: it moves by hand like
+    # the others, so its own position applies, as do its 4 lens coefficients.
+    if full_res:
         ref_scale = _channels[ref]["scale"]
         dx = layer["dx"] / ref_scale
         dy = layer["dy"] / ref_scale
