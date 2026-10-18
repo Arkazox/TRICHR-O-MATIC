@@ -2,7 +2,11 @@
 <html lang="en" style="background:#323232">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- viewport-fit=cover: full screen from the home screen, the notch and
+       home bar are kept clear with env(safe-area-inset-*) in style.css.
+       No page zoom: the preview has its own (pinch, double tap), and iOS
+       would otherwise zoom into a text field on focus. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <!-- Always dark, whatever the system appearance (native controls included). -->
   <meta name="color-scheme" content="only dark">
   <meta name="theme-color" content="#2a2a2a">
@@ -14,25 +18,35 @@
   <link rel="icon" href="../resources/icon.ico" sizes="any">
   <link rel="icon" type="image/png" sizes="256x256" href="../resources/app_logo.png">
   <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+  <!-- Installable (Add to Home Screen): opens without the browser bars;
+       sw.js keeps the files on the device. -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Trichr-o-matic">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <img src="../resources/app_logo.png" alt="">
+      <!-- The logo starts over with new photos (after a confirmation). -->
+      <button class="brand-logo" id="new-photo" title="New photo: start over with 3 new photos"
+        aria-label="New photo"><img src="../resources/app_logo.png" alt=""></button>
       <span class="brand-name">Trichr-o-matic</span>
       <span class="badge">Web</span>
+      <!-- Phones have no preview bar: undo and redo live here. -->
+      <button class="icon-button phone-only undo-btn" title="Undo" aria-label="Undo">
+        <span class="icon" style="--icon: url(icons/undo.svg)"></span></button>
+      <button class="icon-button phone-only redo-btn" title="Redo" aria-label="Redo">
+        <span class="icon" style="--icon: url(icons/redo.svg)"></span></button>
     </div>
     <div class="topbar-actions">
       <button class="btn secondary square tour-button" id="tour-button" title="Help" aria-label="Help">?</button>
       <button class="btn secondary" id="get-app-button"
         title="Batch import, RAW files, sessions, Light/Color/Curves and more">Download the full app</button>
-      <!-- Phones: the project page instead, the desktop app is no use there. -->
-      <a class="btn secondary square" id="github-button" href="https://github.com/Arkazox/TRICHR-O-MATIC"
-        target="_blank" rel="noopener" title="View the project on GitHub" aria-label="View the project on GitHub">
-        <span class="icon" style="--icon: url(../resources/icons/Global/github.svg)"></span></a>
-      <button id="export-button" class="btn primary" disabled>
-        <span class="icon" style="--icon: url(../resources/icons/Toolbar/Export.svg)"></span>Export…
+      <button id="export-button" class="btn primary" disabled title="Export" aria-label="Export">
+        <span class="icon" style="--icon: url(../resources/icons/Toolbar/Export.svg)"></span><span
+          class="btn-label">Export…</span>
       </button>
     </div>
   </header>
@@ -41,6 +55,9 @@
     <aside id="panel" data-tool="files">
       <!-- Phones: one tool at a time, picked with these tabs. -->
       <div class="tabs tool-tabs" id="tool-tabs" role="tablist">
+        <!-- Not a tool: shows or hides the histogram over the photo. -->
+        <button class="tool-bar-toggle" id="histogram-toggle" title="Show the histogram" aria-label="Histogram"
+          aria-pressed="false"><span class="icon" style="--icon: url(icons/histogram.svg)"></span></button>
         <button class="tab tool-tab" data-tool="files" role="tab" title="Files" aria-label="Files">
           <span class="icon" style="--icon: url(icons/folder-plus.svg)"></span></button>
         <button class="tab tool-tab" data-tool="process" role="tab" title="Trichrome Process" aria-label="Trichrome Process">
@@ -85,7 +102,7 @@
           </span>
         </summary>
         <div class="block-body">
-          <div class="row">
+          <div class="row" id="show-layer-row">
             <span class="label">Show Layer:</span>
             <div class="toggle-group" id="show-layer"></div>
           </div>
@@ -175,8 +192,8 @@
           </span>
         </summary>
         <div class="block-body">
-          <div class="row">
-            <span class="label">Aspect ratio</span>
+          <div class="row" id="ratio-row">
+            <span class="label desktop-only">Aspect ratio</span>
             <select id="ratio">
               <option value="original">Original</option>
               <option value="free">Free</option>
@@ -198,16 +215,15 @@
             <input type="number" id="custom-h" min="0.1" max="100" step="0.1" value="1" aria-label="Height">
           </div>
           <div class="sliders" id="sliders-straighten"></div>
-          <!-- Phones: rotation lives here, the preview bar has no room for it. -->
-          <div class="row phone-only-row">
-            <span class="label">Rotate</span>
-            <button class="icon-button" id="crop-rotate-left" title="Rotate left">
+          <!-- Phones: rotate (no preview bar there) and mirror on one line of
+               icons, without labels. -->
+          <div class="row transform-row" id="transform-row">
+            <span class="label desktop-only">Mirror</span>
+            <button class="icon-button phone-only" id="crop-rotate-left" title="Rotate left">
               <span class="icon" style="--icon: url(../resources/icons/Filmstrip/rotate-ccw-square.svg)"></span></button>
-            <button class="icon-button" id="crop-rotate-right" title="Rotate right">
+            <button class="icon-button phone-only" id="crop-rotate-right" title="Rotate right">
               <span class="icon" style="--icon: url(../resources/icons/Filmstrip/rotate-cw-square.svg)"></span></button>
-          </div>
-          <div class="row">
-            <span class="label">Mirror</span>
+            <span class="bar-separator phone-only"></span>
             <button class="icon-button toggle" id="mirror-h" title="Mirror Left/Right">
               <span class="icon" style="--icon: url(../resources/icons/Tools/Crop/mirror_line.svg)"></span></button>
             <button class="icon-button toggle" id="mirror-v" title="Mirror Top/Bottom">
@@ -218,6 +234,13 @@
     </aside>
 
     <section class="workspace">
+      <!-- Move / Stretch on Canvas: what a drag does, and Done to stop. -->
+      <div class="mode-banner" id="mode-banner" hidden>
+        <span id="mode-banner-text"></span>
+        <button type="button" class="btn primary" id="mode-done">Done</button>
+      </div>
+      <!-- Phones: the histogram floats over the preview (drawn by app.js). -->
+      <canvas id="histogram-overlay" class="histogram-overlay" aria-hidden="true"></canvas>
       <div id="viewport">
         <div id="stage" hidden>
           <canvas id="preview"></canvas>
@@ -225,8 +248,9 @@
         </div>
         <div id="placeholder">
           <p class="placeholder-title desktop-only">Drop your 3 photos here</p>
-          <!-- Phones can't drag and drop: a button opens the photo picker. -->
-          <button class="btn primary phone-only" id="import-button">
+          <p class="placeholder-or desktop-only">or</p>
+          <!-- The file picker, for every screen; phones can't drag and drop. -->
+          <button class="btn primary" id="import-button">
             <span class="icon" style="--icon: url(../resources/icons/Toolbar/image-plus.svg)"></span>Import 3 photos</button>
           <p>PNG, JPEG, TIFF or BMP</p>
           <input type="file" id="import-input" hidden multiple accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp,image/png,image/jpeg,image/tiff,image/bmp">
@@ -234,10 +258,11 @@
       </div>
       <div class="preview-bar">
         <div class="bar-group">
-          <!-- Phones: zoom is a pinch and a double tap (fit / 1:1); this
-               shows or hides the Histogram under the tool tabs instead. -->
-          <button class="icon-button toggle phone-only" id="histogram-toggle" title="Show the histogram">
-            <span class="icon" style="--icon: url(icons/histogram.svg)"></span></button>
+          <button class="icon-button undo-btn" title="Undo (⌘Z)" aria-label="Undo">
+            <span class="icon" style="--icon: url(icons/undo.svg)"></span></button>
+          <button class="icon-button redo-btn" title="Redo (⇧⌘Z)" aria-label="Redo">
+            <span class="icon" style="--icon: url(icons/redo.svg)"></span></button>
+          <span class="bar-separator desktop-only"></span>
           <button class="icon-button desktop-only" id="zoom-out" title="Zoom out">
             <span class="icon" style="--icon: url(../resources/icons/Filmstrip/zoom_out.svg)"></span></button>
           <button class="icon-button desktop-only" id="zoom-in" title="Zoom in">
@@ -306,6 +331,15 @@
           with <b>Crop</b>.<br><br>
           <b>Export</b> saves the final image at full resolution.</p>
       </section>
+      <section class="tour-step phone-step">
+        <h2>Gestures on the photo</h2>
+        <p class="get-app-text tour-gestures">
+          <b>Tap</b>: full screen<br>
+          <b>Double tap</b>: fit / 1:1<br>
+          <b>Pinch</b>: zoom<br>
+          <b>Press and hold</b>: compare with the original<br><br>
+          In the tools, <b>tap the active tab</b> to hide them and enlarge the preview.</p>
+      </section>
       <section class="tour-step">
         <h2>Want to go further?</h2>
         <p class="get-app-text">The desktop app, for Mac and Windows, adds batch import, RAW file
@@ -318,6 +352,9 @@
         </ul>
         <button type="button" class="btn secondary tour-get-app desktop-only" id="tour-get-app">
           <span class="icon" style="--icon: url(icons/download.svg)" aria-hidden="true"></span>Download the full app</button>
+        <a class="get-app-github tour-github phone-only" href="https://github.com/Arkazox/TRICHR-O-MATIC"
+          target="_blank" rel="noopener"><span class="icon" style="--icon: url(../resources/icons/Global/github.svg)"
+          aria-hidden="true"></span>View the project on GitHub</a>
       </section>
     </div>
     <div class="get-app-footer tour-footer">
@@ -389,6 +426,19 @@
         View the project on GitHub</a>
       <form method="dialog"><button class="btn secondary">Close</button></form>
     </div>
+  </dialog>
+
+  <!-- Phones: once the export is ready, save it to Photos through the share
+       sheet (it needs a fresh tap, so it can't open by itself) or download it. -->
+  <dialog id="saved-dialog">
+    <form method="dialog">
+      <h2>Your image is ready</h2>
+      <p class="hint saved-file" id="saved-file"></p>
+      <div class="dialog-buttons saved-buttons">
+        <button value="download" class="btn secondary" id="saved-download">Download File</button>
+        <button value="share" class="btn primary" id="saved-share">Save to Photos…</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="export-dialog">

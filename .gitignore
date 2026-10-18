@@ -19,6 +19,9 @@ ui-captures/
 # macOS
 .DS_Store
 
+# web/serve.sh --lan: its local test certificate and key, never shared
+.lan-cert/
+
 # Personal test resources - not linked to the code, kept out of the repo
 resources/TEST_FILES/
 dist-release/

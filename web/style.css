@@ -29,6 +29,12 @@ html, body {
 }
 
 body { display: flex; flex-direction: column; overflow: hidden; }
+/* Notch, home bar and rounded corners (0 everywhere else): the page runs
+   edge to edge once installed on a phone (viewport-fit=cover). */
+body {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
 
 button, select, input { font: inherit; color: inherit; }
 
@@ -38,7 +44,10 @@ button, select, input { font: inherit; color: inherit; }
   padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
 .brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.brand img { width: 26px; height: 26px; }
+.brand-logo { display: flex; padding: 0; border: none; background: none; cursor: pointer; border-radius: 7px; }
+.brand-logo:hover img { filter: brightness(1.12); }
+.brand-logo:active img { transform: scale(.94); }
+.brand-logo img { width: 30px; height: 30px; transition: transform .1s; } /* the height of the buttons on the right */
 .brand-name { font-weight: 600; font-size: 15px; }
 .badge {
   font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
@@ -269,7 +278,7 @@ select:focus, input[type=text]:focus, input[type=number]:focus { outline: 2px so
 .slider input[type=range]::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: #e8e8e8; border: 1px solid #222; }
 
 /* Preview */
-.workspace { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.workspace { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 /* Zoom on the left, messages centered, view buttons on the right. */
 .preview-bar {
   display: grid; grid-template-columns: 1fr minmax(0, auto) 1fr; align-items: center; gap: 12px;
@@ -289,14 +298,37 @@ select:focus, input[type=text]:focus, input[type=number]:focus { outline: 2px so
 body.focus .topbar, body.focus #panel { display: none; }
 
 /* Flex + margin: auto centers the image and still scrolls to every edge when zoomed in. */
-#viewport { flex: 1; display: flex; position: relative; overflow: auto; background: var(--canvas); }
+/* min-height/width 0: a large zoomed photo (or the crop margins on a phone)
+   scrolls inside the preview instead of making it grow. */
+#viewport { flex: 1; min-height: 0; min-width: 0; display: flex; position: relative; overflow: auto; background: var(--canvas); }
 #viewport.drag-over { outline: 2px solid var(--accent); outline-offset: -2px; }
 #stage { position: relative; margin: auto; flex: none; }
 #stage[hidden] { display: none; }
+.workspace { position: relative; }
+/* Move / Stretch on Canvas: a pill at the top of the preview, with Done. */
+.mode-banner {
+  position: absolute; top: 10px; left: 50%; z-index: 6; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; max-width: calc(100% - 20px);
+  padding: 6px 6px 6px 14px; border-radius: 999px;
+  background: rgba(20, 20, 20, .85); box-shadow: 0 2px 12px rgba(0, 0, 0, .4);
+  color: var(--warning); font-size: 13px; white-space: nowrap;
+}
+.mode-banner span { overflow: hidden; text-overflow: ellipsis; }
+.mode-banner .btn { height: 28px; padding: 0 14px; border-radius: 999px; }
+.mode-banner[hidden] { display: none; }
+/* Under the banner while it shows. */
+.workspace:has(.mode-banner:not([hidden])) .histogram-overlay { top: 54px; }
+/* Cropping on a phone: the photo is placed under the fixed frame (app.js
+   applyReframeView), the preview doesn't scroll. */
+#viewport.reframing { overflow: hidden; }
+#viewport.reframing #stage { position: absolute; margin: 0; }
 #preview, #overlay { position: absolute; left: 0; top: 0; display: block; }
 #overlay { pointer-events: none; }
 #stage.crop-active #overlay { pointer-events: auto; cursor: move; }
 #stage.move-active #preview { cursor: grab; }
+/* A drag moves or stretches the layer: it mustn't also scroll the zoomed
+   preview (a pinch still zooms, app.js). */
+#stage.move-active #preview, #stage.stretch-active #preview { touch-action: none; }
 
 #placeholder {
   position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -304,6 +336,8 @@ body.focus .topbar, body.focus #panel { display: none; }
 }
 #placeholder[hidden] { display: none; }
 .placeholder-title { color: var(--text); font-size: 18px; margin: 0 0 6px; }
+.placeholder-or { margin: 0 0 8px; }
+#import-button { margin-bottom: 4px; }
 
 /* Status bar */
 .spinner {
@@ -440,56 +474,154 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
 
 /* Last, so these visibility rules win over the dialogs' own display. */
 /* Phone-only controls: the tool tabs, the import button, the GitHub button. */
-.tool-tabs, .phone-only, .phone-only-row, .phone-inline, #github-button { display: none; }
+.tool-tabs, .phone-only, .phone-only-row, .phone-inline, .histogram-overlay, .tour-step.phone-step { display: none; }
 .btn.square { width: 30px; padding: 0; }
 
-/* Narrow screens: the preview on top, pinned while the tools scroll below it.
-   Fixed height (svh: the browser bars don't resize it while scrolling). */
+/* Narrow screens: the top bar and the preview stay put, only the tools
+   scroll, below them (the page itself never scrolls). */
 @media (max-width: 760px) {
-  body { overflow: auto; }
-  main { flex-direction: column; flex: none; }
-  #panel { order: 1; width: 100%; border-right: none; border-top: 1px solid var(--line); overflow: visible; }
-  .workspace {
-    position: sticky; top: 0; z-index: 5; flex: none;
-    height: 48vh; height: 48svh; background: var(--window);
+  body { height: 100%; height: 100svh; overflow: hidden; }
+  main { flex-direction: column; flex: 1; min-height: 0; }
+  #panel {
+    order: 1; flex: 1; min-height: 0; width: 100%; border-right: none;
+    overflow-y: auto; overscroll-behavior: contain;
   }
-  body.focus .workspace { height: 100vh; height: 100svh; }
+  .workspace { position: relative; flex: none; height: 48vh; height: 48svh; background: var(--window); }
+  /* Full screen, or every tool hidden (the active tab tapped again): the
+     preview takes all the room. */
+  body.focus .workspace, .tools-hidden .workspace { flex: 1; height: auto; }
+  .tools-hidden #panel { flex: none; }
 
-  /* One tool at a time, picked with folder tabs as the channel tabs; the
-     Histogram stays under the tabs for Trichrome Process and Curves. */
-  .tool-tabs { display: flex; margin: 0; }
-  .tool-tab {
-    display: flex; justify-content: center; padding: 10px 0; color: var(--text);
-    border-bottom: 1px solid var(--line);
+  /* The histogram floats over the top-left of the preview. */
+  .phone-histogram .histogram-overlay {
+    display: block; position: absolute; top: 8px; left: 8px; z-index: 2;
+    width: 50%; height: 80px; border-radius: 6px; pointer-events: none;
   }
-  .tool-tab.active {
-    background: var(--block); border: 1px solid var(--line); border-bottom-color: transparent;
+
+  /* One tool at a time, so no block frames: the shown tool sits straight
+     on the panel. The tool tabs are a bar fixed at the bottom of the screen
+     (above the home bar), always in reach; the active one is in the accent
+     color. Tapping it again hides every tool (app.js showTool). The body's
+     bottom padding keeps the last controls clear of the bar. */
+  :root { --tabbar-height: 52px; }
+  body { padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom)); }
+  body.focus { padding-bottom: env(safe-area-inset-bottom); }
+  #panel { padding: 0; border-top: none; }
+  /* A short tool: the panel's color runs down to the tab bar. */
+  body { background: var(--panel); }
+  /* A plain bar: grey icons, the active one in the accent color, a short
+     line between two icons. */
+  .tool-tabs {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; margin: 0;
+    height: calc(var(--tabbar-height) + env(safe-area-inset-bottom));
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: var(--panel); border-top: 1px solid var(--line);
   }
-  .tool-tab .icon { width: 24px; height: 24px; }
+  .tool-tab, .tool-bar-toggle {
+    position: relative; display: flex; align-items: center; justify-content: center; padding: 0;
+    color: var(--muted); background: transparent; border-radius: 0 !important;
+    box-shadow: none !important; opacity: 1;
+  }
+  /* Five equal slots, so the icons sit evenly (the histogram switch, left
+     of the tools, included). */
+  .tool-tab, .tool-bar-toggle { flex: 1 1 0; min-width: 0; height: 100%; margin: 0; }
+  .tool-bar-toggle { border: none; cursor: pointer; font: inherit; }
+  .tool-bar-toggle.on { color: var(--accent); }
+  .tool-bar-toggle .icon { width: 22px; height: 22px; }
+  #tool-tabs > * + *::before {
+    content: ""; position: absolute; left: 0; top: 30%; bottom: 30%; width: 1px; background: var(--line);
+  }
+  .tool-tab.active { color: var(--accent); background: transparent; }
+  .tool-tab .icon { width: 22px; height: 22px; }
   #panel > .block:not(.tool-current) { display: none; }
-  #panel > .block.tool-first { border-top: none; border-radius: 0 0 8px 8px; }
-  #panel > .block { margin-bottom: 0; border-radius: 0; border-top: none; }
-  #panel > .block.tool-last { border-radius: 0 0 8px 8px; }
-  #panel > .block.tool-first:not(.tool-last) { border-radius: 0; }
+  #panel > .block { margin: 0; background: none; border: none; border-radius: 0; }
+  #panel .block-title { padding: 12px 16px 4px; }
+  #panel .block-body { padding: 0 16px 16px; }
   /* Always open: the tab is the only way to show or hide a tool. */
   #panel .block-title { cursor: default; }
   #panel .block-title::before { display: none; }
 
   .phone-only { display: inline-flex; }
+  .badge { display: none; }
+  .brand { gap: 4px; }
+  .brand-logo { margin-right: 6px; }
+  .tour-github { justify-content: center; margin-top: 16px; }
+
+  /* Files and Trichrome Process: no title row (the tab names the tool; the
+     logo starts over; Process's Reset moves to the Show Layer line). */
+  .block[data-tool="files"] .block-title, .block[data-tool="process"] .block-title,
+  .block[data-tool="crop"] .block-title { display: none; }
+  .block[data-tool="files"] .block-body, .block[data-tool="process"] .block-body,
+  .block[data-tool="crop"] .block-body { padding-top: 16px; }
+  #show-layer-row > .summary-tools { margin-left: auto; }
+
+  /* Curves, as in Lightroom: the editor over the photo, transparent and as
+     large as the preview (app.js placeCropControls, sizeCurveOverlay); the
+     tool is one line (Y / R / G / B, Negative, Reset), the preview takes
+     the rest. */
+  .block[data-tool="curves"] .block-title > span:first-of-type { display: none; }
+  .block[data-tool="curves"] .block-title { padding: 12px 16px; }
+  .block[data-tool="curves"] .block-title > .curve-channels { margin: 0 auto 0 0; }
+  .block[data-tool="curves"] .block-body { display: none; }
+  .workspace > #curve-editor {
+    position: absolute; left: 50%; top: 50%; z-index: 4; transform: translate(-50%, -50%);
+  }
+  html:not([data-tool="curves"]) .workspace > #curve-editor { display: none; }
+  html[data-tool="curves"] .workspace { flex: 1; height: auto; }
+  html[data-tool="curves"] #panel { flex: none; }
+
+  /* Files: the three channels first, the mode (Classic / Color) below. */
+  .block[data-tool="files"] .block-body { display: flex; flex-direction: column; }
+  .block[data-tool="files"] .block-body > .row { order: 1; margin-top: 10px; }
+
+  /* Crop in three lines, no labels: Straighten (its value only) / ratio,
+     invert, Reset / rotate, mirror (app.js placeCropControls). */
+  .block[data-tool="crop"] .block-body { display: flex; flex-direction: column; }
+  #sliders-straighten { order: -1; margin-bottom: 4px; }
+  #sliders-straighten .slider-head > span:first-child { display: none; }
+  #sliders-straighten .slider-head .value { margin-left: auto; }
+  #ratio-row { gap: 4px; }
+  #ratio-row > .summary-tools { margin-left: auto; }
+  #transform-row { gap: 4px; justify-content: center; }
+
+  /* No preview bar: its buttons are gestures or in the top bar, and its
+     messages float over the bottom of the photo, only while there is one. */
+  .preview-bar {
+    position: absolute; left: 0; right: 0; bottom: 10px; z-index: 3; display: flex;
+    justify-content: center; padding: 0 16px; border: none; pointer-events: none;
+  }
+  .preview-bar .bar-group { display: none; }
+  .bar-status {
+    max-width: 100%; padding: 6px 12px; border-radius: 999px;
+    background: rgba(20, 20, 20, .78); box-shadow: 0 2px 10px rgba(0, 0, 0, .35);
+  }
   .phone-only-row { display: flex; }
   .phone-inline { display: inline; }
+  .tour-step.phone-step { display: flex; }
+  /* One gesture a line: centered, not justified. */
+  .tour-gestures { text-align: center; text-align-last: center; }
   /* The browser leaves pinch and double tap to the page (app.js zooms the
      preview with them) but still scrolls a zoomed-in photo with one finger. */
   #viewport { touch-action: pan-x pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  /* Cropping: a drag reframes the photo (app.js), it doesn't scroll. */
+  #stage.crop-active #overlay, #viewport.reframing { touch-action: none; }
   /* Mirror's label sets the width of Rotate's, so the buttons line up. */
   .block[data-tool="crop"] .row .label { min-width: 52px; }
   .desktop-only, #get-app-button { display: none; }
-  #github-button { display: inline-flex; }
+  .brand-logo img { width: 36px; height: 36px; }
+  /* Export: the icon alone, in a square like the buttons beside it. */
+  #export-button { width: 36px; padding: 0; }
+  #export-button .btn-label { display: none; }
+  #export-button .icon { width: 18px; height: 18px; }
   #import-button { height: 40px; padding: 0 18px; margin-bottom: 4px; font-size: 15px; }
   #import-button .icon { width: 18px; height: 18px; }
 
-  /* Larger text and touch targets. */
+  /* No double-tap zoom on the page (iOS ignores user-scalable=no); the
+     preview handles its own double tap. */
+  html { touch-action: pan-x pan-y; } /* "manipulation" would still allow a pinch */
+  /* Larger text and touch targets. 16px fields: iOS zooms into smaller ones. */
   body { font-size: 15px; }
+  input[type=text], input[type=number] { font-size: 16px; }
   .slider-head, .hint, .note, .info .bubble, .bar-status { font-size: 13px; }
   .lock-label, .channel-file .file-size { font-size: 12px; }
   .slider { margin: 6px 0 12px; }
@@ -510,7 +642,11 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
   .tab { padding: 9px 0; }
   .dropdown-button { height: 36px; }
   .dropdown-item { padding: 9px 14px 9px 30px; }
-  .channel-file { min-height: 46px; }
+  .channel-file { min-height: 46px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  /* Held for a swap: lifted above the other rows while it follows the finger. */
+  .channel-file.touch-dragging { position: relative; z-index: 3; background: var(--block); box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
+  .saved-file { word-break: break-all; }
+  .saved-buttons .btn { flex: 1; }
   .channel-dot { width: 13px; height: 13px; }
   .check input { width: 18px; height: 18px; }
   .info { width: 22px; height: 22px; font-size: 13px; }

@@ -50,7 +50,10 @@ const ready = (async () => {
     "sys.path.insert(0, '/app')\n" +
     "sys.modules.setdefault('rawpy', types.ModuleType('rawpy'))\n");
   engine = pyodide.pyimport("engine");
-  self.postMessage({ type: "ready", ms: Math.round(performance.now() - start) });
+  // Every file this load used (Pyodide and its packages among them), for
+  // app.js to hand to the service worker: see sw.js.
+  const urls = performance.getEntriesByType("resource").map((entry) => entry.name);
+  self.postMessage({ type: "ready", ms: Math.round(performance.now() - start), urls });
 })();
 
 ready.catch((err) => self.postMessage({ type: "fatal", error: String(err && err.message || err) }));

@@ -128,6 +128,7 @@ worker.onmessage = (event) => {
     setActivity("engine", message.text, true);
   } else if (message.type === "ready") {
     app.engineReady = true;
+    storeForOffline(message.urls || []);
     setActivity("engine", null);
     syncAll();
   } else if (message.type === "fatal") {
@@ -149,6 +150,51 @@ worker.onerror = (event) => {
   setActivity("engine",
     `The engine couldn't start (${reason}). Check your connection and reload the page.`);
 };
+
+// ---------------------------------------------------------------------------
+// Installable app: the service worker (sw.js) keeps the files on the device.
+// It needs https (or localhost), so it's skipped on a plain http address,
+// such as serve.sh --lan.
+// ---------------------------------------------------------------------------
+
+// Not on a local network address (serve.sh --lan, a self-signed
+// certificate): the worker can fail to reach the server there and would
+// keep serving its stored copy, so a test would never show the latest
+// files. Any worker and copy stored there before are removed.
+const LAN_TEST = /^(\d{1,3}\.){3}\d{1,3}$|\.local$/.test(location.hostname) && location.hostname !== "127.0.0.1";
+if (LAN_TEST && "serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistrations()
+    .then((registrations) => registrations.forEach((r) => r.unregister())).catch(() => {});
+  if (window.caches) caches.keys().then((keys) => keys.forEach((k) => caches.delete(k))).catch(() => {});
+}
+const swReady = window.isSecureContext && "serviceWorker" in navigator && !LAN_TEST
+  ? navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.ready).catch(() => null)
+  : Promise.resolve(null);
+
+// The first visit loads before the service worker controls the page: hand
+// it every URL this visit used, the engine worker's included, to store.
+async function storeForOffline(workerUrls) {
+  const registration = await swReady;
+  if (!registration || !registration.active) return;
+  const pageUrls = performance.getEntriesByType("resource").map((entry) => entry.name);
+  registration.active.postMessage({ type: "store", urls: [location.href, ...pageUrls, ...workerUrls] });
+}
+
+// Reloading or closing the tab drops the photos and every edit (nothing is
+// saved): ask first while photos are loaded. Current browsers show their own
+// wording and ignore this text; iPhone Safari and an app swiped away from
+// the app switcher don't ask at all.
+const LEAVE_WARNING = "Any changes you've made will be lost.";
+window.addEventListener("beforeunload", (event) => {
+  if (!anyLoaded()) return;
+  event.preventDefault();
+  event.returnValue = LEAVE_WARNING; // older Safari and Chrome need it set
+  return LEAVE_WARNING;
+});
+
+// Opened from the home screen (installed app).
+const STANDALONE = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+document.documentElement.classList.toggle("standalone", STANDALONE);
 
 function callWorker(cmd, args = {}, transfer = []) {
   return new Promise((resolve, reject) => {
@@ -305,13 +351,32 @@ function makeSlider(container, spec, group, target) {
     requestRender();
   });
   input.addEventListener("change", () => { endEdit(); syncResetButtons(); });
-  root.addEventListener("dblclick", () => {
+  const reset = () => {
+    if (input.disabled) return;
     beginEdit();
     target()[field] = def;
     sync();
     requestRender();
     endEdit();
     syncResetButtons();
+  };
+  root.addEventListener("dblclick", reset);
+  // Touch screens send no dblclick: two quick taps in place reset it too.
+  let tapStart = null;
+  let lastTap = 0;
+  root.addEventListener("touchstart", (event) => {
+    const t = event.touches[0];
+    tapStart = event.touches.length === 1 ? { x: t.clientX, y: t.clientY } : null;
+  }, { passive: true });
+  root.addEventListener("touchend", (event) => {
+    const t = event.changedTouches[0];
+    if (!tapStart || Math.hypot(t.clientX - tapStart.x, t.clientY - tapStart.y) > 10) { lastTap = 0; return; }
+    if (event.timeStamp - lastTap < DOUBLE_TAP_MS) {
+      lastTap = 0;
+      reset();
+    } else {
+      lastTap = event.timeStamp;
+    }
   });
 
   function sync() {
@@ -400,6 +465,7 @@ function buildFileRows() {
       const file = event.dataTransfer.files[0];
       if (file) loadChannel(index, file);
     });
+    buildTouchSwap(row, index);
     slot.append(row);
     container.append(slot);
   });
@@ -409,6 +475,67 @@ function buildFileRows() {
     event.target.value = "";
     if (file) loadChannel(app.pickIndex, file);
   });
+}
+
+const COARSE_POINTER = matchMedia("(pointer: coarse)");
+const SWAP_HOLD_MS = 400;
+
+// Touch: press and hold a loaded row, then drag it onto another row to swap
+// the two photos (a mouse drags the grip instead). Moving before the hold
+// fires is a scroll and cancels it.
+function buildTouchSwap(row, index) {
+  let timer = null;
+  let start = null;
+  let dragging = false;
+  let target = null;
+  const clearTargets = () => document.querySelectorAll(".channel-file.swap-target")
+    .forEach((r) => r.classList.remove("swap-target"));
+  const reset = () => {
+    clearTimeout(timer);
+    timer = null;
+    dragging = false;
+    target = null;
+    row.classList.remove("dragging", "touch-dragging");
+    row.style.transform = "";
+    clearTargets();
+  };
+  row.addEventListener("touchstart", (event) => {
+    if (event.touches.length !== 1 || !app.files[index] || event.target.closest(".remove")) return;
+    const t = event.touches[0];
+    start = { x: t.clientX, y: t.clientY };
+    timer = setTimeout(() => {
+      timer = null;
+      dragging = true;
+      row.classList.add("dragging", "touch-dragging");
+      navigator.vibrate?.(10);
+    }, SWAP_HOLD_MS);
+  }, { passive: true });
+  row.addEventListener("touchmove", (event) => {
+    const t = event.touches[0];
+    if (!dragging) {
+      if (timer && Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) reset();
+      return;
+    }
+    event.preventDefault(); // no scrolling while a row is held
+    row.style.transform = `translateY(${t.clientY - start.y}px)`;
+    // The row follows the finger, so look under it, not at it.
+    row.style.visibility = "hidden";
+    const under = document.elementFromPoint(t.clientX, t.clientY)?.closest(".channel-file");
+    row.style.visibility = "";
+    target = under && under !== row ? under : null;
+    clearTargets();
+    target?.classList.add("swap-target");
+  }, { passive: false });
+  row.addEventListener("touchend", (event) => {
+    if (!dragging) { reset(); return; }
+    event.preventDefault(); // no click: it would open the file picker
+    const to = target ? Number(target.dataset.index) : null;
+    reset();
+    if (to !== null) swapChannels(index, to);
+  });
+  row.addEventListener("touchcancel", reset);
+  // No text selection or callout menu on the long press.
+  row.addEventListener("contextmenu", (event) => { if (COARSE_POINTER.matches) event.preventDefault(); });
 }
 
 function syncFileRows() {
@@ -422,7 +549,9 @@ function syncFileRows() {
     name.title = file ? file.name : "";
     row.querySelector(".file-size").textContent = file ? `${file.width}×${file.height}` : "";
     row.querySelector(".remove").hidden = !file;
-    row.draggable = !!file;
+    // Touch screens swap with a press and hold instead (buildTouchSwap):
+    // iOS would otherwise start its own drag on the same press.
+    row.draggable = !!file && !COARSE_POINTER.matches;
   });
 }
 
@@ -552,9 +681,12 @@ function loadDroppedFiles(fileList) {
 }
 
 async function startOver() {
-  if (anyLoaded() && !confirm("Remove the 3 photos and reset every setting?")) return;
+  if (anyLoaded() && !confirm(`Remove the 3 photos and reset every setting?\n${LEAVE_WARNING}`)) return;
   if (app.cropActive) exitCrop();
-  await Promise.all([0, 1, 2].map((index) => callWorker("clear", { index })));
+  // Sent first, so the engine drops the photos before the next render, but
+  // not awaited: the page clears at once even while the engine is busy
+  // (Auto Align).
+  const cleared = Promise.all([0, 1, 2].map((index) => callWorker("clear", { index })));
   app.files = [null, null, null];
   app.doc = newDoc();
   app.undo = [];
@@ -563,8 +695,11 @@ async function startOver() {
   app.moveOnCanvas = false;
   app.compare = false;
   app.solo = null;
+  showPlaceholder(true);
+  drawHistogram(null);
   syncAll();
   requestRender();
+  await cleared;
 }
 
 async function changeMode(color) {
@@ -718,6 +853,14 @@ function sameValue(a, b) {
 function canReset(section) {
   const defaults = resetDefaults(section);
   if (section === "position" && app.tab === app.doc.ref) return false;
+  // Cropping: a frame moved or resized counts as soon as it's drawn, before
+  // it's applied.
+  if (section === "crop" && app.cropActive && app.cropDraft) {
+    const d = app.cropDraft;
+    const eps = 1e-6;
+    if (Math.abs(d.x) > eps || Math.abs(d.y) > eps
+      || Math.abs(d.width - 1) > eps || Math.abs(d.height - 1) > eps) return true;
+  }
   return resetTargets(section).some((target) =>
     RESET_FIELDS[section].some((field) => !sameValue(target[field], defaults[field])));
 }
@@ -734,7 +877,12 @@ function buildResetButtons() {
           for (const field of RESET_FIELDS[section]) target[field] = defaults[field];
         }
       });
-      if (section === "crop" && app.cropActive) app.cropDraft = cropRectOf(app.doc.crop);
+      if (section === "crop" && app.cropActive) {
+        app.cropDraft = cropRectOf(app.doc.crop);
+        if (isReframing()) settleReframe(0);
+        else drawOverlay();
+        syncResetButtons();
+      }
     });
   });
 }
@@ -757,11 +905,11 @@ function cropRectOf(crop) {
 function cropRatio() {
   const { ratio, portrait } = app.doc.crop;
   if (ratio === "free" || !app.frame) return null;
-  if (ratio === "original") return app.frame.w / app.frame.h;
+  if (ratio === "original") return portrait ? app.frame.h / app.frame.w : app.frame.w / app.frame.h;
   if (ratio === "custom") {
     const { custom_w: w, custom_h: h } = app.doc.crop;
-    const r = w > 0 && h > 0 ? w / h : 1;
-    return portrait ? 1 / r : r;
+    // Exactly the two numbers: inverting swaps them (see #orientation).
+    return w > 0 && h > 0 ? w / h : 1;
   }
   const [a, b] = ratio.split(":").map(Number);
   // A preset follows the frame's orientation unless inverted.
@@ -787,6 +935,9 @@ function enterCrop() {
   app.stretch = false;
   app.cropDraft = cropRectOf(app.doc.crop);
   syncAll();
+  // Phones: frame the crop now if the preview already shows the full frame
+  // (the render below refits it otherwise).
+  if (isReframing()) fitViewToDraft();
   requestRender();
 }
 
@@ -799,6 +950,7 @@ function commitCrop() {
 function exitCrop() {
   app.cropActive = false;
   app.cropDraft = null;
+  endReframe();
   syncAll();
   requestRender();
 }
@@ -822,18 +974,49 @@ function buildFramingControls() {
     });
   }
   $("#orientation").addEventListener("click", () => {
-    edit(() => { app.doc.crop.portrait = !app.doc.crop.portrait; });
+    if (app.doc.crop.ratio === "free") {
+      invertFreeCrop();
+      return;
+    }
+    edit(() => {
+      const crop = app.doc.crop;
+      // Custom: swap the two numbers, so the fields show the ratio in use.
+      if (crop.ratio === "custom") {
+        [crop.custom_w, crop.custom_h] = [crop.custom_h ?? 1, crop.custom_w ?? 1];
+        crop.portrait = false;
+      } else {
+        crop.portrait = !crop.portrait;
+      }
+    });
     applyRatioToDraft();
   });
   $("#mirror-h").addEventListener("click", () => edit(() => { app.doc.crop.mirror_h = !app.doc.crop.mirror_h; }));
   $("#mirror-v").addEventListener("click", () => edit(() => { app.doc.crop.mirror_v = !app.doc.crop.mirror_v; }));
 }
 
+// Free has no ratio to invert: the crop rectangle itself turns a quarter,
+// around its middle, scaled down if it no longer fits the frame.
+function invertFreeCrop() {
+  if (!anyLoaded()) return;
+  if (!app.cropActive) enterCrop();
+  if (!app.cropDraft || !app.frame) return;
+  const r = draftRectPx();
+  const { w: fw, h: fh } = app.frame;
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  const fit = Math.min(1, fw / r.h, fh / r.w);
+  const w = r.h * fit, h = r.w * fit;
+  setDraftFromPx(clampedDraft(cx - w / 2, cy - h / 2, w, h));
+  if (isReframing()) settleReframe(0);
+  else drawOverlay();
+}
+
 function applyRatioToDraft() {
   if (!anyLoaded()) return;
   if (!app.cropActive) enterCrop();
   if (app.doc.crop.ratio !== "free") app.cropDraft = centeredRatioRect();
-  drawOverlay();
+  syncResetButtons();
+  if (isReframing()) fitViewToDraft();
+  else drawOverlay();
 }
 
 // ---------------------------------------------------------------------------
@@ -861,7 +1044,8 @@ async function pumpRender() {
     renderBusy = true;
     try {
       const result = await callWorker("render", { state: engineState(app.cropActive) });
-      if (result) {
+      // Not if the photos were removed meanwhile (start over).
+      if (result && anyLoaded()) {
         drawPreview(result);
       }
     } catch (err) {
@@ -890,7 +1074,8 @@ function drawPreview(result) {
   drawHistogram(result.hist);
   curveUI.histograms = result.hist_pre;
   drawCurveEditor();
-  layoutStage();
+  if (isReframing()) fitViewToDraft();
+  else layoutStage();
 }
 
 function fitScale() {
@@ -967,7 +1152,14 @@ function toggleFullscreen() {
   if (entering) document.documentElement.requestFullscreen?.().catch(() => {});
   else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   syncFullscreenButton();
-  requestAnimationFrame(() => { if (app.zoom === null) layoutStage(); });
+  requestAnimationFrame(refitPreview);
+}
+
+// After the preview changed size (full screen, tools hidden, window): a
+// fit view refits, and cropping on a phone re-centers the frame.
+function refitPreview() {
+  if (isReframing()) fitViewToDraft();
+  else if (app.zoom === null) layoutStage();
 }
 
 function syncFullscreenButton() {
@@ -990,7 +1182,7 @@ function buildViewControls() {
     if (!document.fullscreenElement && document.body.classList.contains("focus")) {
       document.body.classList.remove("focus");
       syncFullscreenButton();
-      requestAnimationFrame(() => { if (app.zoom === null) layoutStage(); });
+      requestAnimationFrame(refitPreview);
     }
   });
 }
@@ -1009,6 +1201,30 @@ function zoomAt(zoom, clientX, clientY) {
   const newScale = displayScale();
   viewport.scrollLeft += after.left + ix * newScale - clientX;
   viewport.scrollTop += after.top + iy * newScale - clientY;
+}
+
+// A quick zoom (double tap): the scale eases toward the target on a log
+// scale, around the tapped point; null ends on Fit, centered.
+let zoomAnimation = null;
+
+function animateZoom(target, clientX, clientY) {
+  cancelAnimationFrame(zoomAnimation);
+  const from = displayScale();
+  const to = target ?? fitScale();
+  const start = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / 180);
+    const e = 1 - (1 - t) ** 3; // ease out
+    if (t < 1) {
+      zoomAt(from * (to / from) ** e, clientX, clientY);
+      zoomAnimation = requestAnimationFrame(step);
+    } else {
+      zoomAnimation = null;
+      if (target === null) setZoom(null);
+      else zoomAt(target, clientX, clientY);
+    }
+  };
+  zoomAnimation = requestAnimationFrame(step);
 }
 
 function zoomAtCenter(zoom) {
@@ -1069,16 +1285,32 @@ function buildPinchZoom() {
   };
   viewport.addEventListener("touchstart", (event) => {
     cancelHold();
-    if (event.touches.length === 2 && app.image) {
+    if (event.touches.length === 2 && isReframing()) {
+      // Cropping on a phone: the pinch resizes the crop rectangle around
+      // the point between the fingers, the view follows (fitViewToDraft).
+      cancelReframeAnimation();
+      cropDrag = null;
+      const [mx, my] = midpoint(event.touches);
+      const bounds = $("#overlay").getBoundingClientRect();
+      const scale = displayScale();
+      touchPinch = {
+        reframe: true, distance: spread(event.touches), rect: draftRectPx(),
+        mid: { x: (mx - bounds.left) / scale, y: (my - bounds.top) / scale },
+      };
+      tap = null;
+      endHold();
+    } else if (event.touches.length === 2 && app.image) {
+      cancelAnimationFrame(zoomAnimation); // a pinch takes over a double-tap zoom
       touchPinch = { distance: spread(event.touches), scale: displayScale() };
       tap = null;
       endHold();
     } else if (event.touches.length === 1) {
       const t = event.touches[0];
       tap = { x: t.clientX, y: t.clientY, time: event.timeStamp };
-      // Not while cropping (the press may start a frame drag), nor when
+      // Not while cropping, moving or stretching (the press starts a drag
+      // there: holding still before it moves would show the original), nor when
       // Compare is already on from its button.
-      if (app.image && !app.cropActive && !app.compare) {
+      if (app.image && !app.cropActive && !app.compare && !app.moveOnCanvas && !app.stretch) {
         holdTimer = setTimeout(() => {
           holdTimer = null;
           holdCompare = true;
@@ -1101,24 +1333,59 @@ function buildPinchZoom() {
     }
     if (!touchPinch || event.touches.length !== 2) return;
     event.preventDefault();
+    if (touchPinch.reframe) {
+      if (!isReframing()) return;
+      const { rect, mid, distance } = touchPinch;
+      // Fingers apart: a smaller rectangle (the photo zooms in).
+      let f = distance / spread(event.touches);
+      f = Math.max(f, 32 / Math.min(rect.w, rect.h)); // not smaller than 32 px
+      f = Math.min(f, app.frame.w / rect.w, app.frame.h / rect.h); // nor than the frame
+      const w = rect.w * f, h = rect.h * f;
+      setDraftFromPx(clampedDraft(
+        mid.x - ((mid.x - rect.x) / rect.w) * w, mid.y - ((mid.y - rect.y) / rect.h) * h, w, h));
+      fitViewToDraft();
+      return;
+    }
     const [x, y] = midpoint(event.touches);
     zoomAt(touchPinch.scale * spread(event.touches) / touchPinch.distance, x, y);
   }, { passive: false });
   viewport.addEventListener("touchend", (event) => {
-    if (event.touches.length < 2) touchPinch = null;
+    if (event.touches.length < 2 && touchPinch) {
+      const reframed = touchPinch.reframe;
+      touchPinch = null;
+      if (reframed) drawOverlay(); // the thirds go
+    }
     if (!event.touches.length) endHold();
     if (!tap || event.touches.length) return;
     const isDouble = lastTap && tap.time - lastTap.time < DOUBLE_TAP_MS
       && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) < DOUBLE_TAP_DIST;
     lastTap = isDouble ? null : tap;
-    if (isDouble && app.image) {
+    clearTimeout(singleTapTimer);
+    if (isDouble && app.image && !isReframing()) {
       event.preventDefault();
-      if (app.zoom === null) zoomAt(1, tap.x, tap.y);
-      else setZoom(null);
+      if (app.zoom === null) animateZoom(1, tap.x, tap.y);
+      else animateZoom(null, tap.x, tap.y);
+    } else if (!isDouble && singleTapTogglesFullscreen(event)) {
+      // Waits out a possible second tap, which zooms instead.
+      singleTapTimer = setTimeout(toggleFullscreen, DOUBLE_TAP_MS);
     }
     tap = null;
   });
   viewport.addEventListener("touchcancel", () => { touchPinch = null; tap = null; endHold(); });
+  // Outside the preview, a pinch never zooms the page (some browsers ignore
+  // user-scalable=no and the CSS touch-action).
+  document.addEventListener("touchmove", (event) => {
+    if (event.touches.length > 1 && !viewport.contains(event.target)) event.preventDefault();
+  }, { passive: false });
+  // Phones: one tap on the photo enters or leaves full screen. Not while a
+  // tap means something else on the preview (crop frame, Move or Stretch on
+  // Canvas), nor on a button (Import, on the empty preview).
+  let singleTapTimer = null;
+  // Cropping on a phone, a tap (a drag that didn't move) is free: full
+  // screen there too.
+  const singleTapTogglesFullscreen = (event) => PHONE_QUERY.matches && app.image
+    && (!app.cropActive || isReframing()) && !app.moveOnCanvas && !app.stretch
+    && !event.target.closest("button");
   // No text-selection loupe or image menu on a long press.
   viewport.addEventListener("contextmenu", (event) => {
     if (holdCompare || holdTimer) event.preventDefault();
@@ -1133,7 +1400,11 @@ function buildZoomControls() {
   $("#zoom-out").addEventListener("click", () => zoomAtCenter(displayScale() / 1.25));
   $("#zoom-fit").addEventListener("click", () => setZoom(null));
   $("#zoom-100").addEventListener("click", () => setZoom(1));
-  window.addEventListener("resize", () => { if (app.zoom === null) layoutStage(); drawHistogram(lastHistogram); });
+  window.addEventListener("resize", () => {
+    if (isReframing()) fitViewToDraft();
+    else if (app.zoom === null) layoutStage();
+    drawHistogram(lastHistogram);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1152,6 +1423,115 @@ function draftRectPx() {
 function setDraftFromPx(rect) {
   const { w, h } = app.frame;
   app.cropDraft = { x: rect.x / w, y: rect.y / h, width: rect.w / w, height: rect.h / h };
+  syncResetButtons();
+}
+
+// Phones: cropping reframes the photo under a fixed frame, as in a phone's
+// Photos app. The view is kept zoomed and scrolled so the crop rectangle
+// fills the preview; a pinch makes the rectangle smaller or larger (the
+// photo zooms in or out), a drag moves it the other way (the photo follows
+// the finger), and its corners still resize it. Wide margins around the
+// stage let any part of the photo reach the middle of the preview.
+const REFRAME_PAD = 20;
+
+function isReframing() {
+  return PHONE_QUERY.matches && app.cropActive && !!app.cropDraft && !!app.image && !!app.frame
+    && app.image.w === app.frame.w && app.image.h === app.frame.h;
+}
+
+// The view that frames the crop rectangle: its zoom, and the frame point
+// (cx, cy) at the middle of the preview.
+function reframeTarget() {
+  const viewport = $("#viewport");
+  const r = draftRectPx();
+  const zoom = Math.min(8, Math.max(0.01, Math.min(
+    (viewport.clientWidth - 2 * REFRAME_PAD) / r.w, (viewport.clientHeight - 2 * REFRAME_PAD) / r.h)));
+  return { zoom, cx: r.x + r.w / 2, cy: r.y + r.h / 2 };
+}
+
+// The stage is placed (not scrolled: Safari won't scroll into the room
+// after the content, so the frame ended off-center) with the frame point
+// (cx, cy) at the middle of the preview.
+function applyReframeView(zoom, cx, cy) {
+  const viewport = $("#viewport");
+  const stage = $("#stage");
+  viewport.classList.add("reframing");
+  viewport.scrollLeft = viewport.scrollTop = 0;
+  app.zoom = zoom;
+  layoutStage();
+  stage.style.left = `${viewport.clientWidth / 2 - cx * zoom}px`;
+  stage.style.top = `${viewport.clientHeight / 2 - cy * zoom}px`;
+}
+
+// The frame point now at the middle of the preview.
+function reframeCenter() {
+  const viewport = $("#viewport");
+  const stage = $("#stage");
+  return {
+    cx: (viewport.clientWidth / 2 - parseFloat(stage.style.left || 0)) / app.zoom,
+    cy: (viewport.clientHeight / 2 - parseFloat(stage.style.top || 0)) / app.zoom,
+  };
+}
+
+let reframeAnimation = null;
+let reframeSettle = null;
+
+function cancelReframeAnimation() {
+  clearTimeout(reframeSettle);
+  cancelAnimationFrame(reframeAnimation);
+  reframeSettle = reframeAnimation = null;
+}
+
+function fitViewToDraft() {
+  cancelReframeAnimation();
+  const t = reframeTarget();
+  applyReframeView(t.zoom, t.cx, t.cy);
+}
+
+// As a phone's Photos app: after a frame resize, a short pause, then the
+// frame glides back to the middle and the photo zooms to fill it; after a
+// drag past the photo's edge, it springs back at once.
+function settleReframe(delay) {
+  cancelReframeAnimation();
+  reframeSettle = setTimeout(() => {
+    if (!isReframing()) return;
+    const from = { zoom: app.zoom, ...reframeCenter() };
+    const to = reframeTarget();
+    const start = performance.now();
+    const step = (now) => {
+      if (!isReframing()) return;
+      const t = Math.min(1, (now - start) / 280);
+      const e = 1 - (1 - t) ** 3; // ease out
+      // Zoom moves on a log scale, so the change feels even.
+      const zoom = from.zoom * (to.zoom / from.zoom) ** e;
+      applyReframeView(zoom, from.cx + (to.cx - from.cx) * e, from.cy + (to.cy - from.cy) * e);
+      reframeAnimation = t < 1 ? requestAnimationFrame(step) : null;
+    };
+    reframeAnimation = requestAnimationFrame(step);
+  }, delay);
+}
+
+// Past the photo's edge, a drag goes on with resistance (rubber band).
+function rubberBand(overshoot, size) {
+  const k = 0.55;
+  return (1 - 1 / ((Math.abs(overshoot) * k) / size + 1)) * size * Math.sign(overshoot);
+}
+
+function endReframe() {
+  cancelReframeAnimation();
+  const viewport = $("#viewport");
+  if (!viewport.classList.contains("reframing")) return;
+  viewport.classList.remove("reframing");
+  const stage = $("#stage");
+  stage.style.left = stage.style.top = "";
+  app.zoom = null;
+  layoutStage();
+}
+
+// Move the crop rectangle (frame pixels), kept inside the frame.
+function clampedDraft(x, y, w, h) {
+  const { w: fw, h: fh } = app.frame;
+  return { x: Math.min(fw - w, Math.max(0, x)), y: Math.min(fh - h, Math.max(0, y)), w, h };
 }
 
 function drawOverlay() {
@@ -1178,14 +1558,18 @@ function drawOverlay() {
   ctx.rect(x, y, w, h);
   ctx.fill("evenodd");
 
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (const t of [1 / 3, 2 / 3]) {
-    ctx.moveTo(x + w * t, y); ctx.lineTo(x + w * t, y + h);
-    ctx.moveTo(x, y + h * t); ctx.lineTo(x + w, y + h * t);
+  // The thirds: always on a computer, only while a finger is on the photo
+  // on a phone (as in its Photos app).
+  if (!isReframing() || cropDrag || touchPinch) {
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const t of [1 / 3, 2 / 3]) {
+      ctx.moveTo(x + w * t, y); ctx.lineTo(x + w * t, y + h);
+      ctx.moveTo(x, y + h * t); ctx.lineTo(x + w, y + h * t);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
 
   ctx.strokeStyle = "#fff";
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
@@ -1244,18 +1628,63 @@ function framePoint(event) {
 
 function cropHit(p) {
   const r = draftRectPx();
-  const tolerance = HANDLE / displayScale();
+  const tolerance = (COARSE_POINTER.matches ? 2 * HANDLE : HANDLE) / displayScale();
   const corners = {
     nw: [r.x, r.y], ne: [r.x + r.w, r.y], sw: [r.x, r.y + r.h], se: [r.x + r.w, r.y + r.h],
   };
   for (const [name, [cx, cy]] of Object.entries(corners)) {
     if (Math.abs(p.x - cx) <= tolerance && Math.abs(p.y - cy) <= tolerance) return name;
   }
-  if (p.x > r.x && p.x < r.x + r.w && p.y > r.y && p.y < r.y + r.h) return "move";
+  // The edges, between the corners.
+  const alongX = p.x > r.x && p.x < r.x + r.w;
+  const alongY = p.y > r.y && p.y < r.y + r.h;
+  if (alongX && Math.abs(p.y - r.y) <= tolerance) return "n";
+  if (alongX && Math.abs(p.y - (r.y + r.h)) <= tolerance) return "s";
+  if (alongY && Math.abs(p.x - r.x) <= tolerance) return "w";
+  if (alongY && Math.abs(p.x - (r.x + r.w)) <= tolerance) return "e";
+  if (alongX && alongY) return "move";
   return null;
 }
 
-const CURSORS = { nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize", move: "move" };
+const CURSORS = {
+  nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize",
+  n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize", move: "move",
+};
+
+// Drag one edge; the opposite edge stays. With a fixed ratio, the other
+// side follows around its middle.
+function resizeFromEdge(side, p, rect) {
+  const minSize = 16;
+  const { w: fw, h: fh } = app.frame;
+  const ratio = cropRatio();
+  let { x, y, w, h } = rect;
+  if (side === "e" || side === "w") {
+    const right = x + w;
+    w = side === "e" ? Math.min(fw - x, Math.max(minSize, p.x - x)) : Math.min(right, Math.max(minSize, right - p.x));
+    if (side === "w") x = right - w;
+    if (ratio) {
+      const cy = rect.y + rect.h / 2;
+      h = Math.min(w / ratio, 2 * Math.min(cy, fh - cy));
+      const nw = h * ratio;
+      if (side === "w") x = right - nw;
+      w = nw;
+      y = cy - h / 2;
+    }
+  } else {
+    const bottom = y + h;
+    h = side === "s" ? Math.min(fh - y, Math.max(minSize, p.y - y)) : Math.min(bottom, Math.max(minSize, bottom - p.y));
+    if (side === "n") y = bottom - h;
+    if (ratio) {
+      const cx = rect.x + rect.w / 2;
+      w = Math.min(h * ratio, 2 * Math.min(cx, fw - cx));
+      const nh = w / ratio;
+      if (side === "n") y = bottom - nh;
+      h = nh;
+      x = cx - w / 2;
+    }
+  }
+  return { x, y, w, h };
+}
 
 function resizeFromAnchor(anchor, p) {
   const minSize = 16;
@@ -1279,8 +1708,14 @@ function resizeFromAnchor(anchor, p) {
 
 function buildCropOverlay() {
   const overlay = $("#overlay");
-  overlay.addEventListener("pointerdown", (event) => {
+  // Listened on the whole preview: cropping on a phone, a finger on the
+  // dark margin around the photo moves the photo too (and doesn't scroll
+  // the view off the frame). Elsewhere only the overlay counts.
+  const surface = $("#viewport");
+  surface.addEventListener("pointerdown", (event) => {
     if (!app.cropActive || !app.frame) return;
+    if (event.target !== overlay && !isReframing()) return;
+    cancelReframeAnimation();
     const p = framePoint(event);
     const r = draftRectPx();
     const hit = cropHit(p);
@@ -1288,16 +1723,40 @@ function buildCropOverlay() {
       nw: { x: r.x + r.w, y: r.y + r.h }, ne: { x: r.x, y: r.y + r.h },
       sw: { x: r.x + r.w, y: r.y }, se: { x: r.x, y: r.y },
     };
-    cropDrag = hit === "move"
-      ? { mode: "move", start: p, rect: r }
-      : { mode: "resize", anchor: hit ? opposite[hit] : p };
-    overlay.setPointerCapture(event.pointerId);
+    if (isReframing() && event.pointerType !== "mouse" && (hit === "move" || hit === null)) {
+      // Anywhere but on the frame's edges: the photo follows the finger.
+      cropDrag = { mode: "pan", x: event.clientX, y: event.clientY, rect: r, scale: displayScale() };
+    } else if (["n", "s", "e", "w"].includes(hit)) {
+      cropDrag = { mode: "edge", side: hit, rect: r };
+    } else {
+      cropDrag = hit === "move"
+        ? { mode: "move", start: p, rect: r }
+        : { mode: "resize", anchor: hit ? opposite[hit] : p };
+    }
+    surface.setPointerCapture(event.pointerId);
   });
-  overlay.addEventListener("pointermove", (event) => {
+  surface.addEventListener("pointermove", (event) => {
     if (!app.cropActive || !app.frame) return;
     const p = framePoint(event);
     if (!cropDrag) {
-      overlay.style.cursor = CURSORS[cropHit(p)] || "crosshair";
+      if (event.target === overlay) overlay.style.cursor = CURSORS[cropHit(p)] || "crosshair";
+      return;
+    }
+    if (cropDrag.mode === "pan") {
+      const { rect, x, y, scale } = cropDrag;
+      const rawX = rect.x - (event.clientX - x) / scale;
+      const rawY = rect.y - (event.clientY - y) / scale;
+      const moved = clampedDraft(rawX, rawY, rect.w, rect.h);
+      setDraftFromPx(moved);
+      // The view shows the overshoot, damped; the crop itself stays inside.
+      applyReframeView(scale,
+        moved.x + moved.w / 2 + rubberBand(rawX - moved.x, moved.w / 2),
+        moved.y + moved.h / 2 + rubberBand(rawY - moved.y, moved.h / 2));
+      return;
+    }
+    if (cropDrag.mode === "edge") {
+      setDraftFromPx(resizeFromEdge(cropDrag.side, p, cropDrag.rect));
+      drawOverlay();
       return;
     }
     if (cropDrag.mode === "move") {
@@ -1312,9 +1771,18 @@ function buildCropOverlay() {
     }
     drawOverlay();
   });
-  const end = () => { cropDrag = null; };
-  overlay.addEventListener("pointerup", end);
-  overlay.addEventListener("pointercancel", end);
+  const end = () => {
+    const mode = cropDrag && cropDrag.mode;
+    cropDrag = null;
+    drawOverlay(); // the thirds go on a phone
+    if (!isReframing()) return;
+    // A resize: a pause, then the frame glides back to the middle. A drag:
+    // springs back at once if it went past the photo's edge.
+    if (mode === "resize" || mode === "edge") settleReframe(600);
+    else if (mode === "pan") settleReframe(0);
+  };
+  surface.addEventListener("pointerup", end);
+  surface.addEventListener("pointercancel", end);
 }
 
 // ---------------------------------------------------------------------------
@@ -1392,7 +1860,23 @@ function warpStretchPoint(u, v, pins) {
 function buildMoveOnCanvas() {
   const canvas = $("#preview");
   let drag = null;
+  const pointers = new Set();
+  // A second finger means a pinch (zoom), not a move or a stretch: the drag
+  // the first finger started is undone, and nothing more until both lift.
+  const cancelDrag = () => {
+    if (!drag) return;
+    const layer = app.doc.layers[app.tab];
+    if (drag.mode === "stretch") layer.stretch_pins = layer.stretch_pins.slice(0, -1);
+    else { layer.dx = drag.dx; layer.dy = drag.dy; }
+    drag = null;
+    canvas.style.cursor = "";
+    endEdit(); // back to the snapshot: no undo step
+    syncAll();
+    requestRender();
+  };
   canvas.addEventListener("pointerdown", (event) => {
+    pointers.add(event.pointerId);
+    if (pointers.size > 1) { cancelDrag(); return; }
     if (app.cropActive) return;
     const layer = app.doc.layers[app.tab];
     if (app.stretch) {
@@ -1426,7 +1910,8 @@ function buildMoveOnCanvas() {
     }
     requestRender();
   });
-  const end = () => {
+  const end = (event) => {
+    pointers.delete(event.pointerId);
     if (!drag) return;
     if (drag.mode === "stretch") {
       // A plain click (no movement) leaves no pin behind.
@@ -1583,13 +2068,20 @@ function drawCurveEditor() {
   ctx.clearRect(0, 0, size, size);
   const r = curvePlot();
   const color = CURVE_COLORS[curveUI.channel];
-
-  ctx.fillStyle = "rgb(38, 38, 42)";
-  ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.strokeStyle = "rgb(80, 80, 86)";
+  // Phones draw it over the photo (as in Lightroom): no background, and a
+  // soft shadow under the lines so they read on any photo.
+  const overlay = canvas.classList.contains("curve-overlay");
+  if (overlay) {
+    ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
+    ctx.shadowBlur = 3;
+  } else {
+    ctx.fillStyle = "rgb(38, 38, 42)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+  ctx.strokeStyle = overlay ? "rgba(255, 255, 255, 0.45)" : "rgb(80, 80, 86)";
   ctx.lineWidth = 1;
   ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.094)";
+  ctx.strokeStyle = overlay ? "rgba(255, 255, 255, 0.25)" : "rgba(255, 255, 255, 0.094)";
   ctx.beginPath();
   for (const f of [0.25, 0.5, 0.75]) {
     ctx.moveTo(r.x + f * r.w, r.y); ctx.lineTo(r.x + f * r.w, r.y + r.h);
@@ -1613,7 +2105,7 @@ function drawCurveEditor() {
     hist.forEach((v, i) => ctx.lineTo(...curveToCanvas(i / (hist.length - 1), Math.min(1, v / peak))));
     ctx.lineTo(...curveToCanvas(1, 0));
     ctx.closePath();
-    ctx.globalAlpha = 70 / 255;
+    ctx.globalAlpha = (overlay ? 50 : 70) / 255;
     ctx.fillStyle = color;
     ctx.fill();
     ctx.globalAlpha = 1;
@@ -1622,7 +2114,7 @@ function drawCurveEditor() {
   const points = app.doc.curves[curveUI.channel];
   const lut = evaluateCurveLut(points, 128);
   ctx.strokeStyle = color;
-  ctx.lineWidth = 1.8;
+  ctx.lineWidth = overlay ? 2.2 : 1.8;
   ctx.beginPath();
   lut.forEach((y, i) => {
     const [cx, cy] = curveToCanvas(i / (lut.length - 1), y);
@@ -1784,17 +2276,25 @@ function syncCurveControls() {
 
 let lastHistogram = null;
 
+// The Histogram block, and on phones the overlay on the preview (a 25%
+// background, so the photo shows through).
 function drawHistogram(hist) {
   lastHistogram = hist;
-  const canvas = $("#histogram");
+  paintHistogram($("#histogram"), hist, "#1c1c1c");
+  paintHistogram($("#histogram-overlay"), hist, "rgba(28, 28, 28, 0.25)");
+}
+
+function paintHistogram(canvas, hist, background) {
   const dpr = window.devicePixelRatio || 1;
   const width = canvas.clientWidth;
-  const height = 110;
+  const height = canvas.clientHeight || 110;
+  if (!width) return; // hidden
   canvas.width = Math.round(width * dpr);
   canvas.height = Math.round(height * dpr);
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = "#1c1c1c";
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = background;
   ctx.fillRect(0, 0, width, height);
   if (!hist) return;
 
@@ -1858,6 +2358,40 @@ function buildExport() {
   });
 }
 
+function downloadFile(file) {
+  const url = URL.createObjectURL(file);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = file.name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+// Phones: a download lands in Files, not Photos. The share sheet has "Save
+// Image", but it only opens from a tap (the export took too long to count
+// as one), hence this small window once the file is ready. Photos doesn't
+// take a 16-bit TIFF, so that one is only shared (Save to Files, AirDrop…).
+let savedFile = null;
+
+function showSavedDialog(file, format) {
+  savedFile = file;
+  $("#saved-file").textContent = file.name;
+  $("#saved-share").textContent = format === "tiff16" ? "Share…" : "Save to Photos…";
+  $("#saved-dialog").showModal();
+}
+
+function buildSavedDialog() {
+  $("#saved-share").addEventListener("click", () => {
+    // Cancelling the share sheet rejects: nothing to report.
+    if (savedFile) navigator.share({ files: [savedFile] }).catch(() => {});
+  });
+  $("#saved-download").addEventListener("click", () => { if (savedFile) downloadFile(savedFile); });
+  $("#saved-dialog").addEventListener("close", () => { savedFile = null; });
+  closeOnBackdropClick($("#saved-dialog"));
+}
+
 async function exportImage(format, name) {
   const button = $("#export-button");
   button.disabled = true;
@@ -1865,14 +2399,12 @@ async function exportImage(format, name) {
   try {
     const result = await callWorker("export", { state: engineState(false, true), format });
     const { ext, type } = EXPORT_FORMATS[format];
-    const url = URL.createObjectURL(new Blob([result.data], { type }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = name + ext;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    const file = new File([result.data], name + ext, { type });
+    if (PHONE_QUERY.matches && navigator.canShare?.({ files: [file] })) {
+      showSavedDialog(file, format);
+    } else {
+      downloadFile(file);
+    }
     flashMessage(`Exported ${name}${ext} (${result.width}×${result.height}).`);
   } catch (err) {
     flashMessage(`Export failed: ${err.message}`);
@@ -2085,10 +2617,18 @@ function tourSeen() {
   try { return localStorage.getItem(TOUR_SEEN_KEY) === "1"; } catch (_) { return true; }
 }
 
+// The steps this screen shows: the gestures step is for phones only.
+function tourSteps() {
+  return [...$("#tour-dialog").querySelectorAll(".tour-step")]
+    .filter((step) => PHONE_QUERY.matches || !step.classList.contains("phone-step"));
+}
+
 function showTourStep(index) {
-  const steps = $("#tour-dialog").querySelectorAll(".tour-step");
+  const steps = tourSteps();
   tourStep = Math.max(0, Math.min(steps.length - 1, index));
-  steps.forEach((step, i) => step.classList.toggle("current", i === tourStep));
+  $("#tour-dialog").querySelectorAll(".tour-step").forEach((step) => {
+    step.classList.toggle("current", step === steps[tourStep]);
+  });
   $("#tour-dots").querySelectorAll("span").forEach((dot, i) => dot.classList.toggle("current", i === tourStep));
   const last = tourStep === steps.length - 1;
   $("#tour-back").hidden = tourStep === 0;
@@ -2096,6 +2636,7 @@ function showTourStep(index) {
 }
 
 function openTour() {
+  $("#tour-dots").replaceChildren(...tourSteps().map(() => document.createElement("span")));
   showTourStep(0);
   $("#tour-dialog").showModal();
   $("#tour-next").focus();
@@ -2103,12 +2644,10 @@ function openTour() {
 
 function buildTour() {
   const dialog = $("#tour-dialog");
-  const count = dialog.querySelectorAll(".tour-step").length;
-  $("#tour-dots").replaceChildren(...Array.from({ length: count }, () => document.createElement("span")));
   $("#tour-button").addEventListener("click", openTour);
   $("#tour-back").addEventListener("click", () => showTourStep(tourStep - 1));
   $("#tour-next").addEventListener("click", () => {
-    if (tourStep === count - 1) dialog.close();
+    if (tourStep === tourSteps().length - 1) dialog.close();
     else showTourStep(tourStep + 1);
   });
   $("#tour-get-app").addEventListener("click", () => {
@@ -2201,34 +2740,42 @@ function buildKeyboard() {
 // ---------------------------------------------------------------------------
 
 const PHONE_QUERY = matchMedia("(max-width: 760px)");
-// Hidden by default; the preview bar's histogram button shows it under the
-// tabs, whichever tool is shown (remembered per browser).
+// Phones: the histogram is an overlay on the preview, hidden by default and
+// shown by the preview bar's button (remembered per browser); the Histogram
+// block itself isn't shown. Tapping the active tab hides every tool
+// ("none"), so the preview takes the room.
 const HISTOGRAM_KEY = "phone-histogram-shown";
 let phoneHistogram = false;
 
 function showTool(tool) {
   const panel = $("#panel");
   panel.dataset.tool = tool;
+  document.documentElement.dataset.tool = tool;
+  document.documentElement.classList.toggle("tools-hidden", tool === "none");
+  document.documentElement.classList.toggle("phone-histogram", phoneHistogram);
   document.querySelectorAll(".tool-tab").forEach((tab) => {
     const active = tab.dataset.tool === tool;
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", active);
   });
-  const shown = [...panel.querySelectorAll(":scope > .block")].filter((block) =>
-    block.dataset.tool === tool
-    || (block.dataset.tool === "histogram" && phoneHistogram));
+  const shown = [...panel.querySelectorAll(":scope > .block")].filter((block) => block.dataset.tool === tool);
   $("#histogram-toggle").classList.toggle("on", phoneHistogram);
+  $("#histogram-toggle").setAttribute("aria-pressed", phoneHistogram);
   $("#histogram-toggle").title = phoneHistogram ? "Hide the histogram" : "Show the histogram";
   panel.querySelectorAll(":scope > .block").forEach((block) => {
     block.classList.toggle("tool-current", shown.includes(block));
-    block.classList.toggle("tool-first", block === shown[0]);
-    block.classList.toggle("tool-last", block === shown[shown.length - 1]);
   });
   if (PHONE_QUERY.matches) shown.forEach((block) => { block.open = true; });
   syncPhoneCrop();
+  fitPreviewToTools();
   // Canvases measure their width when drawn: 0 while their block was hidden.
   drawHistogram(lastHistogram);
   drawCurveEditor();
+}
+
+// The preview changes size when the tools hide or show (CSS): refit it.
+function fitPreviewToTools() {
+  requestAnimationFrame(refitPreview);
 }
 
 // On a phone the Crop tab is crop mode: showing it starts cropping, leaving
@@ -2240,9 +2787,62 @@ function syncPhoneCrop() {
   else if (!cropTab && app.cropActive) commitCrop();
 }
 
+// Phones: tools without title rows, their buttons moved onto a line of the
+// tool (moved there and back, so their handlers stay). Crop's Reset joins
+// the ratio's line (Ratio, invert, Reset / Straighten / Rotate, mirror).
+function placeCropControls() {
+  const crop = document.querySelector('.block[data-tool="crop"]');
+  const cropTools = crop.querySelector(".summary-tools");
+  if (PHONE_QUERY.matches) $("#ratio-row").append(cropTools);
+  else crop.querySelector(".block-title").append(cropTools);
+  // Curves: the Y / R / G / B buttons take the title's place on a phone,
+  // and the editor goes over the photo (sizeCurveOverlay); the tool itself
+  // is then that one line.
+  const channels = $("#curve-channels");
+  const curves = document.querySelector('.block[data-tool="curves"]');
+  const editor = $("#curve-editor");
+  if (PHONE_QUERY.matches) {
+    curves.querySelector(".summary-tools").before(channels);
+    $("#viewport").after(editor);
+    editor.classList.add("curve-overlay");
+  } else {
+    curves.querySelector(".block-body").prepend(editor);
+    editor.after(channels);
+    editor.classList.remove("curve-overlay");
+    editor.style.width = editor.style.height = "";
+  }
+  sizeCurveOverlay();
+  // Trichrome Process: no title row on a phone, its Reset joins Show Layer.
+  const process = document.querySelector('.block[data-tool="process"]');
+  const processTools = process.querySelector(".summary-tools");
+  if (PHONE_QUERY.matches) $("#show-layer-row").append(processTools);
+  else process.querySelector(".block-title").append(processTools);
+}
+
+// The curve over the photo: the largest square the preview holds.
+function sizeCurveOverlay() {
+  const editor = $("#curve-editor");
+  if (!editor.classList.contains("curve-overlay")) return;
+  const workspace = $(".workspace");
+  const size = Math.max(120, Math.min(workspace.clientWidth, workspace.clientHeight) - 24);
+  editor.style.width = editor.style.height = `${size}px`;
+  drawCurveEditor();
+}
+
 function buildPhoneLayout() {
+  placeCropControls();
+  new ResizeObserver(sizeCurveOverlay).observe($(".workspace"));
+  // Trichrome Process opens with its sections closed on a phone (Light is
+  // open on a computer): the channel tabs and Auto align show at once.
+  if (PHONE_QUERY.matches) {
+    document.querySelectorAll('.channel-section[data-section="light"]').forEach((s) => { s.open = false; });
+  }
+  PHONE_QUERY.addEventListener("change", placeCropControls);
   document.querySelectorAll(".tool-tab").forEach((tab) => {
-    tab.addEventListener("click", () => showTool(tab.dataset.tool));
+    tab.addEventListener("click", () => {
+      const hide = PHONE_QUERY.matches && tab.classList.contains("active");
+      showTool(hide ? "none" : tab.dataset.tool);
+    });
   });
   // A block can't be collapsed on a phone: its tab shows or hides it.
   document.querySelectorAll("#panel > .block > .block-title").forEach((title) => {
@@ -2258,6 +2858,14 @@ function buildPhoneLayout() {
   });
   PHONE_QUERY.addEventListener("change", () => showTool($("#panel").dataset.tool));
   showTool($("#panel").dataset.tool);
+
+  if (visitorPlatform() !== "mac") {
+    document.querySelector(".preview-bar .undo-btn").title = "Undo (Ctrl+Z)";
+    document.querySelector(".preview-bar .redo-btn").title = "Redo (Ctrl+Y)";
+  }
+  // The preview bar's (computer) and the top bar's (phone).
+  document.querySelectorAll(".undo-btn").forEach((b) => b.addEventListener("click", () => restoreFrom(app.undo, app.redo)));
+  document.querySelectorAll(".redo-btn").forEach((b) => b.addEventListener("click", () => restoreFrom(app.redo, app.undo)));
 
   const input = $("#import-input");
   $("#import-button").addEventListener("click", () => input.click());
@@ -2480,6 +3088,8 @@ function syncAll() {
 
   const crop = app.doc.crop;
   $("#compare").classList.toggle("on", app.compare);
+  document.querySelectorAll(".undo-btn").forEach((b) => { b.disabled = !app.undo.length; });
+  document.querySelectorAll(".redo-btn").forEach((b) => { b.disabled = !app.redo.length; });
   for (const id of ["#rotate-left", "#rotate-right", "#crop-rotate-left", "#crop-rotate-right", "#compare"]) {
     $(id).disabled = !loaded;
   }
@@ -2488,8 +3098,10 @@ function syncAll() {
   $("#mirror-h").classList.toggle("on", crop.mirror_h);
   $("#mirror-v").classList.toggle("on", crop.mirror_v);
   $("#ratio").value = crop.ratio;
-  $("#orientation").disabled = crop.ratio === "free" || crop.ratio === "original" || crop.ratio === "1:1";
-  $("#orientation").classList.toggle("on", crop.portrait && !$("#orientation").disabled);
+  // 1:1 has no orientation; Free turns the rectangle (invertFreeCrop).
+  $("#orientation").disabled = crop.ratio === "1:1";
+  $("#orientation").classList.toggle("on",
+    crop.portrait && crop.ratio !== "custom" && crop.ratio !== "free" && !$("#orientation").disabled);
   $("#custom-ratio-row").hidden = crop.ratio !== "custom";
   $("#custom-w").value = crop.custom_w ?? 1;
   $("#custom-h").value = crop.custom_h ?? 1;
@@ -2498,15 +3110,17 @@ function syncAll() {
   stage.classList.toggle("crop-active", app.cropActive);
   stage.classList.toggle("move-active", app.moveOnCanvas);
   stage.classList.toggle("stretch-active", app.stretch);
+  const layer = CHANNELS[app.tab].name.toLowerCase();
+  $("#mode-banner").hidden = !(app.moveOnCanvas || app.stretch) || !app.image;
+  $("#mode-banner-text").textContent = app.stretch
+    ? `Stretch the ${layer} layer: drag from any point`
+    : `Move the ${layer} layer: drag the photo`;
   $("#indicator").textContent = [
     app.compare ? "Displaying original" : "",
     app.cropActive
-      ? "Crop: drag the frame or its corners · Enter to apply · Esc to cancel"
-      : app.stretch
-        ? `Drag on the canvas to stretch the ${CHANNELS[app.tab].name.toLowerCase()} layer, starting from where you click`
-        : app.moveOnCanvas
-          ? `Drag the ${CHANNELS[app.tab].name.toLowerCase()} layer on the canvas to reposition it`
-          : "",
+      // Phones: no hint, the gestures are in the tour.
+      ? (PHONE_QUERY.matches ? "" : "Crop: drag the frame or its corners · Enter to apply · Esc to cancel")
+      : "", // Move / Stretch on Canvas: the banner over the preview
   ].filter(Boolean).join(" · ");
 
   syncFileRows();
@@ -2532,12 +3146,20 @@ function init() {
   buildCropOverlay();
   buildMoveOnCanvas();
   buildExport();
+  buildSavedDialog();
   buildGetApp();
   buildDropdowns();
   buildKeyboard();
   buildWindowDrop();
   buildPhoneLayout();
   $("#mode").addEventListener("change", (event) => changeMode(event.target.value === "color"));
+  $("#new-photo").addEventListener("click", startOver);
+  $("#mode-done").addEventListener("click", () => {
+    app.moveOnCanvas = false;
+    app.stretch = false;
+    syncAll();
+    drawOverlay(); // the stretch grid goes
+  });
   $("#reset-all").addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
