@@ -103,7 +103,7 @@ const app = {
   tab: 0,
   moveOnCanvas: false,
   stretch: false,                 // Stretch on Canvas, on the current tab's channel
-  solo: null,                     // Solo Layer Preview: channel shown alone in B&W
+  solo: null,                     // Solo (Show Original Layer): B&W in Classic, color in Color Trichrome
   draggingChannel: null,          // file row being dragged to swap channels
   compare: false,                 // A|B: show the photo without its Light settings
   cropActive: false,
@@ -396,6 +396,50 @@ function makeSlider(container, spec, group, target) {
     } else {
       lastTap = event.timeStamp;
     }
+  });
+
+  // Computers: click the number to type a value, as in the desktop app
+  // (ClickToEditValue): -100..100 for a percent slider, real units otherwise.
+  // Enter or leaving the field applies it, Escape cancels.
+  value.title = "Click to type a value";
+  value.addEventListener("dblclick", (event) => event.stopPropagation());
+  value.addEventListener("click", (event) => {
+    if (PHONE_QUERY.matches || input.disabled || head.querySelector(".value-edit")) return;
+    event.stopPropagation();
+    const field_ = document.createElement("input");
+    field_.type = "text";
+    field_.inputMode = "decimal";
+    field_.className = "value-edit";
+    field_.value = value.textContent.replace(unit, "").replace(/^\+/, "").trim();
+    value.hidden = true;
+    head.append(field_);
+    field_.focus();
+    field_.select();
+    let done = false;
+    const close = (apply) => {
+      if (done) return;
+      done = true;
+      const typed = Number(field_.value.replace(",", ".").replace(/[^0-9.+-]/g, ""));
+      field_.remove();
+      value.hidden = false;
+      if (!apply || field_.value.trim() === "" || !Number.isFinite(typed)) return;
+      const next = percent
+        ? fromPos(Math.max(-1000, Math.min(1000, typed * 10)))
+        : Math.max(min, Math.min(max, typed));
+      beginEdit();
+      target()[field] = round(next);
+      sync();
+      requestRender();
+      endEdit();
+      syncResetButtons();
+    };
+    field_.addEventListener("keydown", (key) => {
+      key.stopPropagation(); // no app shortcuts while typing
+      if (key.key === "Enter") close(true);
+      else if (key.key === "Escape") close(false);
+    });
+    field_.addEventListener("blur", () => close(true));
+    field_.addEventListener("dblclick", (e) => e.stopPropagation());
   });
 
   function sync() {
@@ -1082,25 +1126,34 @@ function buildFramingControls() {
       } else {
         crop.portrait = !crop.portrait;
       }
+      // Outside crop mode the applied crop turns, without entering it.
+      if (!app.cropActive && anyLoaded() && app.frame) Object.assign(crop, centeredRatioRect());
     });
-    applyRatioToDraft();
+    if (app.cropActive) applyRatioToDraft();
   });
   $("#mirror-h").addEventListener("click", () => edit(() => { app.doc.crop.mirror_h = !app.doc.crop.mirror_h; }));
   $("#mirror-v").addEventListener("click", () => edit(() => { app.doc.crop.mirror_v = !app.doc.crop.mirror_v; }));
 }
 
 // Free has no ratio to invert: the crop rectangle itself turns a quarter,
-// around its middle, scaled down if it no longer fits the frame.
+// around its middle, scaled down if it no longer fits the frame. In crop
+// mode that's the frame being drawn, otherwise the applied crop.
 function invertFreeCrop() {
-  if (!anyLoaded()) return;
-  if (!app.cropActive) enterCrop();
-  if (!app.cropDraft || !app.frame) return;
-  const r = draftRectPx();
+  if (!anyLoaded() || !app.frame) return;
+  const rect = app.cropActive ? app.cropDraft : app.doc.crop;
+  if (!rect) return;
   const { w: fw, h: fh } = app.frame;
-  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-  const fit = Math.min(1, fw / r.h, fh / r.w);
-  const w = r.h * fit, h = r.w * fit;
-  setDraftFromPx(clampedDraft(cx - w / 2, cy - h / 2, w, h));
+  const rw = rect.width * fw, rh = rect.height * fh;
+  const cx = (rect.x + rect.width / 2) * fw, cy = (rect.y + rect.height / 2) * fh;
+  const fit = Math.min(1, fw / rh, fh / rw);
+  const w = rh * fit, h = rw * fit;
+  const turned = clampedDraft(cx - w / 2, cy - h / 2, w, h);
+  if (!app.cropActive) {
+    edit(() => Object.assign(app.doc.crop,
+      { x: turned.x / fw, y: turned.y / fh, width: turned.w / fw, height: turned.h / fh }));
+    return;
+  }
+  setDraftFromPx(turned);
   if (isReframing()) settleReframe(0);
   else drawOverlay();
 }
@@ -1467,6 +1520,14 @@ function buildPinchZoom() {
     tap = null;
   });
   viewport.addEventListener("touchcancel", () => { touchPinch = null; tap = null; endHold(); });
+  // Mouse: a double click toggles fit and 1:1 the same way, around the
+  // pointer (phones use the double tap above). Not while the drags have
+  // another job: cropping, Move or Stretch on Canvas.
+  viewport.addEventListener("dblclick", (event) => {
+    if (PHONE_QUERY.matches || !app.image || app.cropActive || app.moveOnCanvas || app.stretch) return;
+    event.preventDefault();
+    animateZoom(app.zoom === null ? 1 : null, event.clientX, event.clientY);
+  });
   // Outside the preview, a pinch never zooms the page (some browsers ignore
   // user-scalable=no and the CSS touch-action).
   document.addEventListener("touchmove", (event) => {
@@ -2811,8 +2872,13 @@ function buildKeyboard() {
     } else if (event.key === "Enter" && app.cropActive) {
       event.preventDefault();
       commitCrop();
-    } else if (event.key === "Enter" && app.stretch && !event.target.matches("button, input")) {
+    } else if (event.key === "Enter" && (app.stretch || app.moveOnCanvas)
+               && !isTyping(event.target) && !event.target.matches("button")) {
+      // Enter ends Move / Stretch on Canvas, as Escape does (the edits stay),
+      // also right after ticking its checkbox.
+      event.preventDefault();
       app.stretch = false;
+      app.moveOnCanvas = false;
       syncAll();
     } else if (event.key === "Escape") {
       if (app.cropActive) exitCrop();

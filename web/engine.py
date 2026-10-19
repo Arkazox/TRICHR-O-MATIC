@@ -172,20 +172,52 @@ def _source_key(state: dict) -> str:
     """Everything the warped, framed channels depend on: the files, the
     geometry, the framing; not the tone, Negative or curves."""
     layers = [{f: layer.get(f) for f in _GEOMETRY_FIELDS} for layer in state["layers"]]
-    rest = {k: state.get(k) for k in ("ref", "full_frame", "crop", "quarter_turns", "solo")}
+    rest = {k: state.get(k) for k in ("ref", "full_frame", "crop", "quarter_turns", "solo", "color_trichrome")}
     return json.dumps([layers, rest], sort_keys=True) + f"#{_generation}"
 
 
+def _solo_color(index: int, state: dict) -> np.ndarray | None:
+    """Color Trichrome: channel ``index``'s source photo in color, sized and
+    turned like its preview (kept on its _channels entry while Solo is on),
+    or None in Classic Trichrome or if the file can't be read."""
+    entry = _channels[index]
+    if not state.get("color_trichrome") or entry is None:
+        return None
+    if entry.get("color") is None:
+        try:
+            rgb = imaging.load_color(entry["path"])
+        except Exception:
+            return None
+        h, w = entry["preview"].shape[:2]
+        if rgb.shape[:2] != (h, w):
+            rgb = cv2.resize(rgb, (w, h), interpolation=cv2.INTER_AREA)
+        entry["color"] = rgb
+    return _turned(entry["color"], state.get("quarter_turns", 0))
+
+
 def _build_source(state: dict, ref: int, key: str) -> dict:
+    if state.get("solo") is None:
+        for entry in _channels:
+            if entry is not None:
+                entry.pop("color", None)
     images = _previews(state)
     geo = [_geo_params(state["layers"][i], i, ref, False) for i in range(3)]
     crop = state["crop"]
     warped = imaging.warp_channels(images, geo, ref)
     ref_h, ref_w = images[ref].shape[:2]
     solo = state.get("solo")
-    if solo is not None and warped[solo] is not None:
-        # Solo Layer Preview: that one channel in all three, so it shows in
-        # B&W with its own tone and the master curve only (see render).
+    color = _solo_color(solo, state) if solo is not None and warped[solo] is not None else None
+    if color is not None:
+        # Solo (Show Original Layer) in Color Trichrome: the channel's own
+        # photo in color, each plane warped with that channel's geometry.
+        planes = []
+        for c in range(3):
+            images_c = [images[ref] if i == ref else None for i in range(3)]
+            images_c[solo] = color[:, :, c]
+            planes.append(imaging.warp_channels(images_c, geo, ref)[solo])
+    elif solo is not None and warped[solo] is not None:
+        # Solo in Classic Trichrome: that one channel in all three, so it
+        # shows in B&W with its own tone and the master curve only (see render).
         planes = [warped[solo]] * 3
     else:
         planes = [w if w is not None else np.zeros((ref_h, ref_w), np.float32) for w in warped]
