@@ -88,7 +88,7 @@ function newDoc() {
   return {
     layers: CHANNELS.map(() => ({ ...DEFAULT_LAYER })),
     crop: { ...DEFAULT_CROP },
-    ref: 1, // green: Auto align's reference, and the canvas (no Lock layer position)
+    ref: 1, // green: Auto Align's reference, and the canvas (no Lock layer position)
     curves: newCurves(),
     negative: false, // inverts all 3 channels (raw negative scans)
     quarterTurns: 0, // rotate left/right, in np.rot90 steps (counterclockwise)
@@ -618,9 +618,9 @@ function syncFileRows() {
   });
 }
 
-// Auto align on import: once a round of loads ends (3 dropped files load
+// Auto Align on import: once a round of loads ends (3 dropped files load
 // at the same time) with all 3 channels present, align them, as the
-// desktop's Batch Import does with its Auto align option. Always on: the
+// desktop's Batch Import does with its Auto Align option. Always on: the
 // web version keeps its options to a minimum.
 let pendingLoads = 0;
 let loadedSinceAlign = false;
@@ -1022,12 +1022,12 @@ function syncToolDots() {
     details.querySelector("summary > span").classList.toggle("edited-dot",
       RESET_FIELDS[section].some((field) => !sameValue(layer[field], DEFAULT_LAYER[field])));
   });
-  // A channel tab's corner: any change to that channel on a computer; on a
-  // phone, only in the section its tab shows (Position, Light or Geometry).
+  // A channel tab's corner, on a phone only: a change to that channel in
+  // the section its tab shows (Position, Light or Geometry). Computers have
+  // none: with the color dot, the letter and the eye, it crowded the tabs.
   const phoneSection = PHONE_QUERY.matches && PROCESS_TOOLS[$("#panel").dataset.tool];
-  const tabFields = RESET_FIELDS[phoneSection || "process"];
   document.querySelectorAll("#channel-tabs .tab").forEach((tab, index) => {
-    tab.classList.toggle("edited", tabFields.some((field) =>
+    tab.classList.toggle("edited", !!phoneSection && RESET_FIELDS[phoneSection].some((field) =>
       !sameValue(app.doc.layers[index][field], DEFAULT_LAYER[field])));
   });
 }
@@ -1113,6 +1113,9 @@ function buildFramingControls() {
     });
   }
   $("#orientation").addEventListener("click", () => {
+    // Outside crop mode it starts cropping, so the turned frame shows on the
+    // full photo, ready to adjust (phones are already cropping: Crop tab).
+    if (!app.cropActive) enterCrop();
     if (app.doc.crop.ratio === "free") {
       invertFreeCrop();
       return;
@@ -2496,8 +2499,47 @@ const EXPORT_FORMATS = {
   tiff16: { ext: ".tif", type: "image/tiff" },
 };
 
+// Export sizes: Full Size (the source photos' own pixels) or a longest side
+// of 4096 (Large: print, 4K screens), 2048 (Medium: screens, the web) or
+// 1080 px (Small: sharing). Each shows the size it gives for this photo; one
+// that wouldn't be smaller than Full Size is greyed out.
+const EXPORT_SIZE_NAMES = { 0: "Full Size", 4096: "Large", 2048: "Medium", 1080: "Small" };
+const EXPORT_SIZE_KEY = "trichromatic-web-export-size";
+
+// The exported photo's size at full resolution: the reference photo, turned
+// a quarter if need be, then cropped.
+function fullExportSize() {
+  const source = app.files[app.doc.ref] || app.files.find(Boolean);
+  if (!source) return null;
+  let [w, h] = [source.width, source.height];
+  if ((app.doc.quarterTurns || 0) % 2) [w, h] = [h, w];
+  return { w: Math.round(w * app.doc.crop.width), h: Math.round(h * app.doc.crop.height) };
+}
+
+function syncExportSizes() {
+  const full = fullExportSize();
+  const select = $("#export-size");
+  for (const option of select.options) {
+    const side = Number(option.value);
+    const name = EXPORT_SIZE_NAMES[side];
+    if (!full) { option.textContent = name; continue; }
+    const k = side ? Math.min(1, side / Math.max(full.w, full.h)) : 1;
+    option.disabled = side > 0 && k >= 1;
+    option.textContent = option.disabled
+      ? `${name} · ${side} px`
+      : `${name} · ${Math.round(full.w * k)} × ${Math.round(full.h * k)}`;
+  }
+  if (select.selectedOptions[0]?.disabled) select.value = "0";
+}
+
 function buildExport() {
   const dialog = $("#export-dialog");
+  const size = $("#export-size");
+  try { size.value = localStorage.getItem(EXPORT_SIZE_KEY) || "0"; } catch (_) { /* private mode */ }
+  if (!size.value) size.value = "0";
+  size.addEventListener("change", () => {
+    try { localStorage.setItem(EXPORT_SIZE_KEY, size.value); } catch (_) { /* private mode */ }
+  });
   const format = $("#export-format");
   const syncExt = () => { $("#export-ext").textContent = EXPORT_FORMATS[format.value].ext; };
   format.addEventListener("change", syncExt);
@@ -2506,12 +2548,15 @@ function buildExport() {
     const source = app.files[app.doc.ref] || app.files.find(Boolean);
     $("#export-name").value = `${source.name.replace(/\.[^.]+$/, "")}_trichrome`;
     syncExt();
+    syncExportSizes();
     syncDropdowns();
     dialog.showModal();
   });
   dialog.addEventListener("close", () => {
     syncPhoneCrop(); // opening the dialog committed the crop
-    if (dialog.returnValue === "export") exportImage(format.value, $("#export-name").value.trim() || "trichrome");
+    if (dialog.returnValue === "export") {
+      exportImage(format.value, $("#export-name").value.trim() || "trichrome", Number(size.value) || 0);
+    }
   });
 }
 
@@ -2549,12 +2594,12 @@ function buildSavedDialog() {
   closeOnBackdropClick($("#saved-dialog"));
 }
 
-async function exportImage(format, name) {
+async function exportImage(format, name, maxSide = 0) {
   const button = $("#export-button");
   button.disabled = true;
-  setActivity("export", "Exporting at full resolution…", true);
+  setActivity("export", "Exporting…", true);
   try {
-    const result = await callWorker("export", { state: engineState(false, true), format });
+    const result = await callWorker("export", { state: engineState(false, true), format, maxSide });
     const { ext, type } = EXPORT_FORMATS[format];
     const file = new File([result.data], name + ext, { type });
     if (PHONE_QUERY.matches && navigator.canShare?.({ files: [file] })) {
@@ -2802,6 +2847,7 @@ function openTour() {
 function buildTour() {
   const dialog = $("#tour-dialog");
   $("#app-logo").addEventListener("click", openTour);
+  $("#tour-button").addEventListener("click", openTour);
   $("#tour-back").addEventListener("click", () => showTourStep(tourStep - 1));
   $("#tour-next").addEventListener("click", () => {
     if (tourStep === tourSteps().length - 1) dialog.close();
@@ -3142,6 +3188,14 @@ function enhanceSelect(select) {
       item.classList.toggle("selected", index === select.selectedIndex);
       item.setAttribute("aria-selected", index === select.selectedIndex);
       item.textContent = option.textContent;
+      if (option.disabled) {
+        // Shown greyed out, not choosable (e.g. an export size above the source).
+        item.classList.add("disabled");
+        item.setAttribute("aria-disabled", "true");
+        item.addEventListener("mousedown", (event) => event.preventDefault());
+        menu.append(item);
+        return;
+      }
       item.addEventListener("mousemove", () => { if (active !== index) highlight(index); });
       item.addEventListener("mousedown", (event) => event.preventDefault()); // keep focus on the button
       item.addEventListener("click", () => choose(index));
@@ -3172,6 +3226,7 @@ function enhanceSelect(select) {
   }
 
   function choose(index) {
+    if (select.options[index]?.disabled) return;
     close();
     if (index !== select.selectedIndex) {
       select.selectedIndex = index;

@@ -327,9 +327,11 @@ def auto_align(state_json: str, apply_distortion: bool) -> dict:
     return {"results": results, "failed": failed, "ms": _ms(start)}
 
 
-def export_image(state_json: str, fmt: str) -> dict:
+def export_image(state_json: str, fmt: str, max_side: int = 0) -> dict:
     """Full-resolution export: reload each file, compose, then
-    Geometry + straighten + mirror + crop (imaging.apply_crop), and encode."""
+    Geometry + straighten + mirror + crop (imaging.apply_crop), and encode.
+    max_side > 0 scales the result down so its longest side is at most that
+    (the export dialog's Size), never up."""
     start = time.perf_counter()
     state = json.loads(state_json)
     ref = _canvas_ref(state["ref"])
@@ -350,6 +352,11 @@ def export_image(state_json: str, fmt: str) -> dict:
         rgb, crop["rotation"], crop["mirror_h"], crop["mirror_v"],
         crop["x"], crop["y"], crop["width"], crop["height"], **_geometry(crop))
     height, width = rgb.shape[:2]
+    if max_side and max(height, width) > max_side:
+        k = max_side / max(height, width)
+        width, height = max(1, round(width * k)), max(1, round(height * k))
+        rgb = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_AREA)
+        gc.collect()
     compose_ms = _ms(start)
 
     if fmt == "tiff16":

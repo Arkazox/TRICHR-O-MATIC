@@ -263,6 +263,7 @@ select:focus, input[type=text]:focus, input[type=number]:focus { outline: 2px so
   border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg);
 }
 .dropdown-item.active { background: var(--accent); color: #fff; }
+.dropdown-item.disabled { color: var(--muted); opacity: .5; cursor: default; }
 
 /* "?" info button with its bubble (hover or focus). */
 .info {
@@ -493,6 +494,7 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
 .tour-dots { display: flex; gap: 6px; }
 .tour-dots span { width: 7px; height: 7px; border-radius: 50%; background: #55555a; transition: background .2s; }
 .tour-dots span.current { background: var(--accent); }
+.tour-button { font-size: 15px; font-weight: 600; }
 .tour-buttons { display: flex; gap: 8px; }
 .tour-buttons .btn { min-width: 76px; }
 @media (max-width: 520px) {
@@ -608,7 +610,7 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
   html[data-tool="curves"] #panel { flex: none; height: auto; }
 
   /* Position, Light and Geometry: one section of Trichrome Process each
-     (app.js showTool), under a line with the channel tabs, Auto align,
+     (app.js showTool), under a line with the channel tabs, Auto Align,
      Move or Stretch on Canvas and the section's Reset. No section title,
      no Show Layer (the eyes), no Solo checkbox (the active tab again), no
      Lock. */
@@ -618,7 +620,7 @@ dialog.get-app .tour-step h2 { margin: 0 0 10px; font-size: 20px; }
   .phone-channel-row { align-items: center; gap: 8px; margin-bottom: 10px; }
   .phone-channel-row .icon-button { flex: none; }
   .phone-channel-row .icon-button.toggle.on { color: var(--warning); border-color: var(--warning); background: transparent; }
-  /* Auto align sets the position only (no Geometry): it's in Position. */
+  /* Auto Align sets the position only (no Geometry): it's in Position. */
   html[data-tool="light"] #phone-auto-align, html[data-tool="geometry"] #phone-auto-align,
   html[data-tool="light"] #phone-canvas-mode { display: none; }
   .phone-channel-row .tabs { flex: 1; min-width: 0; gap: 6px; margin: 0; }

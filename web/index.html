@@ -41,6 +41,9 @@
         <span class="icon" style="--icon: url(icons/redo.svg)"></span></button>
     </div>
     <div class="topbar-actions">
+      <!-- Computers: Help opens the tour (phones use the logo). -->
+      <button class="btn secondary square tour-button desktop-only" id="tour-button" title="Help"
+        aria-label="Help">?</button>
       <button class="btn secondary" id="get-app-button"
         title="Batch import, RAW files, sessions, Light/Color/Curves and more">Download the full app</button>
       <!-- Phones: not a tool, shows or hides the histogram over the photo. -->
@@ -109,9 +112,9 @@
         <div class="block-body">
           <!-- Phones: the channel tabs move onto this line (app.js
                placeCropControls; tapping the active one again is Solo), then
-               Auto align, Move or Stretch on Canvas, and this tab's Reset. -->
+               Auto Align, Move or Stretch on Canvas, and this tab's Reset. -->
           <div class="phone-only-row phone-channel-row" id="phone-channel-row">
-            <button class="icon-button" id="phone-auto-align" title="Auto align" aria-label="Auto align">
+            <button class="icon-button" id="phone-auto-align" title="Auto Align" aria-label="Auto Align">
               <span class="icon" style="--icon: url(icons/wand.svg)"></span></button>
             <button class="icon-button toggle" id="phone-canvas-mode" aria-pressed="false">
               <span class="icon"></span></button>
@@ -163,7 +166,7 @@
             </details>
             <label class="check solo-check"><input type="checkbox" id="solo"> Solo (Show Original Layer)</label>
           </div>
-          <button id="auto-align" class="btn primary wide" disabled>Auto align</button>
+          <button id="auto-align" class="btn primary wide" disabled>Auto Align</button>
         </div>
       </details>
 
@@ -323,7 +326,7 @@
       </section>
       <section class="tour-step">
         <h2>Align the channels</h2>
-        <p class="get-app-text"><b>Auto align</b> lines up the red and blue channels on the
+        <p class="get-app-text"><b>Auto Align</b> lines up the red and blue channels on the
           green one.
           Each channel's tab then lets you fine-tune its Light, Position and Geometry.<br><br>
           Drag directly on the preview with <b>Move on Canvas</b> or <b>Stretch on Canvas</b>.</p>
@@ -333,7 +336,7 @@
         <p class="get-app-text">Color grade the recomposed image with <b>Curves</b>. Working from a
           negative scan? The <b>Negative</b> button inverts it. Then reframe the photo as you like
           with <b>Crop</b>.<br><br>
-          <b>Export</b> saves the final image at full resolution.</p>
+          <b>Export</b> saves the final image at full size or smaller.</p>
       </section>
       <section class="tour-step phone-step">
         <h2>Gestures on the photo</h2>
@@ -349,7 +352,8 @@
         <p class="get-app-text">The desktop app, for Mac and Windows, adds batch import, RAW file
           support, work sessions, HQ Preview and the full set of Light and Color tools.<br><br>
           This tour stays one <span class="desktop-only">click</span><span class="phone-inline">tap</span>
-          away: the app's logo at the top left.</p>
+          away: <span class="desktop-only">the <b>?</b> button at the top.</span><span
+          class="phone-inline">the app's logo at the top left.</span></p>
         <ul class="get-app-features">
           <li>Work Offline</li><li>Save Sessions</li><li>Batch Import</li>
           <li>Advanced Control</li><li>RAW Support</li><li>HQ Preview</li>
@@ -461,7 +465,17 @@
         <input type="text" id="export-name" spellcheck="false">
         <span id="export-ext">.png</span>
       </div>
-      <p class="hint">Exported at full resolution.</p>
+      <div class="row">
+        <span class="label">Size</span>
+        <!-- The longest side; the numbers are filled in for the photo
+             (app.js syncExportSizes). -->
+        <select id="export-size">
+          <option value="0">Full Size</option>
+          <option value="4096">Large</option>
+          <option value="2048">Medium</option>
+          <option value="1080">Small</option>
+        </select>
+      </div>
       <div class="dialog-buttons">
         <button value="cancel" class="btn secondary">Cancel</button>
         <button value="export" class="btn primary" id="export-confirm">Export</button>

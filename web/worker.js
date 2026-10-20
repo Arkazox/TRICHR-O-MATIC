@@ -119,7 +119,7 @@ self.onmessage = async (event) => {
         result = toJs(engine.auto_align(args.state, args.applyDistortion));
         break;
       case "export":
-        result = toJs(engine.export_image(args.state, args.format));
+        result = toJs(engine.export_image(args.state, args.format, args.maxSide || 0));
         transfer = [result.data.buffer];
         break;
       default:
